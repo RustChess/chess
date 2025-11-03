@@ -1,0 +1,60 @@
+[workspace]
+members = [
+  ".",
+  "cli",
+  "lichess",
+]
+
+[workspace.package]
+authors = ["RustChess Engineers"]
+edition = "2024"
+version = "0.1.0-dev"
+
+[workspace.dependencies]
+# chess-cli.path = "cli"
+chess-lichess.path = "lichess"
+rustchess.path = "."
+
+anyhow = "1"
+chacha20 = { version = "0.10.0-rc.6", features = ["rng"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["cargo", "color", "derive"] }
+# clap-verbosity-flag = "3"
+clio = { version = "0.3", features = ["clap-parse"] }
+encoding_rs = "0.8"
+enumflags2 = "0.7"
+progenitor-client = "0.11"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# sqlx  = { version = "0.8", features = ["sqlite"] }
+thiserror = "2"
+winnow = "0.7"
+
+[package]
+name = "rustchess"
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "chess"
+
+[features]
+default = []
+lichess = ["dep:chess-lichess"]
+
+[dependencies]
+chess-lichess = { workspace = true, optional = true }
+
+chacha20.workspace = true
+encoding_rs.workspace = true
+enumflags2.workspace = true
+thiserror.workspace = true
+winnow.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+
+# [patch.crates-io.typify-impl]
+# path = "lichess/vendor/typify/typify-impl"

@@ -1,0 +1,13 @@
+build:
+	cargo build
+
+schema:
+	wget https://lichess.org/openapi.yaml -O openapi.yaml
+	patch openapi.yaml openapi-2.0.110.patch
+	uvx openapi_downgrade openapi.yaml openapi-3.0.json
+	patch openapi-3.0.json openapi-2.0.110-3.0.patch
+
+vendor:
+	# git clone --depth 1 --branch v0.11.2 https://github.com/oxidecomputer/progenitor.git
+	git clone --depth 1 --branch v0.4.3 https://github.com/oxidecomputer/typify.git vendor/typify
+	cd vendor/typify && git apply ../typify-0.4.3.patch

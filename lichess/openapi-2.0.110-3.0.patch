@@ -1,0 +1,39 @@
+5320,5329d5319
+<           },
+<           "401": {
+<             "description": "This user cannot update this Swiss.",
+<             "content": {
+<               "application/json": {
+<                 "schema": {
+<                   "$ref": "#/components/schemas/SwissUnauthorisedEdit"
+<                 }
+<               }
+<             }
+5400,5409d5389
+<           },
+<           "401": {
+<             "description": "This user cannot update this Swiss.",
+<             "content": {
+<               "application/json": {
+<                 "schema": {
+<                   "$ref": "#/components/schemas/SwissUnauthorisedEdit"
+<                 }
+<               }
+<             }
+13090,13100d13069
+<           },
+<           "204": {
+<             "description": "No pending analysis",
+<             "headers": {
+<               "Access-Control-Allow-Origin": {
+<                 "schema": {
+<                   "type": "string",
+<                   "default": "'*'"
+<                 }
+<               }
+<             }
+50908c50877
+< }
+\ No newline at end of file
+---
+> }

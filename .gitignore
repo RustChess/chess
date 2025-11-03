@@ -1,0 +1,9 @@
+# Rust
+/target
+Cargo.lock
+
+# data
+**/*.cbv
+**/*.pgn
+freestyle-positions.txt
+/twic1616.*

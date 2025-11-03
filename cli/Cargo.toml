@@ -1,0 +1,18 @@
+[package]
+name = "chess-cli"
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "chess"
+path = "chess.rs"
+
+[lib]
+
+[dependencies]
+rustchess.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+# clap-verbosity-flag.workspace = true
+clio.workspace = true

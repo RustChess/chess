@@ -1,0 +1,21 @@
+# TODO: Use the "static crate" approach
+# <https://github.com/oxidecomputer/progenitor/blob/main/README.md#static-crate> 
+
+[package]
+name = "chess-lichess"
+version = "2.0.110"
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono.workspace = true
+progenitor-client.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# [build-dependencies]
+# prettyplease.workspace = true
+# progenitor.workspace = true
+# serde_json.workspace = true
+# syn.workspace = true

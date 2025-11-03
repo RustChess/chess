@@ -1,0 +1,13 @@
+diff --git a/typify-impl/src/util.rs b/typify-impl/src/util.rs
+index ba0ab64..574ba1f 100644
+--- a/typify-impl/src/util.rs
++++ b/typify-impl/src/util.rs
+@@ -763,6 +763,8 @@ pub(crate) fn sanitize(input: &str, case: Case) -> String {
+         "async" => "async_".to_string(), // TODO syn should handle this case...
+         "+1" => "plus1".to_string(),
+         "-1" => "minus1".to_string(),
++        "+" => "Plus".to_string(),
++        "#" => "Hashtag".to_string(),
+         _ => to_case(&input.replace("'", "").replace(|c| !is_xid_continue(c), "-")),
+     };
+ 
