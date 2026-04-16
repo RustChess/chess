@@ -1,7 +1,10 @@
+use core::ops;
+
 use super::All;
 
 /// Restricted square, can only be on third or sixth rank
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Square(super::Square);
 
 impl TryFrom<super::Square> for Square {
@@ -12,6 +15,13 @@ impl TryFrom<super::Square> for Square {
             40..=48 => Self(square),
             _ => todo!(),
         })
+    }
+}
+
+impl ops::Deref for Square {
+    type Target = super::Square;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

@@ -5,8 +5,7 @@ pub const EXAMPLE: &[u8] = include_bytes!("twic1616.cbv");
 // pub const EXAMPLE: &[u8] = include_bytes!("../TWIC_DB_1__1617.cbv");
 
 fn main() -> anyhow::Result<()> {
-    let mut data = EXAMPLE;
-    let header = unpack_cbv_to_disk.parse(&mut data).map_err(|e| anyhow::format_err!("{e}"))?;
+    let header = unpack_cbv_to_disk.parse(EXAMPLE).map_err(|e| anyhow::format_err!("{e}"))?;
     println!("{header:?}");
     Ok(())
 }

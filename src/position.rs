@@ -15,7 +15,12 @@
 //! Compared to `shakmaty` our position is a concrete `struct`
 use core::{fmt, marker::PhantomData, num::NonZeroU32, ops};
 
+use std::collections::BTreeMap;
+
 use crate::bitboard::Bitboard;
+
+#[cfg(feature = "serde")]
+use serde::Serialize;
 
 pub mod en_passant;
 pub mod id;
@@ -39,9 +44,19 @@ pub const ALGEBRAIC_CAPTURE: char = 'x';
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Player {
     Black = 0,
     White = 1,
+}
+
+impl fmt::Display for Player {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Player::Black => write!(f, "black"),
+            Player::White => write!(f, "white"),
+        }
+    }
 }
 
 impl Player {
@@ -418,6 +433,7 @@ impl fmt::Display for Rank {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Square {
     A1 = 0,
     B1,
@@ -633,6 +649,7 @@ fn display_square() {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Role {
     Pawn = 1,
     Knight = 2,
@@ -640,6 +657,24 @@ pub enum Role {
     Rook = 5,
     Queen = 9,
     King = 4,
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Role::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                Pawn => "pawn",
+                Knight => "knight",
+                Bishop => "bishop",
+                Rook => "rook",
+                Queen => "queen",
+                King => "king",
+            }
+        )
+    }
 }
 
 impl All<6> for Role {
@@ -1289,9 +1324,19 @@ pub type Moves = Vec<Move>;
 // Also Side is a bit misleading, could also mean what we call Player
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Side {
-    King = b'g',
-    Queen = b'c',
+    King = 0,
+    Queen = 1,
+}
+
+impl fmt::Display for Side {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Side::King => write!(f, "king"),
+            Side::Queen => write!(f, "queen"),
+        }
+    }
 }
 
 impl Side {
@@ -1619,6 +1664,46 @@ impl All<2> for Player {
 pub struct Map<X, T, const N: usize> {
     all: [T; N],
     __: PhantomData<X>,
+}
+
+impl<X, T, const N: usize> From<Map<X, T, N>> for BTreeMap<X, T>
+where
+    T: Copy,
+    X: All<N> + Ord,
+{
+    fn from(map: Map<X, T, N>) -> Self {
+        let mut bmap = BTreeMap::new();
+        for x in 0..N {
+            bmap.insert(X::ALL[x], map.all[x]);
+        }
+        bmap
+    }
+}
+
+// #[cfg(feature = "serde")]
+// impl<'de, X, T: Deserialize<'de>, const N: usize> Deserialize<'de> for Map<X, T, N> {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: serde::Deserializer<'de>,
+//     {
+//         let all: Vec<T> = Deserialize::deserialize(deserializer)?;
+//         let all: [T; N] = all.try_into().map_err(|_| serde::de::Error::custom("wrong length"))?;
+//         Ok(Self { all, __: PhantomData })
+//     }
+// }
+
+#[cfg(feature = "serde")]
+impl<X, T: Serialize, const N: usize> Serialize for Map<X, T, N>
+where
+    T: Copy + Serialize,
+    X: All<N> + Ord + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Serialize::serialize(&BTreeMap::from(*self), serializer)
+    }
 }
 
 impl<X, T: Default, const N: usize> Default for Map<X, T, N>

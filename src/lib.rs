@@ -6,6 +6,14 @@
 //! use chess::Position;
 //! ```
 
+#[cfg(feature = "serde")]
+#[macro_use(Serialize)]
+extern crate serde;
+
+#[cfg(feature = "serde")]
+#[macro_use(SerializeDisplay)]
+extern crate serde_with;
+
 pub mod bitboard;
 pub mod formats;
 #[cfg(feature = "lichess")]
