@@ -91,6 +91,27 @@ impl<V> Id for Position<V> {
     }
 }
 
+// Maybe use tagged inputs with no shortcuts instead,
+// would make for a nicer spec:
+//
+// turn:black
+// castle:white:king
+// castle:white:queen
+// castle:black:king
+// castle:black:queen
+// ep:a3
+// piece:a1:white:pawn
+// piece:a1:white:knight
+// ...
+//
+// That or chess-native tokens vs. display names or internal conventions:
+//
+// square: "a1".."h8"
+// role: "p", "n", "b", "r", "q", "k"
+// player: "w", "b"
+// side: "k", "q"
+// turn black: "b"
+//
 impl Default for Basis {
     fn default() -> Self {
         let black = hash(b"black");
@@ -216,44 +237,16 @@ const fn sha256_3(bytes1: &[u8], bytes2: &[u8], bytes3: &[u8]) -> [u8; 32] {
 
 const fn fold(bytes: [u8; 32]) -> u128 {
     let mut upper = [0u8; 16];
-    upper[0x0] = bytes[0x0];
-    upper[0x1] = bytes[0x1];
-    upper[0x2] = bytes[0x2];
-    upper[0x3] = bytes[0x3];
-    upper[0x4] = bytes[0x4];
-    upper[0x5] = bytes[0x5];
-    upper[0x6] = bytes[0x6];
-    upper[0x7] = bytes[0x7];
-    upper[0x8] = bytes[0x8];
-    upper[0x9] = bytes[0x9];
-    upper[0xA] = bytes[0xA];
-    upper[0xB] = bytes[0xB];
-    upper[0xC] = bytes[0xC];
-    upper[0xD] = bytes[0xD];
-    upper[0xE] = bytes[0xE];
-    upper[0xF] = bytes[0xF];
-
     let mut lower = [0u8; 16];
-    lower[0x0] = bytes[0x10];
-    lower[0x1] = bytes[0x11];
-    lower[0x2] = bytes[0x12];
-    lower[0x3] = bytes[0x13];
-    lower[0x4] = bytes[0x14];
-    lower[0x5] = bytes[0x15];
-    lower[0x6] = bytes[0x16];
-    lower[0x7] = bytes[0x17];
-    lower[0x8] = bytes[0x18];
-    lower[0x9] = bytes[0x19];
-    lower[0xA] = bytes[0x1A];
-    lower[0xB] = bytes[0x1B];
-    lower[0xC] = bytes[0x1C];
-    lower[0xD] = bytes[0x1D];
-    lower[0xE] = bytes[0x1E];
-    lower[0xF] = bytes[0x1F];
 
-    let upper = u128::from_be_bytes(upper);
-    let lower = u128::from_be_bytes(lower);
-    upper ^ lower
+    let mut i = 0;
+    while i < 16 {
+        upper[i] = bytes[i];
+        lower[i] = bytes[i + 16];
+        i += 1;
+    }
+
+    u128::from_be_bytes(upper) ^ u128::from_be_bytes(lower)
 }
 
 pub const fn hash(bytes: &[u8]) -> u128 {

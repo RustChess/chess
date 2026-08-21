@@ -3,7 +3,7 @@ use core::ops;
 use super::All;
 
 /// Restricted square, can only be on third or sixth rank
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Square(super::Square);
 

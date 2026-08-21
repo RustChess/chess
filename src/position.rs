@@ -43,7 +43,7 @@ pub const ALGEBRAIC_MOVE: char = '-';
 pub const ALGEBRAIC_CAPTURE: char = 'x';
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Player {
     Black = 0,
@@ -76,7 +76,7 @@ impl Player {
 // Maybe this fits in AVX-512 registers?
 //
 // Invariant: players disjoint, roles disjoint, both union to same (=occupied)
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 /// Location of pieces on the board
 pub struct Board {
     pub occupied: Bitboard,
@@ -248,7 +248,7 @@ pub trait Variant: Copy + Sized {
 
 pub mod variant {
 
-    #[derive(Copy, Clone)]
+    #[derive(Clone, Copy)]
     pub struct Chess;
     impl super::Variant for Chess {
         fn validate(_position: super::Unvalidated) -> Result<super::Position<Self>, super::Error> {
@@ -260,7 +260,7 @@ pub mod variant {
         }
     }
 
-    #[derive(Copy, Clone)]
+    #[derive(Clone, Copy)]
     pub struct Freestyle;
     impl super::Variant for Freestyle {
         fn validate(_position: super::Unvalidated) -> Result<super::Position<Self>, super::Error> {
@@ -272,12 +272,12 @@ pub mod variant {
         }
     }
 
-    #[derive(Copy, Clone)]
+    #[derive(Clone, Copy)]
     pub struct Unvalidated;
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum File {
     A = 0,
     B = 1,
@@ -358,7 +358,7 @@ impl fmt::Display for File {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Rank {
     One = 0,
     Two = 1,
@@ -432,7 +432,7 @@ impl fmt::Display for Rank {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Square {
     A1 = 0,
@@ -648,7 +648,7 @@ fn display_square() {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Role {
     Pawn = 1,
@@ -749,7 +749,7 @@ impl Role {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Piece {
     pub player: Player,
     pub role: Role,
@@ -764,7 +764,7 @@ impl Piece {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 /// Castling rights
 pub struct Sides<T = bool> {
     pub queen: T,
@@ -803,7 +803,7 @@ impl<T> Sides<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 /// Chess position
 ///
 /// Size:
@@ -935,7 +935,7 @@ impl<V: Variant> Position<V> {
 //     Position { board: INITIAL, turn: Player::White, en_passant: None, ply_since: 0,
 // }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 /// Container (both players)
 pub struct Players<T> {
     pub black: T,
@@ -1010,7 +1010,7 @@ impl<T> Players<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 /// Container (all roles)
 pub struct Roles<T> {
     pub pawn: T,
@@ -1147,7 +1147,7 @@ impl<T> Roles<T> {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Special {
     EnPassant,
     Castle(Side),
@@ -1207,7 +1207,7 @@ impl Special {
 
 /// What kind of move is it?
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Kind {
     #[default]
     Normal,
@@ -1293,7 +1293,7 @@ impl Kind {
 
 // Since `move` is a keyword, can use `play: Move` as a synonym.
 // At least this is the most useful suggestion by Google AI Overview ;)
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 /// Move by a player
 pub struct Move {
     pub kind: Kind,
@@ -1323,7 +1323,7 @@ pub type Moves = Vec<Move>;
 //
 // Also Side is a bit misleading, could also mean what we call Player
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(SerializeDisplay))]
 pub enum Side {
     King = 0,

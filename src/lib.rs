@@ -16,6 +16,7 @@ extern crate serde_with;
 
 pub mod bitboard;
 pub mod formats;
+pub mod game;
 #[cfg(feature = "lichess")]
 pub mod lichess;
 pub mod position;

@@ -6,10 +6,10 @@ use core::{fmt, ops};
 
 use super::position::{File, Rank, Square};
 
-#[derive(Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Bitboard(pub u64);
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 #[repr(i8)]
 pub enum Direction {
     NorthWest = 7,
@@ -533,7 +533,7 @@ impl IntoIterator for Bitboard {
 }
 
 /// Iterator over the squares of a [`Bitboard`].
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct IntoIter(Bitboard);
 
 impl Iterator for IntoIter {
