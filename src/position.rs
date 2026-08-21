@@ -591,6 +591,8 @@ impl Iterator for SquareIter {
 }
 
 impl Square {
+    pub const ALL: [Square; 64] = <Square as All<64>>::ALL;
+
     pub const fn new(file: File, rank: Rank) -> Self {
         Self::panicky_new(((rank as u8) << 3) | (file as u8))
     }

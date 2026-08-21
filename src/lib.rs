@@ -19,6 +19,7 @@ pub mod formats;
 pub mod game;
 #[cfg(feature = "lichess")]
 pub mod lichess;
+pub mod moves;
 pub mod position;
 pub use position::{Move, Position};
 
