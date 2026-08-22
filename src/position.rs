@@ -62,10 +62,31 @@ impl fmt::Display for Player {
 impl Player {
     pub const ALL: [Player; 2] = [Player::Black, Player::White];
 
+    pub const fn other(self) -> Player {
+        match self {
+            Player::Black => Player::White,
+            Player::White => Player::Black,
+        }
+    }
+
     pub const fn backrank(self) -> Rank {
         match self {
             Player::Black => Rank::Eight,
             Player::White => Rank::One,
+        }
+    }
+
+    pub const fn pawn_start_rank(self) -> Rank {
+        match self {
+            Player::Black => Rank::Seven,
+            Player::White => Rank::Two,
+        }
+    }
+
+    pub const fn promotion_rank(self) -> Rank {
+        match self {
+            Player::Black => Rank::One,
+            Player::White => Rank::Eight,
         }
     }
 }
@@ -195,6 +216,16 @@ impl Board {
     pub const fn sliders(self) -> Bitboard {
         let Roles { bishop, rook, queen, .. } = self.roles;
         bishop.symmetric_difference_const(rook).symmetric_difference_const(queen)
+    }
+
+    #[inline]
+    pub const fn bishops_and_queens(self) -> Bitboard {
+        self.bishops().union_const(self.queens())
+    }
+
+    #[inline]
+    pub const fn rooks_and_queens(self) -> Bitboard {
+        self.rooks().union_const(self.queens())
     }
 
     /// Pawns, knights and kings.
@@ -919,6 +950,17 @@ impl<V: Variant> Position<V> {
         V::moves(self)
     }
 
+    pub const fn checkers(&self) -> Bitboard {
+        match self.board.king_of(self.turn) {
+            Some(king) => self.board.attacks_to(king, self.turn.other(), self.board.occupied()),
+            None => Bitboard::EMPTY,
+        }
+    }
+
+    pub const fn is_check(&self) -> bool {
+        !self.checkers().is_empty()
+    }
+
     pub fn capture_moves(&self) -> Moves {
         self.moves().into_iter().filter(|m| m.is_capture()).collect()
     }
@@ -1377,7 +1419,12 @@ impl All<2> for Side {
 impl Move {
     #[inline]
     pub const fn normal(role: Role, from: Square, to: Square) -> Move {
-        Move { kind: Normal, role, from, to, capture: None }
+        Move::capture(role, from, to, None)
+    }
+
+    #[inline]
+    pub const fn capture(role: Role, from: Square, to: Square, capture: Option<Role>) -> Move {
+        Move { kind: Normal, role, from, to, capture }
     }
 
     #[inline]
@@ -1399,7 +1446,31 @@ impl Move {
 
     #[inline]
     pub const fn promote(from: Square, to: Square, role: Role) -> Move {
-        Move { role: Role::Pawn, from, to, capture: None, kind: Kind::Special(Promote(role)) }
+        Move::promote_capture(from, to, role, None)
+    }
+
+    #[inline]
+    pub const fn promote_capture(
+        from: Square,
+        to: Square,
+        role: Role,
+        capture: Option<Role>,
+    ) -> Move {
+        Move { role: Role::Pawn, from, to, capture, kind: Kind::Special(Promote(role)) }
+    }
+
+    pub fn pawn(player: Player, from: Square, to: Square, capture: Option<Role>) -> Moves {
+        let mut moves = Moves::new();
+
+        if to.rank() as u8 == player.promotion_rank() as u8 {
+            for role in [Role::Queen, Role::Rook, Role::Bishop, Role::Knight] {
+                moves.push(Move::promote_capture(from, to, role, capture));
+            }
+        } else {
+            moves.push(Move::capture(Role::Pawn, from, to, capture));
+        }
+
+        moves
     }
 }
 

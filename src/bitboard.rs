@@ -11,14 +11,35 @@ pub struct Bitboard(pub u64);
 
 #[derive(Clone, Copy)]
 #[repr(i8)]
+// This is an enum and not e.g. Direction(i8) for two reasons
+// - implementing shift
+// - matching in const contexts
 pub enum Direction {
-    NorthWest = 7,
-    NorthEast = 9,
-    SouthWest = -9,
-    SouthEast = -7,
+    North = direction(0, 1),
+    East = direction(1, 0),
+    South = direction(0, -1),
+    West = direction(-1, 0),
+    NorthNorth = direction(0, 2),
+    SouthSouth = direction(0, -2),
+
+    NorthEast = direction(1, 1),
+    NorthWest = direction(-1, 1),
+    SouthEast = direction(1, -1),
+    SouthWest = direction(-1, -1),
+
+    KnightNorthEast = direction(1, 2),
+    KnightNorthWest = direction(-1, 2),
+    KnightEastNorth = direction(2, 1),
+    KnightEastSouth = direction(2, -1),
+    KnightSouthEast = direction(1, -2),
+    KnightSouthWest = direction(-1, -2),
+    KnightWestNorth = direction(-2, 1),
+    KnightWestSouth = direction(-2, -1),
 }
 
-const FILE_A: u64 = 0x0101_0101_0101_0101;
+const fn direction(file: i8, rank: i8) -> i8 {
+    rank * 8 + file
+}
 
 const RANKS: [u64; 8] = {
     let mut masks = [0; 8];
@@ -29,6 +50,50 @@ const RANKS: [u64; 8] = {
     }
     masks
 };
+
+const fn full_rays() -> [[Bitboard; 64]; 64] {
+    let mut table = [[Bitboard::EMPTY; 64]; 64];
+    let mut a = 0i32;
+    while a < 64 {
+        let file_a = a & 7;
+        let rank_a = a >> 3;
+        let diagonal_a = rank_a - file_a;
+        let antidiagonal_a = rank_a + file_a - 7;
+
+        let mut b = 0i32;
+        while b < 64 {
+            let file_b = b & 7;
+            let rank_b = b >> 3;
+            let diagonal_b = rank_b - file_b;
+            let antidiagonal_b = rank_b + file_b - 7;
+
+            table[a as usize][b as usize] = Bitboard(if a == b {
+                0
+            } else if file_a == file_b {
+                Bitboard::FILE_A.0 << file_a
+            } else if rank_a == rank_b {
+                0xff << (8 * rank_a)
+            } else if diagonal_a == diagonal_b {
+                if diagonal_a >= 0 {
+                    Bitboard::DIAGONAL.0 << (8 * diagonal_a)
+                } else {
+                    Bitboard::DIAGONAL.0 >> (8 * -diagonal_a)
+                }
+            } else if antidiagonal_a == antidiagonal_b {
+                if antidiagonal_a >= 0 {
+                    Bitboard::ANTIDIAGONAL.0 << (8 * antidiagonal_a)
+                } else {
+                    Bitboard::ANTIDIAGONAL.0 >> (8 * -antidiagonal_a)
+                }
+            } else {
+                0
+            });
+            b += 1;
+        }
+        a += 1;
+    }
+    table
+}
 
 #[test]
 fn bitboard_constants() {
@@ -50,15 +115,31 @@ impl Bitboard {
     pub const SOUTH: Bitboard = Bitboard(0x0000_0000_ffff_ffff);
     pub const WEST: Bitboard = Bitboard(0x0f0f_0f0f_0f0f_0f0f);
     pub const EAST: Bitboard = Bitboard(0xf0f0_f0f0_f0f0_f0f0);
+    pub const FILE_A: Bitboard = Bitboard(0x0101_0101_0101_0101);
+    // Full a1-h8 diagonal.
+    pub const DIAGONAL: Bitboard = Bitboard(0x8040_2010_0804_0201);
+    // Full h1-a8 antidiagonal.
+    pub const ANTIDIAGONAL: Bitboard = Bitboard(0x0102_0408_1020_4080);
+    pub const FULL_RAYS: [[Bitboard; 64]; 64] = full_rays();
 
     #[inline]
     pub const fn from_square(square: Square) -> Bitboard {
         Bitboard(1 << square as u32)
     }
 
+    pub const fn from_squares<const N: usize>(squares: [Square; N]) -> Bitboard {
+        let mut bitboard = Bitboard::EMPTY;
+        let mut i = 0;
+        while i < N {
+            bitboard.append_const(Bitboard::from_square(squares[i]));
+            i += 1;
+        }
+        bitboard
+    }
+
     #[inline]
     pub const fn from_file(file: File) -> Bitboard {
-        Bitboard(FILE_A << file as u32)
+        Bitboard(Bitboard::FILE_A.0 << file as u32)
     }
 
     #[inline]
@@ -109,6 +190,22 @@ impl Bitboard {
     #[inline]
     pub const fn clear(&mut self) {
         self.0 = 0;
+    }
+
+    pub const fn without_a_file(self) -> Bitboard {
+        self.difference_const(Bitboard::FILE_A)
+    }
+
+    pub const fn without_h_file(self) -> Bitboard {
+        self.difference_const(Bitboard::from_file(File::H))
+    }
+
+    pub const fn without_ab_files(self) -> Bitboard {
+        self.without_a_file().difference_const(Bitboard::from_file(File::B))
+    }
+
+    pub const fn without_gh_files(self) -> Bitboard {
+        self.without_h_file().difference_const(Bitboard::from_file(File::G))
     }
 
     /// Appends `squares`.
@@ -201,9 +298,14 @@ impl Bitboard {
     }
 
     #[inline]
-    const fn without_first(self) -> Bitboard {
+    pub const fn without_first(self) -> Bitboard {
         let Bitboard(mask) = self;
         Bitboard(mask & mask.wrapping_sub(1))
+    }
+
+    #[inline]
+    pub const fn more_than_one(self) -> bool {
+        !self.without_first().is_empty()
     }
 
     #[inline]
@@ -246,6 +348,41 @@ impl Bitboard {
     #[inline]
     pub const fn union_const(self, squares: Bitboard) -> Bitboard {
         Bitboard(self.0 | squares.0)
+    }
+
+    #[inline]
+    pub const fn checked_shift(self, direction: Direction) -> Bitboard {
+        use Direction::*;
+
+        match direction {
+            North => self.wrapping_shift(North),
+            South => self.wrapping_shift(South),
+            East => self.without_h_file().wrapping_shift(East),
+            West => self.without_a_file().wrapping_shift(West),
+            NorthNorth => self.wrapping_shift(NorthNorth),
+            SouthSouth => self.wrapping_shift(SouthSouth),
+            NorthWest => self.without_a_file().wrapping_shift(NorthWest),
+            SouthWest => self.without_a_file().wrapping_shift(SouthWest),
+            NorthEast => self.without_h_file().wrapping_shift(NorthEast),
+            SouthEast => self.without_h_file().wrapping_shift(SouthEast),
+            KnightNorthWest => self.without_a_file().wrapping_shift(KnightNorthWest),
+            KnightSouthWest => self.without_a_file().wrapping_shift(KnightSouthWest),
+            KnightNorthEast => self.without_h_file().wrapping_shift(KnightNorthEast),
+            KnightSouthEast => self.without_h_file().wrapping_shift(KnightSouthEast),
+            KnightWestNorth => self.without_ab_files().wrapping_shift(KnightWestNorth),
+            KnightWestSouth => self.without_ab_files().wrapping_shift(KnightWestSouth),
+            KnightEastNorth => self.without_gh_files().wrapping_shift(KnightEastNorth),
+            KnightEastSouth => self.without_gh_files().wrapping_shift(KnightEastSouth),
+        }
+    }
+
+    const fn wrapping_shift(self, direction: Direction) -> Bitboard {
+        let offset = direction as i8;
+        if offset >= 0 {
+            Bitboard(self.0 << offset as u32)
+        } else {
+            Bitboard(self.0 >> -offset as u32)
+        }
     }
 
     #[inline]
@@ -326,24 +463,30 @@ impl Bitboard {
 }
 
 impl Direction {
-    #[inline(always)]
-    pub const fn offset(self) -> isize {
-        match self {
-            Direction::NorthWest => 7,
-            Direction::SouthWest => -9,
-            Direction::NorthEast => 9,
-            Direction::SouthEast => -7,
-        }
-    }
+    #[inline]
+    pub const fn reverse(self) -> Direction {
+        use Direction::*;
 
-    #[inline(always)]
-    pub const fn translate(self, bitboard: Bitboard) -> Bitboard {
-        Bitboard(match self {
-            Direction::NorthWest => (bitboard.0 & !FILE_A) << 7,
-            Direction::SouthWest => (bitboard.0 & !FILE_A) >> 9,
-            Direction::NorthEast => (bitboard.0 << 9) & !FILE_A,
-            Direction::SouthEast => (bitboard.0 >> 7) & !FILE_A,
-        })
+        match self {
+            North => South,
+            East => West,
+            South => North,
+            West => East,
+            NorthNorth => SouthSouth,
+            SouthSouth => NorthNorth,
+            NorthEast => SouthWest,
+            NorthWest => SouthEast,
+            SouthEast => NorthWest,
+            SouthWest => NorthEast,
+            KnightNorthEast => KnightSouthWest,
+            KnightNorthWest => KnightSouthEast,
+            KnightEastNorth => KnightWestSouth,
+            KnightEastSouth => KnightWestNorth,
+            KnightSouthEast => KnightNorthWest,
+            KnightSouthWest => KnightNorthEast,
+            KnightWestNorth => KnightEastSouth,
+            KnightWestSouth => KnightEastNorth,
+        }
     }
 }
 

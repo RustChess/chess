@@ -1,8 +1,11 @@
 use core::ops;
 
 use crate::{
-    bitboard::Bitboard,
-    position::{Player, Square},
+    bitboard::{Bitboard, Direction},
+    position::{
+        Board, Move, Moves, Piece, Player, Players, Position, Rank, Role, Side, Sides, Square,
+        Variant,
+    },
 };
 
 // This would work here too - but it will warn about long_running_const_eval
@@ -11,10 +14,279 @@ use crate::{
 // static SLIDER_ATTACKS: [Bitboard; 88772] = slider_attacks();
 include!("slider_attacks.rs");
 
+// king-safety moves
+impl Board {
+    pub fn king_shields(self, player: Player) -> Bitboard {
+        match self.king_of(player) {
+            Some(king) => {
+                let attacker = self.player(player.other());
+                let straight =
+                    king.rook_attacks(Bitboard::EMPTY).intersection_const(self.rooks_and_queens());
+                let diagonal = king
+                    .bishop_attacks(Bitboard::EMPTY)
+                    .intersection_const(self.bishops_and_queens());
+                let snipers = straight.union_const(diagonal).intersection_const(attacker);
+
+                let mut shields = Bitboard::EMPTY;
+                let mut snipers = snipers;
+                while let Some(sniper) = snipers.pop_first() {
+                    let blockers = king.between(sniper).intersection_const(self.occupied());
+                    if !blockers.more_than_one() {
+                        shields.append_const(blockers.intersection_const(self.player(player)));
+                    }
+                }
+
+                shields
+            }
+            None => Bitboard::EMPTY,
+        }
+    }
+}
+
+// attack-related moves
+impl Board {
+    // Attack-related moves.
+    pub fn attacks_from(self, square: Square) -> Bitboard {
+        match self.piece_at(square) {
+            Some(piece) => square.attacks(piece, self.occupied()),
+            None => Bitboard::EMPTY,
+        }
+    }
+
+    /// Pieces of `attacker` on this board that attack `square`.
+    ///
+    /// `occupied` is the occupancy view used for line-of-sight and for
+    /// filtering attackers. This supports king-safety checks after the other
+    /// player moves: removed pieces are ignored, and slider rays use the
+    /// post-move blockers.
+    ///
+    /// This is not a full hypothetical-board query for moves by `attacker`,
+    /// because piece roles and players still come from `self`.
+    pub const fn attacks_to(
+        self,
+        square: Square,
+        attacker: Player,
+        occupied: Bitboard,
+    ) -> Bitboard {
+        // Work backwards from the target square to find possible source squares.
+        // Sliders, knights and kings are symmetric enough for this.
+        let straight = square.rook_attacks(occupied).intersection_const(self.rooks_and_queens());
+        let diagonal =
+            square.bishop_attacks(occupied).intersection_const(self.bishops_and_queens());
+        let knights = square.knight_attacks().intersection_const(self.knights());
+        let kings = square.king_attacks().intersection_const(self.kings());
+
+        // Pawns are directional, so find pawn source squares with the opposite
+        // player's pawn attacks, then filter down to `attacker` below.
+        let pawns = square.pawn_attacks(attacker.other()).intersection_const(self.pawns());
+
+        let attacks = straight
+            .union_const(diagonal)
+            .union_const(knights)
+            .union_const(kings)
+            .union_const(pawns);
+
+        // The role filters above include both players' pieces. Intersecting
+        // with `occupied` removes pieces that are gone in this occupancy view.
+        self.player(attacker).intersection_const(occupied).intersection_const(attacks)
+    }
+}
+
+// pseudo-legal move generation
+impl<V: Variant> Position<V> {
+    pub fn legal_moves(&self) -> Moves {
+        if self.is_check() {
+            return self.evasion_moves();
+        }
+
+        let shields = self.board.king_shields(self.turn);
+
+        let mut moves = self.pseudo_piece_moves();
+        moves.retain(|m| self.piece_move_is_safe(*m, shields));
+        moves.extend(self.legal_king_moves());
+        moves.extend(self.legal_en_passant_moves());
+        moves.extend(self.legal_castle_moves());
+        moves
+    }
+
+    fn evasion_moves(&self) -> Moves {
+        // TODO: Generate only moves that can answer check.
+        Moves::new()
+    }
+
+    pub fn pseudo_piece_moves(&self) -> Moves {
+        use Role::*;
+
+        let mut moves = Moves::new();
+        let target = !self.board.player(self.turn);
+
+        self.pseudo_pawn_moves(target, &mut moves);
+        for role in [Knight, Bishop, Rook, Queen] {
+            self.pseudo_role_moves(role, target, &mut moves);
+        }
+
+        moves
+    }
+
+    pub fn legal_king_moves(&self) -> Moves {
+        let mut moves = Moves::new();
+        let target = !self.board.player(self.turn);
+
+        self.pseudo_role_moves(Role::King, target, &mut moves);
+        moves.retain(|m| self.king_move_is_safe(*m));
+
+        moves
+    }
+
+    fn king_move_is_safe(&self, m: Move) -> bool {
+        let occupied = self.board.occupied().difference_const(Bitboard::from_square(m.from));
+        self.board.attacks_to(m.to, self.turn.other(), occupied).is_empty()
+    }
+
+    fn king_square_is_safe(&self, square: Square) -> bool {
+        self.board.attacks_to(square, self.turn.other(), self.board.occupied()).is_empty()
+    }
+
+    fn pseudo_role_moves(&self, role: Role, target: Bitboard, moves: &mut Moves) {
+        let occupied = self.board.occupied();
+        let mut pieces = self.board.role(role).intersection_const(self.board.player(self.turn));
+
+        while let Some(from) = pieces.pop_first() {
+            let piece = role.of(self.turn);
+            let mut targets = from.attacks(piece, occupied).intersection_const(target);
+            while let Some(to) = targets.pop_first() {
+                moves.push(Move::capture(role, from, to, self.board.role_at(to)));
+            }
+        }
+    }
+
+    fn pseudo_pawn_moves(&self, target: Bitboard, moves: &mut Moves) {
+        let occupied = self.board.occupied();
+        let them = self.board.player(self.turn.other());
+        let pawns = self.board.pawns().intersection_const(self.board.player(self.turn));
+        let empty = !occupied;
+        let (push, double_push, left, right, double_rank) = pawn_directions(self.turn);
+
+        let single = pawns.checked_shift(push).intersection_const(empty);
+        let double =
+            single.intersection_const(double_rank).checked_shift(push).intersection_const(empty);
+        let captures_left = pawns.checked_shift(left).intersection_const(them);
+        let captures_right = pawns.checked_shift(right).intersection_const(them);
+
+        let mut targets = single.intersection_const(target);
+        while let Some(to) = targets.pop_first() {
+            let from = to.checked_add_const(push.reverse()).expect("valid pawn source");
+            moves.extend(Move::pawn(self.turn, from, to, None));
+        }
+
+        let mut targets = double.intersection_const(target);
+        while let Some(to) = targets.pop_first() {
+            let from = to.checked_add_const(double_push.reverse()).expect("valid pawn source");
+            moves.push(Move::normal(Role::Pawn, from, to));
+        }
+
+        let mut targets = captures_left.intersection_const(target);
+        while let Some(to) = targets.pop_first() {
+            let from = to.checked_add_const(left.reverse()).expect("valid pawn source");
+            moves.extend(Move::pawn(self.turn, from, to, self.board.role_at(to)));
+        }
+
+        let mut targets = captures_right.intersection_const(target);
+        while let Some(to) = targets.pop_first() {
+            let from = to.checked_add_const(right.reverse()).expect("valid pawn source");
+            moves.extend(Move::pawn(self.turn, from, to, self.board.role_at(to)));
+        }
+    }
+
+    fn legal_en_passant_moves(&self) -> Moves {
+        let mut moves = Moves::new();
+
+        if let Some(to) = self.en_passant {
+            let to = to.square();
+            let mut pawns = self
+                .board
+                .pawns()
+                .intersection_const(self.board.player(self.turn))
+                .intersection_const(to.pawn_attacks(self.turn.other()));
+
+            while let Some(from) = pawns.pop_first() {
+                let m = Move::en_passant(from, to);
+                if self.en_passant_move_is_safe(m) {
+                    moves.push(m);
+                }
+            }
+        }
+
+        moves
+    }
+
+    fn legal_castle_moves(&self) -> Moves {
+        let mut moves = Moves::new();
+
+        for side in Side::ALL {
+            if self.can_castle(side) {
+                moves.push(Move::castle(self.turn, side));
+            }
+        }
+
+        moves
+    }
+
+    fn can_castle(&self, side: Side) -> bool {
+        if !self.castle[self.turn][side] {
+            return false;
+        }
+
+        let empty_path = STANDARD_CASTLE_EMPTY_PATHS[self.turn][side];
+        if !self.board.occupied().intersection_const(empty_path).is_empty() {
+            return false;
+        }
+
+        STANDARD_CASTLE_KING_PATHS[self.turn][side]
+            .iter()
+            .all(|square| self.king_square_is_safe(square))
+    }
+
+    fn piece_move_is_safe(&self, m: Move, shields: Bitboard) -> bool {
+        // In a legal, not-in-check position, an ordinary piece move can only
+        // expose our king by moving a shielding piece off a slider ray.
+        if !shields.contains(m.from) {
+            return true;
+        }
+
+        match self.board.king_of(self.turn) {
+            // A shielding piece remains safe if it stays on the full ray
+            // through the king and its original square. This does not need to
+            // be only the segment between king and attacker: ordinary move
+            // generation cannot move through either piece, and capturing the
+            // attacker is safe.
+            Some(king) => king.full_ray(m.from).contains(m.to),
+            // Invalid positions without a king have no safe legal moves.
+            None => false,
+        }
+    }
+
+    fn en_passant_move_is_safe(&self, m: Move) -> bool {
+        let Some(king) = self.board.king_of(self.turn) else {
+            return false;
+        };
+
+        let captured = Square::new(m.to.file(), m.from.rank());
+        let occupied = self
+            .board
+            .occupied()
+            .difference_const(Bitboard::from_square(m.from))
+            .difference_const(Bitboard::from_square(captured))
+            .union_const(Bitboard::from_square(m.to));
+
+        self.board.attacks_to(king, self.turn.other(), occupied).is_empty()
+    }
+}
+
 impl Square {
-    const fn checked_add_const(self, step: Step) -> Option<Square> {
+    const fn checked_add_const(self, direction: Direction) -> Option<Square> {
         let square = self as i8;
-        let target = square + step.0;
+        let target = square + direction as i8;
         // Equivalent to splitting square + step into file + rank,
         // adding coordinates, and then checking if file + rank are in 0..=7
         let file_diff = (target & 0x7) - (square & 0x7);
@@ -26,11 +298,11 @@ impl Square {
     }
 
     // Add step vector to square, union into a bitboard
-    const fn checked_add_vector_const(self, steps: &[Step]) -> Bitboard {
+    const fn checked_add_vector_const(self, directions: &[Direction]) -> Bitboard {
         let mut attacks = Bitboard::EMPTY;
         let mut i = 0;
-        while i < steps.len() {
-            if let Some(target) = self.checked_add_const(steps[i]) {
+        while i < directions.len() {
+            if let Some(target) = self.checked_add_const(directions[i]) {
                 attacks.append_const(Bitboard::from_square(target));
             }
             i += 1;
@@ -39,38 +311,41 @@ impl Square {
     }
 
     pub const fn king_attacks(self) -> Bitboard {
-        const KING_ATTACKS: [Step; 8] = [
-            Step::NORTH_EAST,
-            Step::NORTH,
-            Step::NORTH_WEST,
-            Step::EAST,
-            Step::SOUTH_WEST,
-            Step::SOUTH,
-            Step::SOUTH_EAST,
-            Step::WEST,
-        ];
+        const KING_ATTACKS: [Direction; 8] = {
+            use Direction::*;
+            [North, NorthEast, East, SouthEast, South, SouthWest, West, NorthWest]
+        };
 
         self.checked_add_vector_const(&KING_ATTACKS)
     }
 
     pub const fn knight_attacks(self) -> Bitboard {
-        const KNIGHT_ATTACKS: [Step; 8] = [
-            Step::KNIGHT_NORTH_EAST,
-            Step::KNIGHT_NORTH_WEST,
-            Step::KNIGHT_EAST_NORTH,
-            Step::KNIGHT_WEST_NORTH,
-            Step::KNIGHT_SOUTH_WEST,
-            Step::KNIGHT_SOUTH_EAST,
-            Step::KNIGHT_WEST_SOUTH,
-            Step::KNIGHT_EAST_SOUTH,
-        ];
+        const KNIGHT_ATTACKS: [Direction; 8] = {
+            use Direction::*;
+            [
+                KnightNorthEast,
+                KnightEastNorth,
+                KnightEastSouth,
+                KnightSouthEast,
+                KnightSouthWest,
+                KnightWestSouth,
+                KnightWestNorth,
+                KnightNorthWest,
+            ]
+        };
 
         self.checked_add_vector_const(&KNIGHT_ATTACKS)
     }
 
     pub const fn pawn_attacks(self, player: Player) -> Bitboard {
-        const WHITE_PAWN_ATTACKS: [Step; 2] = [Step::NORTH_WEST, Step::NORTH_EAST];
-        const BLACK_PAWN_ATTACKS: [Step; 2] = [Step::SOUTH_WEST, Step::SOUTH_EAST];
+        const WHITE_PAWN_ATTACKS: [Direction; 2] = {
+            use Direction::*;
+            [NorthWest, NorthEast]
+        };
+        const BLACK_PAWN_ATTACKS: [Direction; 2] = {
+            use Direction::*;
+            [SouthWest, SouthEast]
+        };
 
         match player {
             Player::White => self.checked_add_vector_const(&WHITE_PAWN_ATTACKS),
@@ -94,65 +369,73 @@ impl Square {
         self.bishop_attacks(occupied).union_const(self.rook_attacks(occupied))
     }
 
-    // This is NOT computed directly for every "slider" attacks from a given square.
-    // Instead, it's precomputed
-    const fn ray_attacks(self, occupied: Bitboard, directions: &[Step]) -> Bitboard {
-        let mut attacks = Bitboard::EMPTY;
-        let mut i = 0;
-        while i < directions.len() {
-            let direction = directions[i];
-            let mut square = self;
-            while let Some(target) = square.checked_add_const(direction) {
-                attacks.append_const(Bitboard::from_square(target));
-                // hit an occupied square
-                if occupied.contains(target) {
-                    break;
-                }
-                square = target;
-            }
-            i += 1;
+    pub const fn attacks(self, piece: Piece, occupied: Bitboard) -> Bitboard {
+        match piece.role {
+            Role::Pawn => self.pawn_attacks(piece.player),
+            Role::Knight => self.knight_attacks(),
+            Role::Bishop => self.bishop_attacks(occupied),
+            Role::Rook => self.rook_attacks(occupied),
+            Role::Queen => self.queen_attacks(occupied),
+            Role::King => self.king_attacks(),
         }
-        attacks
     }
 
-    const fn ray_blockers(self, directions: &[Step]) -> Bitboard {
-        let mut blockers = Bitboard::EMPTY;
-        let mut i = 0;
-        while i < directions.len() {
-            let direction = directions[i];
-            let mut target = self.checked_add_const(direction);
-            while let Some(square) = target {
-                target = square.checked_add_const(direction);
-                if target.is_some() {
-                    blockers.append_const(Bitboard::from_square(square));
-                }
-            }
-            i += 1;
-        }
-        blockers
+    // the full line through the two squares
+    pub const fn full_ray(self, other: Square) -> Bitboard {
+        Bitboard::FULL_RAYS[self as usize][other as usize]
+    }
+
+    // The row-major half-open interval [min(self, other), max(self, other)).
+    //
+    // For d2, g5, after also removing the first square:
+    //
+    // 8  . . . . . . . .
+    // 7  . . . . . . . .
+    // 6  . . . . . . . .
+    // 5  x x x x x x . .
+    // 4  x x x x x x x x
+    // 3  x x x x x x x x
+    // 2  . . . . x x x x
+    // 1  . . . . . . . .
+    //
+    //    a b c d e f g h
+    const fn index_range(self, other: Square) -> Bitboard {
+        Bitboard((!0 << self as u32) ^ (!0 << other as u32))
+    }
+
+    pub const fn between(self, other: Square) -> Bitboard {
+        // Intersecting the index range with the geometric ray leaves only the
+        // ray segment between the endpoints.
+        self.full_ray(other).intersection_const(self.index_range(other)).without_first()
+    }
+
+    pub const fn aligned(self, b: Square, c: Square) -> bool {
+        self.full_ray(b).contains(c)
     }
 }
 
-impl ops::Add<Step> for Square {
+impl ops::Add<Direction> for Square {
     type Output = Option<Square>;
 
-    fn add(self, step: Step) -> Option<Square> {
-        self.checked_add_const(step)
+    fn add(self, direction: Direction) -> Option<Square> {
+        self.checked_add_const(direction)
     }
 }
 
-impl ops::Add<&[Step]> for Square {
+impl ops::Add<&[Direction]> for Square {
     type Output = Bitboard;
 
-    fn add(self, steps: &[Step]) -> Bitboard {
-        self.checked_add_vector_const(steps)
+    fn add(self, directions: &[Direction]) -> Bitboard {
+        self.checked_add_vector_const(directions)
     }
 }
 
 struct Bishop;
 impl Bishop {
-    pub const DIRECTIONS: [Step; 4] =
-        [Step::NORTH_EAST, Step::NORTH_WEST, Step::SOUTH_WEST, Step::SOUTH_EAST];
+    pub const DIRECTIONS: [Direction; 4] = {
+        use Direction::*;
+        [NorthEast, SouthEast, SouthWest, NorthEast]
+    };
     const BLOCKERS: [Bitboard; 64] = slider_blockers(&Self::DIRECTIONS);
     const MAGICS: [Magic; 64] = BISHOP_MAGICS;
     const BITS: u32 = 9;
@@ -169,7 +452,10 @@ impl Bishop {
 
 struct Rook;
 impl Rook {
-    pub const DIRECTIONS: [Step; 4] = [Step::NORTH, Step::EAST, Step::SOUTH, Step::WEST];
+    pub const DIRECTIONS: [Direction; 4] = {
+        use Direction::*;
+        [North, East, South, West]
+    };
     const BLOCKERS: [Bitboard; 64] = slider_blockers(&Self::DIRECTIONS);
     const MAGICS: [Magic; 64] = ROOK_MAGICS;
     const BITS: u32 = 12;
@@ -207,11 +493,11 @@ pub const fn slider_attacks() -> [Bitboard; 88772] {
     table
 }
 
-const fn slider_blockers(directions: &[Step]) -> [Bitboard; 64] {
+const fn slider_blockers(directions: &[Direction]) -> [Bitboard; 64] {
     let mut blockers = [Bitboard::EMPTY; 64];
     let mut index = 0;
     while index < 64 {
-        blockers[index] = Square::ALL[index].ray_blockers(directions);
+        blockers[index] = ray_blockers(Square::ALL[index], directions);
         index += 1;
     }
     blockers
@@ -247,7 +533,7 @@ const fn rook_square_attacks(table: &mut [Bitboard; 88772], square: Square) {
 const fn slider_square_attacks(
     table: &mut [Bitboard; 88772],
     square: Square,
-    directions: &[Step],
+    directions: &[Direction],
     blockers: Bitboard,
     magic: &Magic,
     bits: u32,
@@ -255,7 +541,7 @@ const fn slider_square_attacks(
     let blockers = blockers.0;
     let mut occupied = 0;
     loop {
-        let attack = square.ray_attacks(Bitboard(occupied), directions);
+        let attack = ray_attacks(square, Bitboard(occupied), directions);
         let index = slider_magic_index(magic, occupied, bits);
         // sanity check: we are not overwriting an existing attack
         // due to hash / magic index failing by clashing.
@@ -268,33 +554,84 @@ const fn slider_square_attacks(
     }
 }
 
-#[derive(Clone, Copy)]
-struct Step(i8);
+// This is NOT computed directly for every "slider" attack from a given square.
+// Instead, it's used to precompute the slider attack table.
+const fn ray_attacks(square: Square, occupied: Bitboard, directions: &[Direction]) -> Bitboard {
+    let mut attacks = Bitboard::EMPTY;
+    let mut i = 0;
+    while i < directions.len() {
+        let direction = directions[i];
+        let mut square = square;
+        while let Some(target) = square.checked_add_const(direction) {
+            attacks.append_const(Bitboard::from_square(target));
+            // hit an occupied square
+            if occupied.contains(target) {
+                break;
+            }
+            square = target;
+        }
+        i += 1;
+    }
+    attacks
+}
 
-impl Step {
-    const NORTH: Step = Step::new(0, 1);
-    const EAST: Step = Step::new(1, 0);
-    const SOUTH: Step = Step::new(0, -1);
-    const WEST: Step = Step::new(-1, 0);
+const fn ray_blockers(square: Square, directions: &[Direction]) -> Bitboard {
+    let mut blockers = Bitboard::EMPTY;
+    let mut i = 0;
+    while i < directions.len() {
+        let direction = directions[i];
+        let mut target = square.checked_add_const(direction);
+        while let Some(square) = target {
+            target = square.checked_add_const(direction);
+            if target.is_some() {
+                blockers.append_const(Bitboard::from_square(square));
+            }
+        }
+        i += 1;
+    }
+    blockers
+}
 
-    const NORTH_EAST: Step = Step::new(1, 1);
-    const NORTH_WEST: Step = Step::new(-1, 1);
-    const SOUTH_EAST: Step = Step::new(1, -1);
-    const SOUTH_WEST: Step = Step::new(-1, -1);
+const fn pawn_directions(player: Player) -> (Direction, Direction, Direction, Direction, Bitboard) {
+    use Direction::*;
 
-    const KNIGHT_NORTH_EAST: Step = Step::new(1, 2);
-    const KNIGHT_NORTH_WEST: Step = Step::new(-1, 2);
-    const KNIGHT_EAST_NORTH: Step = Step::new(2, 1);
-    const KNIGHT_EAST_SOUTH: Step = Step::new(2, -1);
-    const KNIGHT_SOUTH_EAST: Step = Step::new(1, -2);
-    const KNIGHT_SOUTH_WEST: Step = Step::new(-1, -2);
-    const KNIGHT_WEST_NORTH: Step = Step::new(-2, 1);
-    const KNIGHT_WEST_SOUTH: Step = Step::new(-2, -1);
-
-    const fn new(file: i8, rank: i8) -> Step {
-        Step(rank * 8 + file)
+    match player {
+        Player::White => {
+            (North, NorthNorth, NorthWest, NorthEast, Bitboard::from_rank(Rank::Three))
+        }
+        Player::Black => (South, SouthSouth, SouthWest, SouthEast, Bitboard::from_rank(Rank::Six)),
     }
 }
+
+const STANDARD_CASTLE_EMPTY_PATHS: Players<Sides<Bitboard>> = {
+    use Square::*;
+
+    Players {
+        white: Sides {
+            queen: Bitboard::from_squares([B1, C1, D1]),
+            king: Bitboard::from_squares([F1, G1]),
+        },
+        black: Sides {
+            queen: Bitboard::from_squares([B8, C8, D8]),
+            king: Bitboard::from_squares([F8, G8]),
+        },
+    }
+};
+
+const STANDARD_CASTLE_KING_PATHS: Players<Sides<Bitboard>> = {
+    use Square::*;
+
+    Players {
+        white: Sides {
+            queen: Bitboard::from_squares([E1, D1, C1]),
+            king: Bitboard::from_squares([E1, F1, G1]),
+        },
+        black: Sides {
+            queen: Bitboard::from_squares([C8, D8, E8]),
+            king: Bitboard::from_squares([E8, F8, G8]),
+        },
+    }
+};
 
 // Fixed shift white magics found by Volker Annuss.
 // From: http://www.talkchess.com/forum/viewtopic.php?p=727500&t=64790
