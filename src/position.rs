@@ -211,6 +211,51 @@ impl Board {
         *self.roles.get(role)
     }
 
+    pub fn add(&mut self, square: Square, piece: Piece) {
+        self.occupied.insert(square);
+        self.players[piece.player].insert(square);
+        self.roles[piece.role].insert(square);
+    }
+
+    pub fn remove(&mut self, square: Square) -> Option<Piece> {
+        let piece = self.piece_at(square)?;
+        self.occupied.remove(square);
+        self.players[piece.player].remove(square);
+        self.roles[piece.role].remove(square);
+        Some(piece)
+    }
+
+    pub fn apply_unchecked(&mut self, player: Player, play: Move) {
+        let Some(special) = play.specials() else {
+            self.remove(play.from);
+            self.remove(play.to);
+            self.add(play.to, play.role.of(player));
+            return;
+        };
+
+        match special {
+            EnPassant => {
+                let captured = Square::new(play.to.file(), play.from.rank());
+                self.remove(play.from);
+                self.remove(captured);
+                self.add(play.to, Role::Pawn.of(player));
+            }
+            Castle(side) => {
+                let rook_from = standard_castle_rook(player, side);
+                let rook_to = standard_castle_rook_to(player, side);
+                self.remove(play.from);
+                self.remove(rook_from);
+                self.add(play.to, Role::King.of(player));
+                self.add(rook_to, Role::Rook.of(player));
+            }
+            Promote(role) => {
+                self.remove(play.from);
+                self.remove(play.to);
+                self.add(play.to, role.of(player));
+            }
+        }
+    }
+
     /// Bishops, rooks and queens.
     #[inline]
     pub const fn sliders(self) -> Bitboard {
@@ -260,6 +305,22 @@ impl Board {
         self.player_at(square)
             .map(|player| self.roles.find_or_king(|role| role.contains(square)).of(player))
     }
+}
+
+const fn standard_castle_rook(player: Player, side: Side) -> Square {
+    let file = match side {
+        Side::King => File::H,
+        Side::Queen => File::A,
+    };
+    Square::new(file, player.backrank())
+}
+
+const fn standard_castle_rook_to(player: Player, side: Side) -> Square {
+    let file = match side {
+        Side::King => File::F,
+        Side::Queen => File::D,
+    };
+    Square::new(file, player.backrank())
 }
 
 // pub const INITIAL: Board = Board;
@@ -632,6 +693,10 @@ impl Square {
         SquareIter(0)
     }
 
+    pub fn fen_iter() -> impl Iterator<Item = Square> {
+        Rank::iter_rev().flat_map(|rank| File::iter().map(move |file| Square::new(file, rank)))
+    }
+
     #[track_caller]
     #[inline]
     pub(crate) const fn panicky_new(index: u8) -> Square {
@@ -836,7 +901,6 @@ impl<T> Sides<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 /// Chess position
 ///
 /// Size:
@@ -862,7 +926,7 @@ impl<T> Sides<T> {
 /// - counters
 ///
 /// [cql]: https://en.wikipedia.org/wiki/Chess_Query_Language
-// #[repr(packed)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Position<Variant = variant::Chess> {
     /// location of the pieces on the board
     pub board: Board,
@@ -971,6 +1035,65 @@ impl<V: Variant> Position<V> {
 
     pub fn castle_moves(&self) -> Moves {
         self.moves().into_iter().filter(|m| m.is_castle()).collect()
+    }
+}
+
+impl<V> Position<V> {
+    pub fn apply_unchecked(mut self, play: Move) -> Position<V> {
+        let player = self.turn;
+        let captured = if play.is_en_passant() {
+            Some(Square::new(play.to.file(), play.from.rank()))
+        } else if play.capture.is_some() {
+            Some(play.to)
+        } else {
+            None
+        };
+
+        if play.role == Role::King {
+            self.castle[player] = Sides { queen: false, king: false };
+        }
+
+        if play.role == Role::Rook {
+            self.clear_standard_castle_rook(player, play.from);
+        }
+
+        if let Some(captured) = captured {
+            self.clear_standard_castle_rook(player.other(), captured);
+        }
+
+        self.board.apply_unchecked(player, play);
+
+        self.en_passant = None;
+        if play.role == Role::Pawn {
+            let from = play.from as u8;
+            let to = play.to as u8;
+            if from.abs_diff(to) == 16 {
+                self.en_passant =
+                    en_passant::Square::try_from(Square::panicky_new((from + to) / 2)).ok();
+            }
+        }
+
+        if play.role == Role::Pawn || play.capture.is_some() || play.is_en_passant() {
+            self.reversible = 0;
+        } else {
+            self.reversible += 1;
+        }
+
+        if player == Player::Black {
+            self.round = self.round.saturating_add(1);
+        }
+
+        self.turn = player.other();
+        self
+    }
+
+    fn clear_standard_castle_rook(&mut self, player: Player, square: Square) {
+        let rank = player.backrank();
+        if square == Square::new(File::A, rank) {
+            self.castle[player][Side::Queen] = false;
+        } else if square == Square::new(File::H, rank) {
+            self.castle[player][Side::King] = false;
+        }
     }
 }
 

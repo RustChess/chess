@@ -158,6 +158,11 @@ impl Bitboard {
     }
 
     #[inline]
+    pub const fn with(self, square: Square) -> Bitboard {
+        self.union_const(Bitboard::from_square(square))
+    }
+
+    #[inline]
     // Non-standard
     pub const fn set(&mut self, square: Square, set: bool) {
         if set {

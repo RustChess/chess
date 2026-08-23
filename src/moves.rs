@@ -110,20 +110,71 @@ impl<V: Variant> Position<V> {
     }
 
     fn evasion_moves(&self) -> Moves {
-        // TODO: Generate only moves that can answer check.
-        Moves::new()
+        let checkers = self.checkers();
+        let Some(king) = self.board.king_of(self.turn) else {
+            return Moves::new();
+        };
+
+        let mut moves = self.legal_king_evasion_moves(king, checkers);
+        if checkers.more_than_one() {
+            return moves;
+        }
+
+        let Some(checker) = checkers.first() else {
+            return moves;
+        };
+
+        let shields = self.board.king_shields(self.turn);
+        let target = king.between(checker).with(checker);
+        let mut piece_moves = self.pseudo_piece_moves_to(target);
+        piece_moves.retain(|m| self.piece_move_is_safe(*m, shields));
+        moves.extend(piece_moves);
+        moves.extend(self.legal_en_passant_evasion_moves(checker));
+
+        moves
     }
 
     pub fn pseudo_piece_moves(&self) -> Moves {
+        let target = !self.board.player(self.turn);
+        self.pseudo_piece_moves_to(target)
+    }
+
+    /// Ordinary non-king, non-en-passant, non-castle pseudo moves landing in
+    /// `target`.
+    ///
+    /// In non-check positions `target` is every square not occupied by us. In
+    /// single-check evasions it is the checker square plus blocking squares.
+    fn pseudo_piece_moves_to(&self, target: Bitboard) -> Moves {
         use Role::*;
 
         let mut moves = Moves::new();
-        let target = !self.board.player(self.turn);
 
         self.pseudo_pawn_moves(target, &mut moves);
         for role in [Knight, Bishop, Rook, Queen] {
             self.pseudo_role_moves(role, target, &mut moves);
         }
+
+        moves
+    }
+
+    fn legal_king_evasion_moves(&self, king: Square, checkers: Bitboard) -> Moves {
+        let sliders = checkers.intersection_const(self.board.sliders());
+        let mut attacked = Bitboard::EMPTY;
+        let mut sliders = sliders;
+        while let Some(checker) = sliders.pop_first() {
+            // `king_move_is_safe` checks attacks to the destination, but a
+            // slider checking the king still controls the ray through the old
+            // king square after the king moves away.
+            attacked.append_const(
+                checker.full_ray(king).difference_const(Bitboard::from_square(checker)),
+            );
+        }
+
+        let mut moves = Moves::new();
+        let target = self.board.player(self.turn).union_const(attacked);
+
+        self.pseudo_role_moves(Role::King, !target, &mut moves);
+        moves.retain(|m| self.king_move_is_safe(*m));
 
         moves
     }
@@ -199,10 +250,24 @@ impl<V: Variant> Position<V> {
     }
 
     fn legal_en_passant_moves(&self) -> Moves {
+        self.legal_en_passant_moves_to(None)
+    }
+
+    fn legal_en_passant_evasion_moves(&self, checker: Square) -> Moves {
+        self.legal_en_passant_moves_to(Some(checker))
+    }
+
+    fn legal_en_passant_moves_to(&self, captured: Option<Square>) -> Moves {
         let mut moves = Moves::new();
 
         if let Some(to) = self.en_passant {
             let to = to.square();
+            if let Some(captured) = captured
+                && Square::new(to.file(), self.turn.pawn_start_rank()) != captured
+            {
+                return moves;
+            }
+
             let mut pawns = self
                 .board
                 .pawns()

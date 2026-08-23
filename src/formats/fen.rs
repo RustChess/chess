@@ -30,7 +30,7 @@ pub fn board_fen(input: &mut &str) -> ModalResult<Board> {
 
     let mut players: Players<Bitboard> = Default::default();
     let mut roles: Roles<Bitboard> = Default::default();
-    let mut it = Square::iter();
+    let mut it = Square::fen_iter();
     while let Some(square) = it.next() {
         match preceded(opt('/'), board_fen_char).parse_next(input)? {
             i @ '1'..='8' => {

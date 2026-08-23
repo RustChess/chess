@@ -20,6 +20,8 @@ pub mod game;
 #[cfg(feature = "lichess")]
 pub mod lichess;
 pub mod moves;
+#[cfg(test)]
+mod perft;
 pub mod position;
 pub use position::{Move, Position};
 
