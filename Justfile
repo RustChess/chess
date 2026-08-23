@@ -27,3 +27,10 @@ slider-attacks:
 
 clean:
     rm -f *.cb{a,c,e,g,h,j,l,m,p,s,t,tt,ini} *.{flags,ini}
+
+perft:
+    cargo nextest run --release perft
+
+# takes about 30 seconds
+deep-perft:
+    cargo nextest run --release perft -- --ignored

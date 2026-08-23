@@ -129,7 +129,7 @@ impl<V: Variant> Position<V> {
         let mut piece_moves = self.pseudo_piece_moves_to(target);
         piece_moves.retain(|m| self.piece_move_is_safe(*m, shields));
         moves.extend(piece_moves);
-        moves.extend(self.legal_en_passant_evasion_moves(checker));
+        moves.extend(self.legal_en_passant_moves());
 
         moves
     }
@@ -250,23 +250,10 @@ impl<V: Variant> Position<V> {
     }
 
     fn legal_en_passant_moves(&self) -> Moves {
-        self.legal_en_passant_moves_to(None)
-    }
-
-    fn legal_en_passant_evasion_moves(&self, checker: Square) -> Moves {
-        self.legal_en_passant_moves_to(Some(checker))
-    }
-
-    fn legal_en_passant_moves_to(&self, captured: Option<Square>) -> Moves {
         let mut moves = Moves::new();
 
         if let Some(to) = self.en_passant {
             let to = to.square();
-            if let Some(captured) = captured
-                && Square::new(to.file(), self.turn.pawn_start_rank()) != captured
-            {
-                return moves;
-            }
 
             let mut pawns = self
                 .board
@@ -499,7 +486,7 @@ struct Bishop;
 impl Bishop {
     pub const DIRECTIONS: [Direction; 4] = {
         use Direction::*;
-        [NorthEast, SouthEast, SouthWest, NorthEast]
+        [NorthEast, SouthEast, SouthWest, NorthWest]
     };
     const BLOCKERS: [Bitboard; 64] = slider_blockers(&Self::DIRECTIONS);
     const MAGICS: [Magic; 64] = BISHOP_MAGICS;
