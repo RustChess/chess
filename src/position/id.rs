@@ -12,10 +12,11 @@ use rand::{
     rngs::ChaCha20Rng,
 };
 
+use super::{Board, Player, Players, Position, Role, Side, Sides, Square, en_passant};
+use crate::Map;
+
 #[allow(clippy::declare_interior_mutable_const)]
 pub const BASIS: LazyCell<Basis> = LazyCell::new(Basis::default);
-
-use super::{Board, Map, Player, Players, Position, Role, Side, Sides, Square, en_passant};
 
 /// 32 byte seed, uniquely determines a [`Basis`]
 pub type Seed = [u8; 32];
@@ -37,6 +38,7 @@ pub trait Id {
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Basis {
     board: Map<Square, Map<Role, Map<Player, u128, 2>, 6>, 64>,
+    // board: SquareMap<RoleMap<PlayerMap<u128>>>,
     black: u128,
     castle: Map<Player, Map<Side, u128, 2>, 2>,
     en_passant: Map<en_passant::Square, u128, 16>,

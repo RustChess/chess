@@ -22,8 +22,8 @@ recommit:
 freestyle-positions:
     cargo run --example freestyle-positions 2>/dev/null > freestyle-positions.txt
 
-slider-attacks:
-    rust-script scripts/slider_attacks.rs
+slider-sights:
+    rust-script scripts/slider_sights.rs
 
 clean:
     rm -f *.cb{a,c,e,g,h,j,l,m,p,s,t,tt,ini} *.{flags,ini}

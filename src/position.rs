@@ -13,14 +13,9 @@
 //! chess variants, and implement for "freestyle" (aka Fisher Random aka Chess960) chess - to exercise our generality mindedness
 //!
 //! Compared to `shakmaty` our position is a concrete `struct`
-use core::{fmt, marker::PhantomData, num::NonZeroU32, ops};
-
-use std::collections::BTreeMap;
+use core::{fmt, num::NonZeroU32, ops};
 
 use crate::bitboard::Bitboard;
-
-#[cfg(feature = "serde")]
-use serde::Serialize;
 
 pub mod en_passant;
 pub mod id;
@@ -593,6 +588,12 @@ pub enum Square {
     H8,
 }
 
+impl Square {
+    pub const fn index_const(self) -> usize {
+        self as u8 as usize
+    }
+}
+
 impl All<64> for Square {
     const ALL: [Square; 64] = [
         Square::A1,
@@ -662,7 +663,7 @@ impl All<64> for Square {
     ];
 
     fn index(self) -> usize {
-        self as u8 as usize
+        self.index_const()
     }
 }
 
@@ -1016,7 +1017,7 @@ impl<V: Variant> Position<V> {
 
     pub const fn checkers(&self) -> Bitboard {
         match self.board.king_of(self.turn) {
-            Some(king) => self.board.attacks_to(king, self.turn.other(), self.board.occupied()),
+            Some(king) => self.board.attacks_on(king, self.turn.other(), self.board.occupied()),
             None => Bitboard::EMPTY,
         }
     }
@@ -1844,89 +1845,5 @@ impl All<2> for Player {
             Player::Black => 0,
             Player::White => 1,
         }
-    }
-}
-
-/// "Full" map, containing an element of T for any element of X
-///
-/// They are accessed by indexing, e.g. `let t = map[x]` and `map[x] = t`
-///
-/// Note that `[T; N]` does not always implement Default, e.g. for `N = 64`.
-/// For this reason, we define ad-hoc inherent methods `fn default64()` for
-/// all `T: Default` on all `Map<T, X, 64>` etc. Note that we can implement
-/// functions named `fn default()`, but the compiler will get confused by
-/// use of `Map::default()` for those N where usual Default *is* defined...
-#[derive(Clone, Copy, Debug)]
-pub struct Map<X, T, const N: usize> {
-    all: [T; N],
-    __: PhantomData<X>,
-}
-
-impl<X, T, const N: usize> From<Map<X, T, N>> for BTreeMap<X, T>
-where
-    T: Copy,
-    X: All<N> + Ord,
-{
-    fn from(map: Map<X, T, N>) -> Self {
-        let mut bmap = BTreeMap::new();
-        for x in 0..N {
-            bmap.insert(X::ALL[x], map.all[x]);
-        }
-        bmap
-    }
-}
-
-// #[cfg(feature = "serde")]
-// impl<'de, X, T: Deserialize<'de>, const N: usize> Deserialize<'de> for Map<X, T, N> {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: serde::Deserializer<'de>,
-//     {
-//         let all: Vec<T> = Deserialize::deserialize(deserializer)?;
-//         let all: [T; N] = all.try_into().map_err(|_| serde::de::Error::custom("wrong length"))?;
-//         Ok(Self { all, __: PhantomData })
-//     }
-// }
-
-#[cfg(feature = "serde")]
-impl<X, T: Serialize, const N: usize> Serialize for Map<X, T, N>
-where
-    T: Copy + Serialize,
-    X: All<N> + Ord + Serialize,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        Serialize::serialize(&BTreeMap::from(*self), serializer)
-    }
-}
-
-impl<X, T: Default, const N: usize> Default for Map<X, T, N>
-where
-    [T; N]: Default,
-{
-    fn default() -> Self {
-        Self { all: Default::default(), __: PhantomData }
-    }
-}
-
-impl<X, T: Copy + Default> Map<X, T, 64> {
-    /// Need this because [T; 64] does not implement Default for historical reasons
-    fn default64() -> Self {
-        Self { all: [T::default(); 64], __: PhantomData }
-    }
-}
-
-impl<X: All<N>, T, const N: usize> ops::Index<X> for Map<X, T, N> {
-    type Output = T;
-    fn index(&self, value: X) -> &T {
-        &self.all[value.index()]
-    }
-}
-
-impl<X: All<N>, T, const N: usize> ops::IndexMut<X> for Map<X, T, N> {
-    fn index_mut(&mut self, value: X) -> &mut T {
-        &mut self.all[value.index()]
     }
 }

@@ -153,6 +153,11 @@ impl Bitboard {
     }
 
     #[inline]
+    pub const fn eq_const(self, other: Self) -> bool {
+        self.0 == other.0
+    }
+
+    #[inline]
     pub const fn contains(self, square: Square) -> bool {
         !self.intersection_const(Bitboard::from_square(square)).is_empty()
     }

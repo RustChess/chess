@@ -15,6 +15,8 @@ extern crate serde;
 extern crate serde_with;
 
 pub mod bitboard;
+pub mod const_map;
+pub use const_map::Map;
 pub mod formats;
 pub mod game;
 #[cfg(feature = "lichess")]
@@ -24,5 +26,3 @@ pub mod moves;
 mod perft;
 pub mod position;
 pub use position::{Move, Position};
-
-pub use position::Map;
