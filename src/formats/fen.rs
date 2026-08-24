@@ -8,7 +8,7 @@ use crate::{
     },
 };
 
-use super::prelude::*;
+use super::{StrInput as Input, prelude::*};
 
 // There's a choice to be made whether to require in-between whitespace or not,
 // we accept "compact" FEN without it. The "board" parser finishes once the
@@ -20,11 +20,11 @@ fn is_board_fen_char(c: char) -> bool {
     "12345678pnbrkqPNBRKQ".contains(c)
 }
 
-fn board_fen_char(input: &mut &str) -> ModalResult<char> {
+fn board_fen_char(input: &mut Input<'_>) -> ModalResult<char> {
     one_of(is_board_fen_char).parse_next(input)
 }
 
-pub fn board_fen(input: &mut &str) -> ModalResult<Board> {
+pub fn board_fen(input: &mut Input<'_>) -> ModalResult<Board> {
     // trim leading whitespace
     *input = input.trim_start();
 
@@ -56,7 +56,7 @@ pub fn board_fen(input: &mut &str) -> ModalResult<Board> {
     Ok(Board { occupied: players.black | players.white, players, roles })
 }
 
-fn player(input: &mut &str) -> ModalResult<Player> {
+fn player(input: &mut Input<'_>) -> ModalResult<Player> {
     one_of(|c| "bw".contains(c))
         .map(|c| match c {
             'b' => Player::Black,
@@ -66,7 +66,7 @@ fn player(input: &mut &str) -> ModalResult<Player> {
         .parse_next(input)
 }
 
-fn castle(input: &mut &str) -> ModalResult<Players<Sides>> {
+fn castle(input: &mut Input<'_>) -> ModalResult<Players<Sides>> {
     use Player::*;
     use Side::*;
 
@@ -89,11 +89,11 @@ fn castle(input: &mut &str) -> ModalResult<Players<Sides>> {
     .parse_next(input)
 }
 
-fn file(input: &mut &str) -> ModalResult<File> {
+fn file(input: &mut Input<'_>) -> ModalResult<File> {
     one_of(|c| "abcdefgh".contains(c)).map(File::panicky_from_char).parse_next(input)
 }
 
-fn en_passant(input: &mut &str) -> ModalResult<Option<en_passant::Square>> {
+fn en_passant(input: &mut Input<'_>) -> ModalResult<Option<en_passant::Square>> {
     alt((
         '-'.value(None),
         terminated(file, '3').map(|file| Some(Square::new(file, Rank::Three).try_into().unwrap())),
@@ -103,16 +103,16 @@ fn en_passant(input: &mut &str) -> ModalResult<Option<en_passant::Square>> {
 }
 
 fn rights_fen(
-    input: &mut &str,
+    input: &mut Input<'_>,
 ) -> ModalResult<(Player, Players<Sides>, Option<en_passant::Square>)> {
     (player, preceded(space0, castle), preceded(space0, en_passant)).parse_next(input)
 }
 
-fn counters_fen(input: &mut &str) -> ModalResult<(u32, NonZeroU32)> {
+fn counters_fen(input: &mut Input<'_>) -> ModalResult<(u32, NonZeroU32)> {
     (dec_uint, preceded(space1, dec_uint.verify_map(NonZeroU32::new))).parse_next(input)
 }
 
-pub fn position_fen(input: &mut &str) -> ModalResult<Position<Unvalidated>> {
+pub fn position_fen(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
     let board = board_fen.parse_next(input)?;
     let (turn, castle, en_passant) = preceded(space0, rights_fen).parse_next(input)?;
     let (reversible, round) = preceded(space0, counters_fen).parse_next(input)?;
@@ -130,7 +130,7 @@ fn missing_non_board() -> ((Player, Players<Sides>, Option<en_passant::Square>),
 }
 
 /// Parse a position, allowing missing trailing counters, or only position
-pub fn position_partial_fen(input: &mut &str) -> ModalResult<Position<Unvalidated>> {
+pub fn position_partial_fen(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
     let board = board_fen.parse_next(input)?;
     let ((turn, castle, en_passant), (reversible, round)) = opt((
         preceded(space0, rights_fen),

@@ -14,10 +14,11 @@
 // processing, using the `indexmap` crate.
 
 use core::ffi::c_str::CStr;
+use std::path::Path;
 
 use encoding_rs::WINDOWS_1252;
 
-use super::{Bits, prelude::*};
+use super::{Bits, ByteInput as Input, prelude::*};
 
 mod huffman;
 pub use huffman::Tree;
@@ -101,14 +102,24 @@ pub fn packed_file<'a>(entry: &Entry) -> impl FnMut(&mut Input<'a>) -> ModalResu
 ///////////////
 
 pub fn unpack_cbv_to_disk(input: &mut Input<'_>) -> ModalResult<Header> {
-    let header = header.parse_next(input)?;
-    for file in header.iter() {
-        let mut packed: PackedFile = packed_file(file).parse_next(input)?;
-        let unpacked = unpack_file.parse_next(&mut packed.data)?;
-        assert_eq!(file.len, unpacked.len());
-        std::fs::write(&file.name, &unpacked).expect("can write");
+    unpack_cbv_to(Path::new(".")).parse_next(input)
+}
+
+pub fn unpack_cbv_to<'a>(directory: &'a Path) -> impl FnMut(&mut Input<'a>) -> ModalResult<Header> {
+    move |input: &mut Input<'_>| {
+        let header = header.parse_next(input)?;
+        for file in header.iter() {
+            let mut packed: PackedFile = packed_file(file).parse_next(input)?;
+            let unpacked = unpack_file.parse_next(&mut packed.data)?;
+            assert_eq!(file.len, unpacked.len());
+            let path = directory.join(&file.name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("can create output directory");
+            }
+            std::fs::write(path, &unpacked).expect("can write");
+        }
+        Ok(header)
     }
-    Ok(header)
 }
 
 // #[cfg(test)]

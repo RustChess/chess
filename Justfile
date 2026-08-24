@@ -8,6 +8,8 @@ lint:
     cargo fmt --check --all
     just --fmt --check --unstable
     cargo clippy --all --tests -- -D warnings
+
+lint-more: lint
     cargo shear
     cargo upgrades
 

@@ -3,7 +3,6 @@ extern crate anyhow;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory as _, Parser, Subcommand};
-use clio::Input;
 
 mod convert;
 

@@ -15,4 +15,3 @@ rustchess.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 # clap-verbosity-flag.workspace = true
-clio.workspace = true

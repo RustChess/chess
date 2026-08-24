@@ -1,6 +1,6 @@
 //! Chessbase tournament file format (CBT)
 
-use super::{cbv::cstr, prelude::*};
+use super::{ByteInput as Input, cbv::cstr, prelude::*};
 
 use super::cbh::optional;
 pub use super::{

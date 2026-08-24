@@ -6,7 +6,7 @@
 
 use crate::position::{File, Role, Square};
 
-use super::prelude::*;
+use super::{ByteInput as Input, prelude::*};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Header {

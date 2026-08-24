@@ -1,6 +1,6 @@
 //! Chessbase player file format
 
-use super::{cbv::cstr, prelude::*};
+use super::{ByteInput as Input, cbv::cstr, prelude::*};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Header {

@@ -9,7 +9,7 @@
 
 use enumflags2::{BitFlags, bitflags};
 
-use super::{Bits, prelude::*};
+use super::{Bits, ByteInput as Input, prelude::*};
 
 // numbers where 0 mean missing or unknown
 pub(crate) fn optional<T: Default + PartialEq>(x: T) -> Option<T> {

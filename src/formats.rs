@@ -2,20 +2,22 @@ pub use std::collections::BTreeSet as Set;
 
 pub use winnow::Parser;
 
-/// Slice of bytes
-pub type Input<'a> = &'a [u8];
+/// Slice of bytes.
+pub type ByteInput<'a> = &'a [u8];
+
+/// Slice of UTF-8 text.
+pub type StrInput<'a> = &'a str;
 
 pub(crate) mod prelude {
-    pub use super::Input;
-
     pub use winnow::{
         ModalResult,
         Parser as _,
         ascii::{dec_uint, space0, space1},
         binary::{be_u16, be_u24, be_u32, /*bits,*/ i8, le_i32, le_u16, le_u24, le_u32, u8},
-        combinator::{alt, cut_err, opt, preceded, repeat, /*seq,*/ terminated},
+        combinator::{alt, cut_err, delimited, opt, preceded, repeat, /*seq,*/ terminated},
+        error::{ContextError, ErrMode, StrContext},
         // stream::Bytes,
-        token::{one_of, take},
+        token::{any, none_of, one_of, take, take_till},
     };
 }
 
@@ -29,3 +31,4 @@ pub mod cbt;
 pub mod cbv;
 pub mod fen;
 pub mod pgn;
+pub mod san;
