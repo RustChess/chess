@@ -17,7 +17,7 @@ use super::{StrInput as Input, prelude::*, san};
 //
 // Arrows and coloured squares
 // [%cal Gc2c3,Rc3d4] green arrow c2-c3, red arrow c3-d4
-// [$csl Ra3,Ga4] a3 red, a4 green
+// [%csl Ra3,Ga4] a3 red, a4 green
 // # insert mini board in move list
 // https://chesstempo.com/manual/en/manual.html#pgnviewercommentannotations
 //
@@ -29,7 +29,8 @@ pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
         multispace0,
         seq! {Game {
         tag_pairs: tag_pairs,
-        line: line,
+        intro: comments,
+        moves: repeat(0.., parse_move),
         outcome: outcome,
         }},
         multispace0,
@@ -58,27 +59,24 @@ pub struct Games {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     pub tag_pairs: Vec<TagPair>,
-    pub line: Line,
+    pub intro: Option<Text>,
+    pub moves: Vec<Move>,
     pub outcome: Outcome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Line {
-    pub annotations: Vec<Annotation>,
+pub struct Variation {
+    pub intro: Option<Text>,
     pub moves: Vec<Move>,
+    pub outro: Option<Text>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Move {
     pub san: san::San,
+    pub comment: Option<Text>,
     pub annotations: Vec<Annotation>,
     pub variations: Vec<Variation>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Variation {
-    pub line: Line,
-    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,7 +100,16 @@ pub enum Tag {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Annotation {
     Nag(Nag),
-    Comment(String),
+    Command(Command),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Text(String);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Command {
+    pub command: String,
+    pub parameters: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,7 +135,10 @@ impl fmt::Display for Game {
             writeln!(f)?;
         }
         let mut wrap = Wrap::new(f);
-        self.line.write(&mut wrap, 0)?;
+        if let Some(intro) = &self.intro {
+            wrap.token(intro)?;
+        }
+        write_moves(&self.moves, &mut wrap, 0)?;
         wrap.token(self.outcome)
     }
 }
@@ -317,8 +327,29 @@ impl fmt::Display for Annotation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Annotation::Nag(nag) => write!(f, "{nag}"),
-            Annotation::Comment(comment) => write!(f, "{{{comment}}}"),
+            Annotation::Command(command) => write!(f, "{command}"),
         }
+    }
+}
+
+impl fmt::Display for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{{{}}}", self.0)
+    }
+}
+
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[%{}", self.command)?;
+        for (index, parameter) in self.parameters.iter().enumerate() {
+            if index == 0 {
+                write!(f, " ")?;
+            } else {
+                write!(f, ",")?;
+            }
+            write!(f, "{parameter}")?;
+        }
+        write!(f, "]")
     }
 }
 
@@ -342,30 +373,30 @@ impl fmt::Display for Outcome {
     }
 }
 
-impl Line {
-    fn write(&self, wrap: &mut Wrap<'_, '_>, first_ply: usize) -> fmt::Result {
-        let mut ply = first_ply;
-        for annotation in &self.annotations {
-            wrap.token(annotation)?;
+fn write_moves(moves: &[Move], wrap: &mut Wrap<'_, '_>, first_ply: usize) -> fmt::Result {
+    for (ply, (index, play)) in (first_ply..).zip(moves.iter().enumerate()) {
+        if should_write_move_number(ply, index, moves) {
+            wrap.token(MoveNumber(ply))?;
+            wrap.token(play.san)?;
+        } else {
+            wrap.token(play.san)?;
         }
-        for (index, play) in self.moves.iter().enumerate() {
-            if should_write_move_number(ply, index, &self.moves) {
-                wrap.token(MoveNumber(ply))?;
-                wrap.token(play.san)?;
-            } else {
-                wrap.token(play.san)?;
-            }
-            play.write_tail(wrap, ply)?;
-            ply += 1;
-        }
-        Ok(())
+        play.write_tail(wrap, ply)?;
     }
+    Ok(())
 }
 
 impl Move {
     fn write_tail(&self, wrap: &mut Wrap<'_, '_>, ply: usize) -> fmt::Result {
+        let mut commands = Vec::new();
         for annotation in &self.annotations {
-            wrap.token(annotation)?;
+            match annotation {
+                Annotation::Nag(_) => wrap.token(annotation)?,
+                Annotation::Command(command) => commands.push(command.clone()),
+            }
+        }
+        if !commands.is_empty() || self.comment.is_some() {
+            wrap.token(MoveComment { commands, text: self.comment.clone() })?;
         }
         write_variations(&self.variations, wrap, ply)?;
         Ok(())
@@ -375,16 +406,43 @@ impl Move {
 fn write_variations(variations: &[Variation], wrap: &mut Wrap<'_, '_>, ply: usize) -> fmt::Result {
     for variation in variations {
         wrap.open("(")?;
-        variation.line.write(wrap, ply)?;
+        if let Some(intro) = &variation.intro {
+            wrap.token(intro)?;
+        }
+        write_moves(&variation.moves, wrap, ply)?;
         wrap.close(")")?;
-        for annotation in &variation.annotations {
-            wrap.token(annotation)?;
+        if let Some(outro) = &variation.outro {
+            wrap.token(outro)?;
         }
     }
     Ok(())
 }
 
 struct MoveNumber(usize);
+
+struct MoveComment {
+    commands: Vec<Command>,
+    text: Option<Text>,
+}
+
+impl fmt::Display for MoveComment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{{")?;
+        for (index, command) in self.commands.iter().enumerate() {
+            if index > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{command}")?;
+        }
+        if let Some(text) = &self.text {
+            if !self.commands.is_empty() {
+                write!(f, " ")?;
+            }
+            write!(f, "{}", text.0)?;
+        }
+        write!(f, "}}")
+    }
+}
 
 impl fmt::Display for MoveNumber {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -446,7 +504,7 @@ fn should_write_move_number(ply: usize, index: usize, moves: &[Move]) -> bool {
 
 impl Move {
     fn has_intervening_annotation_or_variation(&self) -> bool {
-        !self.annotations.is_empty() || !self.variations.is_empty()
+        !self.annotations.is_empty() || self.comment.is_some() || !self.variations.is_empty()
     }
 }
 
@@ -473,10 +531,11 @@ pub fn tag_pair(input: &mut Input<'_>) -> ModalResult<TagPair> {
     .parse_next(input)
 }
 
-fn line(input: &mut Input<'_>) -> ModalResult<Line> {
-    seq! {Line {
-        annotations: annotations,
+fn variation_body(input: &mut Input<'_>) -> ModalResult<Variation> {
+    seq! {Variation {
+        intro: comments,
         moves: repeat(0.., parse_move),
+        outro: comments,
     }}
     .parse_next(input)
 }
@@ -484,11 +543,14 @@ fn line(input: &mut Input<'_>) -> ModalResult<Line> {
 fn parse_move(input: &mut Input<'_>) -> ModalResult<Move> {
     preceded(
         (multispace0, opt(skip_move_number), multispace0),
-        seq! {Move {
-            san: san::san.context(StrContext::Label("PGN move")),
-            annotations: annotations,
-            variations: variations,
-        }},
+        (san::san.context(StrContext::Label("PGN move")), tail, variations).map(
+            |(san, (comment, annotations), variations)| Move {
+                san,
+                comment,
+                annotations,
+                variations,
+            },
+        ),
     )
     .parse_next(input)
 }
@@ -498,31 +560,65 @@ fn variations(input: &mut Input<'_>) -> ModalResult<Vec<Variation>> {
 }
 
 fn variation(input: &mut Input<'_>) -> ModalResult<Variation> {
-    seq! {Variation {
-        line: preceded(multispace0, nested_line),
-        annotations: annotations,
-    }}
-    .parse_next(input)
+    let mut variation = preceded(multispace0, nested_variation).parse_next(input)?;
+    if let Some(outro) = comments(input)? {
+        merge_comments(&mut variation.outro, outro);
+    }
+    Ok(variation)
 }
 
-fn nested_line(input: &mut Input<'_>) -> ModalResult<Line> {
-    delimited(('(', multispace0), line, (multispace0, ')'))
+fn nested_variation(input: &mut Input<'_>) -> ModalResult<Variation> {
+    delimited(('(', multispace0), variation_body, (multispace0, ')'))
         .context(StrContext::Label("PGN variation"))
         .parse_next(input)
 }
 
-fn annotations(input: &mut Input<'_>) -> ModalResult<Vec<Annotation>> {
-    repeat(0.., preceded(multispace0, annotation)).parse_next(input)
+fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Text>, Vec<Annotation>)> {
+    repeat(0.., preceded(multispace0, tail_item))
+        .fold(
+            || (None, Vec::new()),
+            |(mut comment, mut annotations), item| {
+                match item {
+                    Tail::Comment(MoveComment { commands, text }) => {
+                        annotations.extend(commands.into_iter().map(Annotation::Command));
+                        if let Some(text) = text {
+                            merge_comments(&mut comment, text);
+                        }
+                    }
+                    Tail::Annotation(annotation) => annotations.push(annotation),
+                }
+                (comment, annotations)
+            },
+        )
+        .parse_next(input)
 }
 
-fn annotation(input: &mut Input<'_>) -> ModalResult<Annotation> {
+enum Tail {
+    Comment(MoveComment),
+    Annotation(Annotation),
+}
+
+fn tail_item(input: &mut Input<'_>) -> ModalResult<Tail> {
     alt((
-        bracket_comment.map(Annotation::Comment),
-        semicolon_comment.map(Annotation::Comment),
-        numeric_nag.map(Annotation::Nag),
-        symbol_nag.map(Annotation::Nag),
+        move_comment.map(Tail::Comment),
+        numeric_nag.map(Annotation::Nag).map(Tail::Annotation),
+        symbol_nag.map(Annotation::Nag).map(Tail::Annotation),
     ))
     .parse_next(input)
+}
+
+fn comments(input: &mut Input<'_>) -> ModalResult<Option<Text>> {
+    repeat(0.., preceded(multispace0, comment))
+        .fold(
+            || None,
+            |mut comments, comment| {
+                if let Some(comment) = comment {
+                    merge_comments(&mut comments, comment);
+                }
+                comments
+            },
+        )
+        .parse_next(input)
 }
 
 // skip because it parses a valid 1. or 2... etc., but doesn't return it.
@@ -533,18 +629,17 @@ fn skip_move_number(input: &mut Input<'_>) -> ModalResult<()> {
 fn tag_name(input: &mut Input<'_>) -> ModalResult<Tag> {
     use Tag::*;
 
-    take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
-        .map(|name: &str| match name {
-            "Event" => Event,
-            "Site" => Site,
-            "Date" => Date,
-            "Round" => Round,
-            "White" => White,
-            "Black" => Black,
-            "Result" => Result,
-            _ => Other(name.to_string()),
-        })
-        .parse_next(input)
+    name.map(|name: &str| match name {
+        "Event" => Event,
+        "Site" => Site,
+        "Date" => Date,
+        "Round" => Round,
+        "White" => White,
+        "Black" => Black,
+        "Result" => Result,
+        _ => Other(name.to_string()),
+    })
+    .parse_next(input)
 }
 
 fn tag_value(input: &mut Input<'_>) -> ModalResult<String> {
@@ -563,6 +658,10 @@ fn tag_value_char(input: &mut Input<'_>) -> ModalResult<char> {
     alt((preceded('\\', any), none_of(['"', '\\']))).parse_next(input)
 }
 
+fn name<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
+    take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_').parse_next(input)
+}
+
 fn numeric_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
     preceded('$', dec_uint).map(Nag::Numeric).parse_next(input)
 }
@@ -573,17 +672,99 @@ fn symbol_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
         .parse_next(input)
 }
 
-fn bracket_comment(input: &mut Input<'_>) -> ModalResult<String> {
-    preceded('{', terminated(take_till(0.., '}'), '}'))
-        .map(|comment: &str| comment.trim().to_string())
+fn comment(input: &mut Input<'_>) -> ModalResult<Option<Text>> {
+    alt((bracket_comment, semicolon_comment))
+        .map(Text::new)
         .context(StrContext::Label("PGN comment"))
         .parse_next(input)
 }
 
-fn semicolon_comment(input: &mut Input<'_>) -> ModalResult<String> {
-    preceded(';', take_till(0.., '\n'))
-        .map(|comment: &str| comment.trim().to_string())
+fn move_comment(input: &mut Input<'_>) -> ModalResult<MoveComment> {
+    alt((bracket_comment, semicolon_comment))
+        .map(split_comment)
+        .context(StrContext::Label("PGN comment"))
         .parse_next(input)
+}
+
+fn bracket_comment(input: &mut Input<'_>) -> ModalResult<String> {
+    preceded('{', terminated(take_till(0.., '}'), '}')).map(ToString::to_string).parse_next(input)
+}
+
+fn semicolon_comment(input: &mut Input<'_>) -> ModalResult<String> {
+    preceded(';', take_till(0.., '\n')).map(ToString::to_string).parse_next(input)
+}
+
+fn split_comment(raw: String) -> MoveComment {
+    let mut commands = Vec::new();
+    let mut comment = String::new();
+    let mut rest: Input<'_> = raw.as_str();
+
+    while let Some(start) = rest.find("[%") {
+        comment.push_str(&rest[..start]);
+        rest = &rest[start..];
+
+        let mut candidate: Input<'_> = rest;
+        if let Ok(command) = command.parse_next(&mut candidate) {
+            commands.push(command);
+            rest = candidate;
+        } else {
+            if let Some((invalid_command, next)) = rest.split_once(']') {
+                comment.push_str(invalid_command);
+                comment.push(']');
+                rest = next;
+            } else {
+                comment.push_str(rest);
+                rest = "";
+            }
+        }
+    }
+
+    comment.push_str(rest);
+    MoveComment { commands, text: Text::new(comment) }
+}
+
+fn command(input: &mut Input<'_>) -> ModalResult<Command> {
+    delimited("[%", (name, opt(preceded(space1, parameters))), (space0, ']'))
+        .map(|(command, parameters): (&str, Option<Vec<String>>)| Command {
+            command: command.to_string(),
+            parameters: parameters.unwrap_or_default(),
+        })
+        .parse_next(input)
+}
+
+fn parameters(input: &mut Input<'_>) -> ModalResult<Vec<String>> {
+    separated(0.., parameter, ',').parse_next(input)
+}
+
+fn parameter(input: &mut Input<'_>) -> ModalResult<String> {
+    alt((quoted_parameter, unquoted_parameter)).parse_next(input)
+}
+
+fn quoted_parameter(input: &mut Input<'_>) -> ModalResult<String> {
+    // Command parameters are a loose extension. Escaped quotes are not handled here, and
+    // `.take()` keeps the surrounding quotes so display can write the raw parameter back.
+    delimited('"', take_till(0.., '"'), '"').take().map(ToString::to_string).parse_next(input)
+}
+
+fn unquoted_parameter(input: &mut Input<'_>) -> ModalResult<String> {
+    take_till(1.., [',', ']']).map(|parameter: &str| parameter.trim().to_string()).parse_next(input)
+}
+
+fn merge_comments(into: &mut Option<Text>, comment: Text) {
+    match into {
+        Some(into) => {
+            into.0.push_str("\n\n");
+            into.0.push_str(&comment.0);
+        }
+        None => *into = Some(comment),
+    }
+}
+
+impl Text {
+    fn new(text: impl AsRef<str>) -> Option<Self> {
+        let text = text.as_ref().trim();
+        (!text.is_empty()).then(|| Self(text.to_string()))
+    }
 }
 
 fn outcome(input: &mut Input<'_>) -> ModalResult<Outcome> {
@@ -606,6 +787,10 @@ mod tests {
 
     use super::*;
 
+    fn comment(text: &str) -> Text {
+        Text::new(text).unwrap()
+    }
+
     #[test]
     fn parses_game() {
         let pgn = r#"
@@ -624,12 +809,9 @@ mod tests {
         assert_eq!(game.tag_pairs.len(), 7);
         assert_eq!(game.tag_pairs[0].name, Tag::Event);
         assert_eq!(game.tag_pairs[0].value, "Casual Game");
-        assert_eq!(game.line.moves.len(), 6);
+        assert_eq!(game.moves.len(), 6);
         assert_eq!(game.outcome, Outcome::White);
-        assert_eq!(
-            game.line.moves[5].annotations,
-            vec![Annotation::Comment("Italian Game".to_string())]
-        );
+        assert_eq!(game.moves[5].comment, Some(comment("Italian Game")));
     }
 
     #[test]
@@ -640,7 +822,7 @@ mod tests {
 "#;
 
         let game = game.parse(pgn).unwrap();
-        let e4 = &game.line.moves[0];
+        let e4 = &game.moves[0];
         assert_eq!(
             e4.san.play,
             san::Move::Normal {
@@ -654,13 +836,10 @@ mod tests {
         );
         assert_eq!(e4.annotations, vec![Annotation::Nag(Nag::Symbol("!".to_string()))]);
 
-        let e5 = &game.line.moves[1];
+        let e5 = &game.moves[1];
         assert_eq!(e5.annotations, vec![Annotation::Nag(Nag::Numeric(1))]);
         assert_eq!(e5.variations.len(), 1);
-        assert_eq!(
-            e5.variations[0].line.moves[0].annotations,
-            vec![Annotation::Comment("Sicilian".to_string())]
-        );
+        assert_eq!(e5.variations[0].moves[0].comment, Some(comment("Sicilian")));
         assert_eq!(game.outcome, Outcome::Unknown);
     }
 
@@ -672,18 +851,102 @@ mod tests {
 "#;
 
         let game = game.parse(pgn).unwrap();
-        let e5 = &game.line.moves[1];
-        assert_eq!(e5.annotations, vec![Annotation::Comment("A".to_string())]);
+        let e5 = &game.moves[1];
+        assert_eq!(e5.comment, Some(comment("A")));
         assert_eq!(e5.variations.len(), 2);
-        assert_eq!(e5.variations[0].annotations, vec![Annotation::Comment("B".to_string())]);
-        assert_eq!(e5.variations[1].annotations, vec![Annotation::Comment("C".to_string())]);
+        assert_eq!(e5.variations[0].outro, Some(comment("B")));
+        assert_eq!(e5.variations[1].outro, Some(comment("C")));
+        assert_eq!(
+            game.to_string(),
+            r#"[Event "x"]
+
+1. e4 e5 {A} (1... c5) {B} (1... e6) {C} 2. Nf3 *"#
+        );
+    }
+
+    #[test]
+    fn extracts_commands_from_move_comments() {
+        let game =
+            game.parse(r#"[Event "x"] 1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#).unwrap();
+        let e4 = &game.moves[0];
+        assert_eq!(
+            e4.annotations,
+            vec![
+                Annotation::Command(Command {
+                    command: "cal".to_string(),
+                    parameters: vec!["Ge2e4".to_string()],
+                }),
+                Annotation::Command(Command {
+                    command: "clk".to_string(),
+                    parameters: vec!["0:14:49".to_string()],
+                }),
+            ]
+        );
+        assert_eq!(e4.comment, Some(comment("Good move.")));
+        assert_eq!(
+            game.to_string(),
+            r#"[Event "x"]
+
+1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#
+        );
+    }
+
+    #[test]
+    fn extracts_multi_parameter_commands() {
+        let game = game
+            .parse(r#"[Event "x"] 1. e4 {[%tqu "En","find the move","","","e2e4","",10]} *"#)
+            .unwrap();
+        let e4 = &game.moves[0];
+        assert_eq!(
+            e4.annotations,
+            vec![Annotation::Command(Command {
+                command: "tqu".to_string(),
+                parameters: vec![
+                    r#""En""#.to_string(),
+                    r#""find the move""#.to_string(),
+                    r#""""#.to_string(),
+                    r#""""#.to_string(),
+                    r#""e2e4""#.to_string(),
+                    r#""""#.to_string(),
+                    "10".to_string(),
+                ],
+            })]
+        );
+        assert_eq!(
+            game.to_string(),
+            r#"[Event "x"]
+
+1. e4 {[%tqu "En","find the move","","","e2e4","",10]} *"#
+        );
+    }
+
+    #[test]
+    fn extracts_commands_with_trailing_whitespace() {
+        let game = game.parse(r#"[Event "x"] 1. e4 {[%foo ]} *"#).unwrap();
+        assert_eq!(
+            game.moves[0].annotations,
+            vec![Annotation::Command(Command { command: "foo".to_string(), parameters: vec![] })]
+        );
+        assert_eq!(
+            game.to_string(),
+            r#"[Event "x"]
+
+1. e4 {[%foo]} *"#
+        );
+    }
+
+    #[test]
+    fn ignores_empty_comments() {
+        let game = game.parse(r#"[Event "x"] 1. e4 {} {   } e5 *"#).unwrap();
+        assert_eq!(game.moves[0].comment, None);
+        assert_eq!(game.moves[1].comment, None);
     }
 
     #[test]
     fn parses_san_in_moves() {
         let game = game.parse(r#"[Event "x"] 1. exd8=Q# *"#).unwrap();
         assert_eq!(
-            game.line.moves[0].san,
+            game.moves[0].san,
             san::San {
                 play: san::Move::Normal {
                     role: Role::Pawn,
@@ -735,10 +998,7 @@ mod tests {
         let input = b"[Event \"a\"]\n1. e4 {\n[not a tag]\n} *\n\n[Event \"b\"]\n1. d4 *\n";
         let games = read_games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
-        assert_eq!(
-            games[0].line.moves[0].annotations,
-            vec![Annotation::Comment("[not a tag]".to_string())]
-        );
+        assert_eq!(games[0].moves[0].comment, Some(comment("[not a tag]")));
     }
 
     #[test]
