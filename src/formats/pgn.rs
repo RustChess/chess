@@ -8,6 +8,8 @@ use std::{
 
 use encoding_rs::WINDOWS_1252;
 
+use crate::game::{Command, Nag, Tag, TagPair, Text};
+
 use super::{StrInput as Input, prelude::*, san};
 
 // https://www.chessprogramming.org/Portable_Game_Notation
@@ -80,42 +82,9 @@ pub struct Move {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TagPair {
-    pub name: Tag,
-    pub value: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Tag {
-    Event,
-    Site,
-    Date,
-    Round,
-    White,
-    Black,
-    Result,
-    Other(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Annotation {
     Nag(Nag),
     Command(Command),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Text(String);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Command {
-    pub command: String,
-    pub parameters: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Nag {
-    Numeric(u32),
-    Symbol(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -334,7 +303,7 @@ impl fmt::Display for Annotation {
 
 impl fmt::Display for Text {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{{{}}}", self.0)
+        write!(f, "{{{}}}", self.as_ref())
     }
 }
 
@@ -438,7 +407,7 @@ impl fmt::Display for MoveComment {
             if !self.commands.is_empty() {
                 write!(f, " ")?;
             }
-            write!(f, "{}", text.0)?;
+            write!(f, "{}", text)?;
         }
         write!(f, "}}")
     }
@@ -531,15 +500,6 @@ pub fn tag_pair(input: &mut Input<'_>) -> ModalResult<TagPair> {
     .parse_next(input)
 }
 
-fn variation_body(input: &mut Input<'_>) -> ModalResult<Variation> {
-    seq! {Variation {
-        intro: comments,
-        moves: repeat(0.., parse_move),
-        outro: comments,
-    }}
-    .parse_next(input)
-}
-
 fn parse_move(input: &mut Input<'_>) -> ModalResult<Move> {
     preceded(
         (multispace0, opt(skip_move_number), multispace0),
@@ -559,18 +519,24 @@ fn variations(input: &mut Input<'_>) -> ModalResult<Vec<Variation>> {
     repeat(0.., variation).parse_next(input)
 }
 
+// ({intro} 1... c5 {move comment}) {outro}
 fn variation(input: &mut Input<'_>) -> ModalResult<Variation> {
-    let mut variation = preceded(multispace0, nested_variation).parse_next(input)?;
-    if let Some(outro) = comments(input)? {
-        merge_comments(&mut variation.outro, outro);
-    }
+    let mut variation = preceded(
+        multispace0,
+        delimited(
+            ('(', multispace0),
+            seq! {Variation {
+                intro: comments,
+                moves: repeat(0.., parse_move),
+                outro: ().value(None),
+            }},
+            (multispace0, ')'),
+        ),
+    )
+    .context(StrContext::Label("PGN variation"))
+    .parse_next(input)?;
+    variation.outro = comments(input)?;
     Ok(variation)
-}
-
-fn nested_variation(input: &mut Input<'_>) -> ModalResult<Variation> {
-    delimited(('(', multispace0), variation_body, (multispace0, ')'))
-        .context(StrContext::Label("PGN variation"))
-        .parse_next(input)
 }
 
 fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Text>, Vec<Annotation>)> {
@@ -752,18 +718,8 @@ fn unquoted_parameter(input: &mut Input<'_>) -> ModalResult<String> {
 
 fn merge_comments(into: &mut Option<Text>, comment: Text) {
     match into {
-        Some(into) => {
-            into.0.push_str("\n\n");
-            into.0.push_str(&comment.0);
-        }
+        Some(into) => into.merge(&comment),
         None => *into = Some(comment),
-    }
-}
-
-impl Text {
-    fn new(text: impl AsRef<str>) -> Option<Self> {
-        let text = text.as_ref().trim();
-        (!text.is_empty()).then(|| Self(text.to_string()))
     }
 }
 

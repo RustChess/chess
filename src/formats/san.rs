@@ -2,7 +2,10 @@
 
 use core::fmt;
 
-use crate::position::{File, Rank, Role, Side, Square};
+use crate::{
+    game,
+    position::{File, Rank, Role, Side, Square},
+};
 
 use super::{StrInput as Input, prelude::*};
 
@@ -75,6 +78,25 @@ impl fmt::Display for Check {
             Check::Check => write!(f, "+"),
             Check::Checkmate => write!(f, "#"),
         }
+    }
+}
+
+impl From<(crate::Move, game::Short, Option<Check>)> for San {
+    fn from((play, short, check): (crate::Move, game::Short, Option<Check>)) -> Self {
+        let play = if let Some(side) = play.castles() {
+            Move::Castle(side)
+        } else {
+            Move::Normal {
+                role: play.role,
+                file: short.file,
+                rank: short.rank,
+                capture: play.capture.is_some() || play.is_en_passant(),
+                to: play.to,
+                promotion: play.promotes(),
+            }
+        };
+
+        San { play, check }
     }
 }
 
