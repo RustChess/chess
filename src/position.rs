@@ -338,8 +338,17 @@ pub mod variant {
     #[derive(Clone, Copy)]
     pub struct Chess;
     impl super::Variant for Chess {
-        fn validate(_position: super::Unvalidated) -> Result<super::Position<Self>, super::Error> {
-            todo!();
+        // TODO: Actually validate something.
+        fn validate(position: super::Unvalidated) -> Result<super::Position<Self>, super::Error> {
+            Ok(super::Position {
+                board: position.board,
+                turn: position.turn,
+                castle: position.castle,
+                en_passant: position.en_passant,
+                reversible: position.reversible,
+                round: position.round,
+                variant: Chess,
+            })
         }
 
         fn moves(_position: &super::Position<Self>) -> super::Moves {
@@ -1003,6 +1012,23 @@ pub const fn unvalidated(board: Board, turn: Player) -> Unvalidated {
         reversible: 0,
         round: NonZeroU32::MIN,
         variant: variant::Unvalidated,
+    }
+}
+
+impl Position<variant::Chess> {
+    pub const fn standard() -> Position<variant::Chess> {
+        Position {
+            board: Board::standard(),
+            turn: Player::White,
+            castle: Players {
+                black: Sides { queen: true, king: true },
+                white: Sides { queen: true, king: true },
+            },
+            en_passant: None,
+            reversible: 0,
+            round: NonZeroU32::MIN,
+            variant: variant::Chess,
+        }
     }
 }
 

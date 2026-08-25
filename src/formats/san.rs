@@ -34,6 +34,14 @@ pub enum Check {
     Checkmate,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("illegal SAN move")]
+    Illegal,
+    #[error("ambiguous SAN move")]
+    Ambiguous,
+}
+
 impl fmt::Display for San {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.play.fmt(f)?;
@@ -97,6 +105,28 @@ impl From<(crate::Move, game::Short, Option<Check>)> for San {
         };
 
         San { play, check }
+    }
+}
+
+impl San {
+    pub fn resolve(&self, state: &game::State) -> Result<crate::Move, Error> {
+        // We ignore incorrect check(mate) annotations.
+        // crate::Move is converted to SAN, and compared against the input move.
+        let resolves_to_self = |play: &crate::Move| {
+            // Check/checkmate markers are notation adornments. The concrete move
+            // is resolved from the SAN move body and the legal moves in this state.
+            San::from((*play, game::Short::new(&state.legal, *play), None)).play == self.play
+        };
+        // legal crate moves that would match the input SAN move
+        let mut matches = state.legal.iter().copied().filter(resolves_to_self);
+
+        let Some(play) = matches.next() else {
+            return Err(Error::Illegal);
+        };
+        if matches.next().is_some() {
+            return Err(Error::Ambiguous);
+        }
+        Ok(play)
     }
 }
 

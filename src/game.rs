@@ -6,7 +6,7 @@ use std::{
 use crate::{
     Move, Position,
     formats::san::Check,
-    position::{File, Rank},
+    position::{File, Moves, Rank},
 };
 
 pub type Id = String;
@@ -33,12 +33,20 @@ pub fn id() -> Id {
 }
 
 #[derive(Clone)]
+pub struct State {
+    pub position: Position,
+    pub legal: Moves,
+    pub check: Option<Check>,
+}
+
+#[derive(Clone)]
 pub struct Game {
     pub id: Id,
     pub tags: Vec<TagPair>,
     pub intro: Option<Text>,
-    /// The starting position of the game.
-    start: Position,
+    pub outcome: Outcome,
+    /// State before any lines start.
+    state: State,
     /// The (initial) lines of the game, each containing a sequence of moves,
     /// with recursively nested lines after each move.
     lines: Vec<Id>,
@@ -51,10 +59,9 @@ pub struct Play {
     id: Id,
     previous: Option<Id>,
     pub meta: Meta,
-    position: Position,
+    state: State,
     play: Move,
     short: Short,
-    check: Option<Check>,
     lines: Vec<Id>,
 }
 
@@ -142,7 +149,18 @@ pub enum Tag {
     White,
     Black,
     Result,
+    Fen,
+    SetUp,
     Other(String),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Outcome {
+    White,
+    Black,
+    Draw,
+    #[default]
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,18 +206,20 @@ pub enum Nag {
 
 impl Game {
     pub fn new(position: Position) -> Self {
+        let legal = position.legal_moves();
         Self {
             id: id(),
             tags: Default::default(),
             intro: None,
-            start: position,
+            outcome: Default::default(),
+            state: State { position, legal, check: None },
             lines: Default::default(),
             slots: Default::default(),
         }
     }
 
     pub fn start(&self) -> Position {
-        self.start
+        self.state.position
     }
 
     pub fn play(&self, id: Id) -> Option<PlayRef<'_>> {
@@ -216,6 +236,14 @@ impl Game {
 
     pub fn lines_mut(&mut self) -> LinesMut<'_> {
         LinesMut { game: self, id: None }
+    }
+
+    pub fn lines_mut_at(&mut self, id: Option<Id>) -> Option<LinesMut<'_>> {
+        if id.as_ref().is_none_or(|id| self.slots.contains_key(id)) {
+            Some(LinesMut { game: self, id })
+        } else {
+            None
+        }
     }
 
     fn lines_ref(&self, id: Option<Id>) -> LinesRef<'_> {
@@ -264,41 +292,43 @@ impl Game {
             return Err(Error::Duplicate(index));
         }
 
-        let (previous_position, check) = self.previous_position(id.as_ref());
-        if let Some(Check::Checkmate) = check {
+        let previous_state = self.previous_state(id.as_ref());
+        if let Some(Check::Checkmate) = previous_state.check {
             return Err(Error::Illegal);
         }
 
-        // legality check (implies movegen)
-        let legal = previous_position.legal_moves();
-        if !legal.contains(&play) {
+        // legality check (legal moves are already computed)
+        if !previous_state.legal.contains(&play) {
             return Err(Error::Illegal);
         }
 
         // apply
-        let position = previous_position.apply_unchecked(play);
+        let position = previous_state.position.apply_unchecked(play);
+
+        // compute legal moves - with cache this with the new position
+        let legal = position.legal_moves();
 
         // update derived state
         let check = if position.is_check() {
-            Some(if position.legal_moves().is_empty() { Check::Checkmate } else { Check::Check })
+            Some(if legal.is_empty() { Check::Checkmate } else { Check::Check })
         } else {
             None
         };
-        let short = Short::new(&legal, play);
+        let short = Short::new(&previous_state.legal, play);
 
         // create the (detached) play in the arena
-        let play = Play::new(id.clone(), play, short, check, position);
+        let play = Play::new(id.clone(), play, short, State { position, legal, check });
         self.slots.insert(play.id.clone(), play.clone());
 
         Ok(play)
     }
 
-    fn previous_position(&self, id: Option<&Id>) -> (Position, Option<Check>) {
+    fn previous_state(&self, id: Option<&Id>) -> &State {
         match id {
-            None => (self.start, None),
+            None => &self.state,
             Some(id) => {
                 let play = self.slots.get(id).expect("id exists");
-                (play.position, play.check)
+                &play.state
             }
         }
     }
@@ -313,21 +343,14 @@ impl Game {
 }
 
 impl Play {
-    fn new(
-        previous: Option<Id>,
-        play: Move,
-        short: Short,
-        check: Option<Check>,
-        position: Position,
-    ) -> Self {
+    fn new(previous: Option<Id>, play: Move, short: Short, state: State) -> Self {
         Self {
             id: id(),
             previous,
             meta: Default::default(),
-            position,
+            state,
             play,
             short,
-            check,
             lines: Default::default(),
         }
     }
@@ -349,11 +372,15 @@ impl Play {
     }
 
     pub fn check(&self) -> Option<Check> {
-        self.check
+        self.state.check
     }
 
     pub fn position(&self) -> Position {
-        self.position
+        self.state.position
+    }
+
+    pub fn legal(&self) -> &[Move] {
+        &self.state.legal
     }
 }
 
@@ -483,6 +510,10 @@ pub struct LinesMut<'a> {
 }
 
 impl LinesMut<'_> {
+    pub fn state(&self) -> &State {
+        self.game.previous_state(self.id.as_ref())
+    }
+
     pub fn as_ref(&self) -> LinesRef<'_> {
         self.game.lines_ref(self.id.clone())
     }
