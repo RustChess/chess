@@ -69,10 +69,23 @@ impl Command {
     }
 
     fn pgn_to_pgn(self) -> Result<()> {
-        let input = self.read_input()?;
-        let input = String::from_utf8(input).context("PGN input is not UTF-8")?;
-        let games = pgn::games.parse(input.as_str()).map_err(|error| anyhow!("{error}"))?;
-        self.write_text(format!("{games}\n"))
+        let mut output = self.text_output()?;
+        let mut first = true;
+
+        for game in self.pgn_input()? {
+            let game = game?.map_err(|error| anyhow!("{error}"))?;
+            if !first {
+                writeln!(output)?;
+                writeln!(output)?;
+            }
+            write!(output, "{game}")?;
+            first = false;
+        }
+
+        if !first {
+            writeln!(output)?;
+        }
+        Ok(())
     }
 
     fn cbv_to_cb(self) -> Result<()> {
@@ -99,17 +112,29 @@ impl Command {
         Ok(input)
     }
 
-    fn write_text(&self, text: String) -> Result<()> {
+    fn pgn_input(
+        &self,
+    ) -> Result<Box<dyn Iterator<Item = io::Result<chess::formats::ModalResult<pgn::Game>>>>> {
+        if self.input == Path::new("-") {
+            Ok(Box::new(pgn::read_games(io::stdin())))
+        } else {
+            let file = fs::File::open(&self.input)
+                .with_context(|| format!("reading input {}", self.input.display()))?;
+            Ok(Box::new(pgn::read_games(file)))
+        }
+    }
+
+    fn text_output(&self) -> Result<Box<dyn io::Write>> {
         if let Some(output) = self.output_path_for_file()? {
-            fs::write(&output, text)
+            let file = fs::File::create(&output)
                 .with_context(|| format!("writing output {}", output.display()))?;
+            Ok(Box::new(file))
         } else {
             if io::stdout().is_terminal() && !self.stdout {
                 bail!("refusing to write output to terminal stdout");
             }
-            io::stdout().write_all(text.as_bytes())?;
+            Ok(Box::new(io::stdout()))
         }
-        Ok(())
     }
 
     fn output_path_for_file(&self) -> Result<Option<PathBuf>> {

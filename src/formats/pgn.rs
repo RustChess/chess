@@ -1,6 +1,12 @@
 //! PGN format
 
-use std::{collections::BTreeMap, fmt};
+use std::{
+    fmt,
+    io::{self, BufRead, BufReader, Read},
+    iter::Peekable,
+};
+
+use encoding_rs::WINDOWS_1252;
 
 use super::{StrInput as Input, prelude::*, san};
 
@@ -18,10 +24,30 @@ use super::{StrInput as Input, prelude::*, san};
 
 pub struct Pgn;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Game {
-    pub tag_pairs: Vec<TagPair>,
-    pub variation: Variation,
+pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
+    delimited(
+        multispace0,
+        seq! {Game {
+        tag_pairs: tag_pairs,
+        line: line,
+        outcome: outcome,
+        }},
+        multispace0,
+    )
+    .context(StrContext::Label("PGN game"))
+    .parse_next(input)
+}
+
+pub fn games(input: &mut Input<'_>) -> ModalResult<Games> {
+    repeat(0.., game).map(|games| Games { games }).parse_next(input)
+}
+
+pub fn read_games<R: Read>(reader: R) -> impl Iterator<Item = io::Result<ModalResult<Game>>> {
+    GameShaped::new(reader).map(|chunk| {
+        chunk.map(|chunk| {
+            game.parse(chunk.as_str()).map_err(|error| ErrMode::Backtrack(error.into_inner()))
+        })
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,30 +56,29 @@ pub struct Games {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Variation {
-    pub intro: Vec<Annotation>,
+pub struct Game {
+    pub tag_pairs: Vec<TagPair>,
+    pub line: Line,
+    pub outcome: Outcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Line {
+    pub annotations: Vec<Annotation>,
     pub moves: Vec<Move>,
-    pub outcome: Option<Outcome>,
-    pub outro: Vec<Annotation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Move {
     pub san: san::San,
-    pub intro: Vec<Annotation>,
-    pub variations: Variations,
-    pub outro: Vec<Annotation>,
+    pub annotations: Vec<Annotation>,
+    pub variations: Vec<Variation>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Variations {
-    pub variations: Vec<Variation>,
-    /// Annotations before `variations[index]`.
-    ///
-    /// Keys are in `1..variations.len()`: annotations before the first variation
-    /// belong to `Move::intro`, and annotations after the last variation belong
-    /// to `Move::outro`.
-    pub before: BTreeMap<usize, Vec<Annotation>>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Variation {
+    pub line: Line,
+    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +128,8 @@ impl fmt::Display for Game {
             writeln!(f)?;
         }
         let mut wrap = Wrap::new(f);
-        self.variation.write(&mut wrap, 0)
+        self.line.write(&mut wrap, 0)?;
+        wrap.token(self.outcome)
     }
 }
 
@@ -118,6 +144,152 @@ impl fmt::Display for Games {
         }
         Ok(())
     }
+}
+
+struct GameShaped<R: Read> {
+    lines: Peekable<Lines<R>>,
+}
+
+impl<R: Read> GameShaped<R> {
+    fn new(reader: R) -> Self {
+        Self { lines: Lines::new(reader).peekable() }
+    }
+}
+
+impl<R: Read> Iterator for GameShaped<R> {
+    type Item = io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        game_shaped(&mut self.lines).transpose()
+    }
+}
+
+struct Lines<R: Read> {
+    reader: BufReader<R>,
+    bytes: Vec<u8>,
+}
+
+impl<R: Read> Lines<R> {
+    fn new(reader: R) -> Self {
+        Self { reader: BufReader::new(reader), bytes: Vec::new() }
+    }
+}
+
+impl<R: Read> Iterator for Lines<R> {
+    type Item = io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.bytes.clear();
+        match self.reader.read_until(b'\n', &mut self.bytes) {
+            Ok(0) => None,
+            Ok(_) => Some(Ok(decode_line(&self.bytes))),
+            Err(error) => Some(Err(error)),
+        }
+    }
+}
+
+fn decode_line(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => {
+            let (text, _, _) = WINDOWS_1252.decode(bytes);
+            text.into_owned()
+        }
+    }
+}
+
+fn game_shaped<I>(lines: &mut Peekable<I>) -> io::Result<Option<String>>
+where
+    I: Iterator<Item = io::Result<String>>,
+{
+    let Some(line) = lines.next().transpose()? else {
+        return Ok(None);
+    };
+    let mut buffer = Buffer::new(line);
+
+    loop {
+        let next = match lines.peek() {
+            Some(Ok(next)) => Some(next.as_str()),
+            Some(Err(_)) | None => None,
+        };
+        if buffer.is_complete(next) {
+            return Ok(Some(buffer.take()));
+        }
+
+        let Some(line) = lines.next().transpose()? else {
+            return Ok(Some(buffer.take()));
+        };
+        buffer.push(line);
+    }
+}
+
+struct Buffer {
+    text: String,
+    in_comment: bool,
+    movetext: bool,
+}
+
+impl Buffer {
+    fn new(line: String) -> Self {
+        let mut buffer = Self { text: String::new(), in_comment: false, movetext: false };
+        buffer.push(line);
+        buffer
+    }
+
+    fn push(&mut self, line: String) {
+        self.text.push_str(&line);
+        self.text.push('\n');
+
+        let line = if self.in_comment { line.as_str() } else { strip_tag_pairs(&line) };
+        for c in line.chars() {
+            if self.in_comment {
+                if c == '}' {
+                    self.in_comment = false;
+                }
+            } else {
+                match c {
+                    '{' => {
+                        self.movetext = true;
+                        self.in_comment = true;
+                    }
+                    ';' => {
+                        self.movetext = true;
+                        break;
+                    }
+                    c if c.is_whitespace() => {}
+                    _ => self.movetext = true,
+                }
+            }
+        }
+    }
+
+    fn is_game_shaped(&self) -> bool {
+        self.movetext && !self.in_comment
+    }
+
+    fn is_complete(&self, next: Option<&str>) -> bool {
+        self.is_game_shaped() && next.is_none_or(tag_pair_start_ok)
+    }
+
+    fn take(self) -> String {
+        self.text
+    }
+}
+
+fn strip_tag_pairs(mut input: &str) -> &str {
+    loop {
+        let before = input;
+        if tag_pair.parse_next(&mut input).is_err() {
+            return before;
+        }
+    }
+}
+
+fn tag_pair_start_ok(mut input: &str) -> bool {
+    tag_pair.parse_next(&mut input).is_ok()
 }
 
 impl fmt::Display for TagPair {
@@ -170,26 +342,21 @@ impl fmt::Display for Outcome {
     }
 }
 
-impl Variation {
+impl Line {
     fn write(&self, wrap: &mut Wrap<'_, '_>, first_ply: usize) -> fmt::Result {
         let mut ply = first_ply;
-        for annotation in &self.intro {
+        for annotation in &self.annotations {
             wrap.token(annotation)?;
         }
         for (index, play) in self.moves.iter().enumerate() {
             if should_write_move_number(ply, index, &self.moves) {
-                wrap.token(format!("{} {}", MoveNumber(ply), play.san))?;
+                wrap.token(MoveNumber(ply))?;
+                wrap.token(play.san)?;
             } else {
                 wrap.token(play.san)?;
             }
             play.write_tail(wrap, ply)?;
             ply += 1;
-        }
-        if let Some(outcome) = self.outcome {
-            wrap.token(outcome)?;
-        }
-        for annotation in &self.outro {
-            wrap.token(annotation)?;
         }
         Ok(())
     }
@@ -197,31 +364,24 @@ impl Variation {
 
 impl Move {
     fn write_tail(&self, wrap: &mut Wrap<'_, '_>, ply: usize) -> fmt::Result {
-        for annotation in &self.intro {
+        for annotation in &self.annotations {
             wrap.token(annotation)?;
         }
-        self.variations.write(wrap, ply)?;
-        for annotation in &self.outro {
-            wrap.token(annotation)?;
-        }
+        write_variations(&self.variations, wrap, ply)?;
         Ok(())
     }
 }
 
-impl Variations {
-    fn write(&self, wrap: &mut Wrap<'_, '_>, ply: usize) -> fmt::Result {
-        for (index, variation) in self.variations.iter().enumerate() {
-            if let Some(annotations) = self.before.get(&index) {
-                for annotation in annotations {
-                    wrap.token(annotation)?;
-                }
-            }
-            wrap.open("(")?;
-            variation.write(wrap, ply)?;
-            wrap.close(")")?;
+fn write_variations(variations: &[Variation], wrap: &mut Wrap<'_, '_>, ply: usize) -> fmt::Result {
+    for variation in variations {
+        wrap.open("(")?;
+        variation.line.write(wrap, ply)?;
+        wrap.close(")")?;
+        for annotation in &variation.annotations {
+            wrap.token(annotation)?;
         }
-        Ok(())
     }
+    Ok(())
 }
 
 struct MoveNumber(usize);
@@ -286,7 +446,7 @@ fn should_write_move_number(ply: usize, index: usize, moves: &[Move]) -> bool {
 
 impl Move {
     fn has_intervening_annotation_or_variation(&self) -> bool {
-        !self.intro.is_empty() || !self.variations.variations.is_empty() || !self.outro.is_empty()
+        !self.annotations.is_empty() || !self.variations.is_empty()
     }
 }
 
@@ -294,167 +454,97 @@ fn escape_tag_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
-    (tag_pairs, root_variation.context(StrContext::Label("PGN movetext")))
-        .map(|(tag_pairs, variation)| Game { tag_pairs, variation })
-        .context(StrContext::Label("PGN game"))
-        .parse_next(input)
-}
-
-pub fn games(input: &mut Input<'_>) -> ModalResult<Games> {
-    let mut parsed = Vec::new();
-    loop {
-        trim(input);
-        if input.is_empty() {
-            break;
-        }
-        parsed.push(game(input)?);
-    }
-    Ok(Games { games: parsed })
-}
-
 pub fn tag_pairs(input: &mut Input<'_>) -> ModalResult<Vec<TagPair>> {
-    let mut tags = Vec::new();
-    loop {
-        trim(input);
-        if !input.starts_with('[') {
-            break;
-        }
-        tags.push(tag_pair(input)?);
-    }
-    Ok(tags)
+    repeat(0.., tag_pair).parse_next(input)
 }
 
 pub fn tag_pair(input: &mut Input<'_>) -> ModalResult<TagPair> {
-    ('[', tag_name, space1, tag_value, space0, ']')
-        .map(|(_, name, _, value, _, _)| TagPair { name, value })
-        .context(StrContext::Label("PGN tag pair"))
-        .parse_next(input)
+    delimited(
+        multispace0,
+        delimited(
+            ('[', multispace0),
+            separated_pair(tag_name, multispace1, tag_value),
+            (multispace0, ']'),
+        ),
+        multispace0,
+    )
+    .map(|(name, value)| TagPair { name, value })
+    .context(StrContext::Label("PGN tag pair"))
+    .parse_next(input)
 }
 
-fn root_variation(input: &mut Input<'_>) -> ModalResult<Variation> {
-    let variation = variation_body(input, false)?;
-    trim(input);
-    Ok(variation)
+fn line(input: &mut Input<'_>) -> ModalResult<Line> {
+    seq! {Line {
+        annotations: annotations,
+        moves: repeat(0.., parse_move),
+    }}
+    .parse_next(input)
+}
+
+fn parse_move(input: &mut Input<'_>) -> ModalResult<Move> {
+    preceded(
+        (multispace0, opt(skip_move_number), multispace0),
+        seq! {Move {
+            san: san::san.context(StrContext::Label("PGN move")),
+            annotations: annotations,
+            variations: variations,
+        }},
+    )
+    .parse_next(input)
+}
+
+fn variations(input: &mut Input<'_>) -> ModalResult<Vec<Variation>> {
+    repeat(0.., variation).parse_next(input)
 }
 
 fn variation(input: &mut Input<'_>) -> ModalResult<Variation> {
-    ('(', |input: &mut Input<'_>| variation_body(input, true), ')')
-        .map(|(_, variation, _)| variation)
+    seq! {Variation {
+        line: preceded(multispace0, nested_line),
+        annotations: annotations,
+    }}
+    .parse_next(input)
+}
+
+fn nested_line(input: &mut Input<'_>) -> ModalResult<Line> {
+    delimited(('(', multispace0), line, (multispace0, ')'))
         .context(StrContext::Label("PGN variation"))
         .parse_next(input)
 }
 
-fn variation_body(input: &mut Input<'_>, nested: bool) -> ModalResult<Variation> {
-    let intro = annotations(input)?;
-    let mut moves = Vec::new();
-    let mut result = None;
-
-    loop {
-        skip_move_numbers(input)?;
-        trim(input);
-
-        if input.is_empty() || input.starts_with('[') || (nested && input.starts_with(')')) {
-            break;
-        }
-
-        if let Some(done) = outcome(input)? {
-            result = Some(done);
-            break;
-        }
-
-        moves.push(parse_move(input)?);
-    }
-
-    let outro = annotations(input)?;
-    Ok(Variation { intro, moves, outcome: result, outro })
-}
-
-fn parse_move(input: &mut Input<'_>) -> ModalResult<Move> {
-    let san = san::san.context(StrContext::Label("PGN move")).parse_next(input)?;
-    let intro = annotations(input)?;
-    let (variations, outro) = variations(input)?;
-    Ok(Move { san, intro, variations, outro })
-}
-
-fn variations(input: &mut Input<'_>) -> ModalResult<(Variations, Vec<Annotation>)> {
-    let mut variations = Vec::new();
-    let mut before = BTreeMap::new();
-    let mut pending = Vec::new();
-
-    loop {
-        skip_move_numbers(input)?;
-        trim(input);
-
-        if !input.starts_with('(') {
-            break;
-        }
-
-        let index = variations.len();
-        if index > 0 && !pending.is_empty() {
-            before.insert(index, pending);
-        }
-
-        variations.push(variation(input)?);
-        pending = annotations(input)?;
-    }
-
-    Ok((Variations { variations, before }, pending))
-}
-
 fn annotations(input: &mut Input<'_>) -> ModalResult<Vec<Annotation>> {
-    let mut annotations = Vec::new();
-    loop {
-        trim(input);
-        if input.starts_with('{') {
-            annotations.push(Annotation::Comment(comment(input)?));
-        } else if input.starts_with(';') {
-            annotations.push(Annotation::Comment(line_comment(input)?));
-        } else if input.starts_with('$') {
-            annotations.push(Annotation::Nag(numeric_nag(input)?));
-        } else if input.starts_with('!') || input.starts_with('?') {
-            annotations.push(Annotation::Nag(symbol_nag(input)?));
-        } else {
-            break;
-        }
-    }
-    Ok(annotations)
+    repeat(0.., preceded(multispace0, annotation)).parse_next(input)
 }
 
-fn skip_move_numbers(input: &mut Input<'_>) -> ModalResult<()> {
-    loop {
-        trim(input);
-        let snapshot = *input;
+fn annotation(input: &mut Input<'_>) -> ModalResult<Annotation> {
+    alt((
+        bracket_comment.map(Annotation::Comment),
+        semicolon_comment.map(Annotation::Comment),
+        numeric_nag.map(Annotation::Nag),
+        symbol_nag.map(Annotation::Nag),
+    ))
+    .parse_next(input)
+}
 
-        if input.as_bytes().first().is_some_and(u8::is_ascii_digit) {
-            let _number = dec_uint::<_, u32, _>.parse_next(input)?;
-            let dots = take_while(input, |c| c == '.')?;
-            if dots.len() == 1 || dots.len() == 3 {
-                continue;
-            }
-        }
-
-        *input = snapshot;
-        break;
-    }
-    Ok(())
+// skip because it parses a valid 1. or 2... etc., but doesn't return it.
+fn skip_move_number(input: &mut Input<'_>) -> ModalResult<()> {
+    (dec_uint::<_, u32, _>, alt(("...", "."))).value(()).parse_next(input)
 }
 
 fn tag_name(input: &mut Input<'_>) -> ModalResult<Tag> {
-    let name = take_while(input, |c| c.is_ascii_alphanumeric() || c == '_')?;
-    if name.is_empty() {
-        return err();
-    }
-    Ok(match name {
-        "Event" => Tag::Event,
-        "Site" => Tag::Site,
-        "Date" => Tag::Date,
-        "Round" => Tag::Round,
-        "White" => Tag::White,
-        "Black" => Tag::Black,
-        "Result" => Tag::Result,
-        _ => Tag::Other(name.to_string()),
-    })
+    use Tag::*;
+
+    take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
+        .map(|name: &str| match name {
+            "Event" => Event,
+            "Site" => Site,
+            "Date" => Date,
+            "Round" => Round,
+            "White" => White,
+            "Black" => Black,
+            "Result" => Result,
+            _ => Other(name.to_string()),
+        })
+        .parse_next(input)
 }
 
 fn tag_value(input: &mut Input<'_>) -> ModalResult<String> {
@@ -483,69 +573,28 @@ fn symbol_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
         .parse_next(input)
 }
 
-fn comment(input: &mut Input<'_>) -> ModalResult<String> {
+fn bracket_comment(input: &mut Input<'_>) -> ModalResult<String> {
     preceded('{', terminated(take_till(0.., '}'), '}'))
         .map(|comment: &str| comment.trim().to_string())
         .context(StrContext::Label("PGN comment"))
         .parse_next(input)
 }
 
-fn line_comment(input: &mut Input<'_>) -> ModalResult<String> {
+fn semicolon_comment(input: &mut Input<'_>) -> ModalResult<String> {
     preceded(';', take_till(0.., '\n'))
         .map(|comment: &str| comment.trim().to_string())
         .parse_next(input)
 }
 
-fn outcome(input: &mut Input<'_>) -> ModalResult<Option<Outcome>> {
-    trim(input);
-    Ok([
-        ("1/2-1/2", Outcome::Draw),
-        ("1-0", Outcome::White),
-        ("0-1", Outcome::Black),
-        ("*", Outcome::Unknown),
-    ]
-    .into_iter()
-    .find_map(|(token, outcome)| {
-        token_boundary(input, token).then(|| {
-            advance(input, token.len());
-            outcome
-        })
-    }))
-}
+fn outcome(input: &mut Input<'_>) -> ModalResult<Outcome> {
+    use Outcome::*;
 
-fn token_boundary(input: &str, token: &str) -> bool {
-    input.starts_with(token)
-        && input[token.len()..].chars().next().is_none_or(|c| {
-            c.is_whitespace() || matches!(c, '[' | ']' | '{' | '}' | '(' | ')' | ';')
-        })
-}
-
-fn trim(input: &mut Input<'_>) {
-    *input = input.trim_start();
-}
-
-fn take_while<'a>(
-    input: &mut &'a str,
-    mut predicate: impl FnMut(char) -> bool,
-) -> ModalResult<&'a str> {
-    let mut end = 0;
-    for (index, c) in input.char_indices() {
-        if !predicate(c) {
-            break;
-        }
-        end = index + c.len_utf8();
-    }
-    let (taken, rest) = input.split_at(end);
-    *input = rest;
-    Ok(taken)
-}
-
-fn advance(input: &mut Input<'_>, bytes: usize) {
-    *input = &input[bytes..];
-}
-
-fn err<T>() -> ModalResult<T> {
-    Err(ErrMode::Backtrack(ContextError::new()))
+    preceded(
+        multispace0,
+        alt(("1/2-1/2".value(Draw), "1-0".value(White), "0-1".value(Black), "*".value(Unknown))),
+    )
+    .context(StrContext::Label("PGN outcome"))
+    .parse_next(input)
 }
 
 #[cfg(test)]
@@ -575,10 +624,10 @@ mod tests {
         assert_eq!(game.tag_pairs.len(), 7);
         assert_eq!(game.tag_pairs[0].name, Tag::Event);
         assert_eq!(game.tag_pairs[0].value, "Casual Game");
-        assert_eq!(game.variation.moves.len(), 6);
-        assert_eq!(game.variation.outcome, Some(Outcome::White));
+        assert_eq!(game.line.moves.len(), 6);
+        assert_eq!(game.outcome, Outcome::White);
         assert_eq!(
-            game.variation.moves[5].intro,
+            game.line.moves[5].annotations,
             vec![Annotation::Comment("Italian Game".to_string())]
         );
     }
@@ -591,7 +640,7 @@ mod tests {
 "#;
 
         let game = game.parse(pgn).unwrap();
-        let e4 = &game.variation.moves[0];
+        let e4 = &game.line.moves[0];
         assert_eq!(
             e4.san.play,
             san::Move::Normal {
@@ -603,16 +652,16 @@ mod tests {
                 promotion: None,
             }
         );
-        assert_eq!(e4.intro, vec![Annotation::Nag(Nag::Symbol("!".to_string()))]);
+        assert_eq!(e4.annotations, vec![Annotation::Nag(Nag::Symbol("!".to_string()))]);
 
-        let e5 = &game.variation.moves[1];
-        assert_eq!(e5.intro, vec![Annotation::Nag(Nag::Numeric(1))]);
-        assert_eq!(e5.variations.variations.len(), 1);
+        let e5 = &game.line.moves[1];
+        assert_eq!(e5.annotations, vec![Annotation::Nag(Nag::Numeric(1))]);
+        assert_eq!(e5.variations.len(), 1);
         assert_eq!(
-            e5.variations.variations[0].moves[0].intro,
+            e5.variations[0].line.moves[0].annotations,
             vec![Annotation::Comment("Sicilian".to_string())]
         );
-        assert_eq!(game.variation.outcome, Some(Outcome::Unknown));
+        assert_eq!(game.outcome, Outcome::Unknown);
     }
 
     #[test]
@@ -623,18 +672,18 @@ mod tests {
 "#;
 
         let game = game.parse(pgn).unwrap();
-        let e5 = &game.variation.moves[1];
-        assert_eq!(e5.intro, vec![Annotation::Comment("A".to_string())]);
-        assert_eq!(e5.variations.variations.len(), 2);
-        assert_eq!(e5.variations.before.get(&1), Some(&vec![Annotation::Comment("B".to_string())]));
-        assert_eq!(e5.outro, vec![Annotation::Comment("C".to_string())]);
+        let e5 = &game.line.moves[1];
+        assert_eq!(e5.annotations, vec![Annotation::Comment("A".to_string())]);
+        assert_eq!(e5.variations.len(), 2);
+        assert_eq!(e5.variations[0].annotations, vec![Annotation::Comment("B".to_string())]);
+        assert_eq!(e5.variations[1].annotations, vec![Annotation::Comment("C".to_string())]);
     }
 
     #[test]
     fn parses_san_in_moves() {
         let game = game.parse(r#"[Event "x"] 1. exd8=Q# *"#).unwrap();
         assert_eq!(
-            game.variation.moves[0].san,
+            game.line.moves[0].san,
             san::San {
                 play: san::Move::Normal {
                     role: Role::Pawn,
@@ -670,5 +719,34 @@ mod tests {
             .unwrap();
         assert_eq!(parsed.games.len(), 2);
         assert_eq!(parsed.to_string(), "[Event \"a\"]\n\n1. e4 *\n\n[Event \"b\"]\n\n1. d4 *");
+    }
+
+    #[test]
+    fn reads_games_one_at_a_time() {
+        let input = b"[Event \"a\"]\n1. e4 *\n\n[Event \"b\"]\n1. d4 *\n";
+        let games = read_games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        assert_eq!(games.len(), 2);
+        assert_eq!(games[0].tag_pairs[0].value, "a");
+        assert_eq!(games[1].tag_pairs[0].value, "b");
+    }
+
+    #[test]
+    fn reader_does_not_split_inside_comment() {
+        let input = b"[Event \"a\"]\n1. e4 {\n[not a tag]\n} *\n\n[Event \"b\"]\n1. d4 *\n";
+        let games = read_games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        assert_eq!(games.len(), 2);
+        assert_eq!(
+            games[0].line.moves[0].annotations,
+            vec![Annotation::Comment("[not a tag]".to_string())]
+        );
+    }
+
+    #[test]
+    fn reader_handles_movetext_after_tag_on_same_line() {
+        let input = b"[Event \"a\"] 1. e4 *\n\n[Event \"b\"] 1. d4 *\n";
+        let games = read_games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        assert_eq!(games.len(), 2);
+        assert_eq!(games[0].tag_pairs[0].value, "a");
+        assert_eq!(games[1].tag_pairs[0].value, "b");
     }
 }
