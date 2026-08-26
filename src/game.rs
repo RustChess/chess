@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap as Map,
+    fmt,
     ops::{Deref, DerefMut},
 };
 
@@ -181,6 +182,12 @@ impl Text {
 impl AsRef<str> for Text {
     fn as_ref(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -398,7 +405,7 @@ impl Deref for PlayRef<'_> {
 }
 
 impl<'a> PlayRef<'a> {
-    pub fn lines(&self) -> LinesRef<'_> {
+    pub fn lines(&self) -> LinesRef<'a> {
         self.game.lines_ref(Some(self.id.clone()))
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     bitboard::Bitboard,
     position::{
         Board, File, Player, Players, Position, Rank, Role, Roles, Side, Sides, Square, en_passant,
-        variant::Unvalidated,
+        variant::{Chess, Unvalidated},
     },
 };
 
@@ -15,6 +15,89 @@ use super::{StrInput as Input, prelude::*};
 // 64 squares are filled, so it won't "swallow" the turn parser's input.
 
 // pub struct Fen(String);
+
+impl Position<Chess> {
+    pub fn fen(&self) -> String {
+        format!(
+            "{} {} {} {} {} {}",
+            self.board.fen(),
+            self.turn.fen(),
+            self.castle.fen(),
+            en_passant_square(self.en_passant),
+            self.reversible,
+            self.round
+        )
+    }
+}
+
+impl Board {
+    pub fn fen(self) -> String {
+        let mut fen = String::new();
+
+        for rank in Rank::iter_rev() {
+            if rank != Rank::Eight {
+                fen.push('/');
+            }
+
+            let mut empty = 0;
+            for file in File::iter() {
+                let square = Square::new(file, rank);
+                if let Some(piece) = self.piece_at(square) {
+                    if empty > 0 {
+                        fen.push(char::from_digit(empty, 10).unwrap());
+                        empty = 0;
+                    }
+                    fen.push(piece.char());
+                } else {
+                    empty += 1;
+                }
+            }
+            if empty > 0 {
+                fen.push(char::from_digit(empty, 10).unwrap());
+            }
+        }
+
+        fen
+    }
+}
+
+impl Player {
+    pub fn fen(self) -> char {
+        match self {
+            Player::Black => 'b',
+            Player::White => 'w',
+        }
+    }
+}
+
+impl Players<Sides> {
+    pub fn fen(self) -> String {
+        use Player::*;
+        use Side::*;
+
+        let mut fen = String::new();
+        if self[White][King] {
+            fen.push('K');
+        }
+        if self[White][Queen] {
+            fen.push('Q');
+        }
+        if self[Black][King] {
+            fen.push('k');
+        }
+        if self[Black][Queen] {
+            fen.push('q');
+        }
+        if fen.is_empty() {
+            fen.push('-');
+        }
+        fen
+    }
+}
+
+fn en_passant_square(en_passant: Option<en_passant::Square>) -> String {
+    en_passant.map_or_else(|| "-".to_string(), |square| Square::from(square).to_string())
+}
 
 fn is_board_fen_char(c: char) -> bool {
     "12345678pnbrkqPNBRKQ".contains(c)
@@ -153,9 +236,8 @@ fn board_fen_example() {
         board_fen.parse_next(&mut "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNRxxx").unwrap()
     );
 
-    let position = position_fen
-        .parse("rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 1 3")
-        .unwrap();
+    let fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 1 3";
+    let position = position_fen.parse(fen).unwrap();
     assert_eq!(position.turn, Black);
     assert!(position.castle[Black][King]);
     assert!(position.castle[Black][Queen]);
@@ -164,10 +246,10 @@ fn board_fen_example() {
     assert_eq!(position.en_passant.map(Into::into), Some(Square::new(File::E, Rank::Three)));
     assert_eq!(position.reversible, 1);
     assert_eq!(u32::from(position.round), 3);
+    assert_eq!(Position::new(position).unwrap().fen(), fen);
 
-    let position = position_partial_fen
-        .parse("rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3")
-        .unwrap();
+    let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
+    let position = position_partial_fen.parse(partial_fen).unwrap();
     assert_eq!(position.turn, Black);
     assert!(position.castle[Black][King]);
     assert!(position.castle[Black][Queen]);
@@ -176,6 +258,10 @@ fn board_fen_example() {
     assert_eq!(position.en_passant.map(Into::into), Some(Square::new(File::E, Rank::Three)));
     assert_eq!(position.reversible, 0);
     assert_eq!(u32::from(position.round), 1);
+    assert_eq!(
+        Position::new(position).unwrap().fen(),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+    );
 
     let position =
         position_partial_fen.parse("rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR").unwrap();
@@ -187,4 +273,8 @@ fn board_fen_example() {
     assert_eq!(position.en_passant, None);
     assert_eq!(position.reversible, 0);
     assert_eq!(u32::from(position.round), 1);
+    assert_eq!(
+        Position::new(position).unwrap().fen(),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
+    );
 }

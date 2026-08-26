@@ -60,25 +60,28 @@ pub struct Games {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     pub tag_pairs: Vec<TagPair>,
-    pub intro: Option<Text>,
+    pub intro: Option<Comment>,
     pub moves: Vec<Move>,
     pub outcome: Outcome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Variation {
-    pub intro: Option<Text>,
+    pub intro: Option<Comment>,
     pub moves: Vec<Move>,
-    pub outro: Option<Text>,
+    pub outro: Option<Comment>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Move {
     pub san: san::San,
-    pub comment: Option<Text>,
+    pub comment: Option<Comment>,
     pub annotations: Vec<Annotation>,
     pub variations: Vec<Variation>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Comment(Text);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Annotation {
@@ -105,13 +108,90 @@ impl TryFrom<Game> for game::Game {
         let position = position(&pgn.tag_pairs)?;
         let mut game = game::Game::new(position);
         game.tags = pgn.tag_pairs;
-        game.intro = pgn.intro;
+        game.intro = pgn.intro.map(Into::into);
         game.outcome = pgn.outcome;
 
         convert_moves(&mut game, None, 0, pgn.moves)?;
 
         Ok(game)
     }
+}
+
+impl From<game::Game> for Game {
+    fn from(game: game::Game) -> Self {
+        let start = game.start();
+        let moves = game_moves(&game, game.lines());
+        let mut tag_pairs = game.tags;
+
+        if start != Position::standard() {
+            set_tag(&mut tag_pairs, Tag::SetUp, "1");
+            set_tag(&mut tag_pairs, Tag::Fen, start.fen());
+        }
+
+        Self { tag_pairs, intro: game.intro.map(Comment), moves, outcome: game.outcome }
+    }
+}
+
+fn set_tag(tag_pairs: &mut Vec<TagPair>, name: Tag, value: impl Into<String>) {
+    if let Some(tag_pair) = tag_pairs.iter_mut().find(|tag_pair| tag_pair.name == name) {
+        tag_pair.value = value.into();
+    } else {
+        tag_pairs.push(TagPair { name, value: value.into() });
+    }
+}
+
+fn game_moves<'a>(game: &'a game::Game, mut lines: game::LinesRef<'a>) -> Vec<Move> {
+    let mut moves = Vec::new();
+
+    while let Some(id) = lines.lines().first() {
+        let play = game.play(id.clone()).expect("line must reference an existing play");
+        moves.push(game_move(game, &play, lines));
+        lines = play.lines();
+    }
+
+    moves
+}
+
+fn game_move(game: &game::Game, play: &game::Play, lines: game::LinesRef<'_>) -> Move {
+    Move {
+        san: san::San::from((play.play(), play.short(), play.check())),
+        comment: play.meta.comment.clone().map(Comment),
+        annotations: annotations(&play.meta),
+        variations: lines.lines().iter().skip(1).map(|id| game_variation(game, id)).collect(),
+    }
+}
+
+fn game_variation(game: &game::Game, id: &Id) -> Variation {
+    let play = game.play(id.clone()).expect("line must reference an existing play");
+    Variation {
+        intro: play.meta.intro.clone().map(Comment),
+        moves: game_moves_from(game, &play),
+        outro: play.meta.outro.clone().map(Comment),
+    }
+}
+
+fn game_moves_from<'a>(game: &'a game::Game, play: &game::PlayRef<'a>) -> Vec<Move> {
+    let mut moves = vec![game_move_without_variations(play)];
+    moves.extend(game_moves(game, play.lines()));
+    moves
+}
+
+fn game_move_without_variations(play: &game::Play) -> Move {
+    Move {
+        san: san::San::from((play.play(), play.short(), play.check())),
+        comment: play.meta.comment.clone().map(Comment),
+        annotations: annotations(&play.meta),
+        variations: Vec::new(),
+    }
+}
+
+fn annotations(meta: &game::Meta) -> Vec<Annotation> {
+    meta.nags
+        .iter()
+        .cloned()
+        .map(Annotation::Nag)
+        .chain(meta.commands.iter().cloned().map(Annotation::Command))
+        .collect()
 }
 
 fn position(tag_pairs: &[TagPair]) -> Result<Position, Error> {
@@ -138,7 +218,7 @@ fn convert_moves(
 
         {
             let mut play = game.play_mut(id.clone()).expect("inserted play exists");
-            play.meta.comment = pgn_move.comment;
+            play.meta.comment = pgn_move.comment.map(Into::into);
             for annotation in pgn_move.annotations {
                 match annotation {
                     Annotation::Nag(nag) => play.meta.nags.push(nag),
@@ -175,9 +255,9 @@ fn convert_variation(
 
     {
         let mut play = game.play_mut(id.clone()).expect("inserted play exists");
-        play.meta.intro = variation.intro;
-        play.meta.outro = variation.outro;
-        play.meta.comment = first.comment.clone();
+        play.meta.intro = variation.intro.map(Into::into);
+        play.meta.outro = variation.outro.map(Into::into);
+        play.meta.comment = first.comment.clone().map(Into::into);
         for annotation in &first.annotations {
             match annotation {
                 Annotation::Nag(nag) => play.meta.nags.push(nag.clone()),
@@ -400,12 +480,6 @@ impl fmt::Display for Annotation {
     }
 }
 
-impl fmt::Display for Text {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{{{}}}", self.as_ref())
-    }
-}
-
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[%{}", self.command)?;
@@ -459,7 +533,8 @@ impl Move {
         let mut commands = Vec::new();
         for annotation in &self.annotations {
             match annotation {
-                Annotation::Nag(_) => wrap.token(annotation)?,
+                Annotation::Nag(Nag::Symbol(_)) => wrap.suffix(annotation)?,
+                Annotation::Nag(Nag::Numeric(_)) => wrap.token(annotation)?,
                 Annotation::Command(command) => commands.push(command.clone()),
             }
         }
@@ -491,7 +566,25 @@ struct MoveNumber(usize);
 
 struct MoveComment {
     commands: Vec<Command>,
-    text: Option<Text>,
+    text: Option<Comment>,
+}
+
+impl Comment {
+    fn merge(&mut self, comment: &Comment) {
+        self.0.merge(&comment.0);
+    }
+}
+
+impl From<Comment> for Text {
+    fn from(comment: Comment) -> Self {
+        comment.0
+    }
+}
+
+impl fmt::Display for Comment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{{{}}}", self.0)
+    }
 }
 
 impl fmt::Display for MoveComment {
@@ -507,7 +600,7 @@ impl fmt::Display for MoveComment {
             if !self.commands.is_empty() {
                 write!(f, " ")?;
             }
-            write!(f, "{}", text)?;
+            write!(f, "{}", text.0)?;
         }
         write!(f, "}}")
     }
@@ -545,6 +638,14 @@ impl<'a, 'b> Wrap<'a, 'b> {
             write!(self.f, " ")?;
             self.line += 1;
         }
+        write!(self.f, "{token}")?;
+        self.line += token.len();
+        self.glued = false;
+        Ok(())
+    }
+
+    fn suffix(&mut self, token: impl fmt::Display) -> fmt::Result {
+        let token = token.to_string();
         write!(self.f, "{token}")?;
         self.line += token.len();
         self.glued = false;
@@ -639,7 +740,7 @@ fn variation(input: &mut Input<'_>) -> ModalResult<Variation> {
     Ok(variation)
 }
 
-fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Text>, Vec<Annotation>)> {
+fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Comment>, Vec<Annotation>)> {
     repeat(0.., preceded(multispace0, tail_item))
         .fold(
             || (None, Vec::new()),
@@ -673,7 +774,7 @@ fn tail_item(input: &mut Input<'_>) -> ModalResult<Tail> {
     .parse_next(input)
 }
 
-fn comments(input: &mut Input<'_>) -> ModalResult<Option<Text>> {
+fn comments(input: &mut Input<'_>) -> ModalResult<Option<Comment>> {
     repeat(0.., preceded(multispace0, comment))
         .fold(
             || None,
@@ -740,9 +841,9 @@ fn symbol_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
         .parse_next(input)
 }
 
-fn comment(input: &mut Input<'_>) -> ModalResult<Option<Text>> {
+fn comment(input: &mut Input<'_>) -> ModalResult<Option<Comment>> {
     alt((bracket_comment, semicolon_comment))
-        .map(Text::new)
+        .map(|comment| Text::new(comment).map(Comment))
         .context(StrContext::Label("PGN comment"))
         .parse_next(input)
 }
@@ -788,7 +889,7 @@ fn split_comment(raw: String) -> MoveComment {
     }
 
     comment.push_str(rest);
-    MoveComment { commands, text: Text::new(comment) }
+    MoveComment { commands, text: Text::new(comment).map(Comment) }
 }
 
 fn command(input: &mut Input<'_>) -> ModalResult<Command> {
@@ -818,7 +919,7 @@ fn unquoted_parameter(input: &mut Input<'_>) -> ModalResult<String> {
     take_till(1.., [',', ']']).map(|parameter: &str| parameter.trim().to_string()).parse_next(input)
 }
 
-fn merge_comments(into: &mut Option<Text>, comment: Text) {
+fn merge_comments(into: &mut Option<Comment>, comment: Comment) {
     match into {
         Some(into) => into.merge(&comment),
         None => *into = Some(comment),
@@ -845,8 +946,12 @@ mod tests {
 
     use super::*;
 
-    fn comment(text: &str) -> Text {
+    fn text(text: &str) -> Text {
         Text::new(text).unwrap()
+    }
+
+    fn comment(comment: &str) -> Comment {
+        Comment(text(comment))
     }
 
     #[test]
@@ -929,7 +1034,7 @@ mod tests {
 
         let c5 = e4_lines.get(1).unwrap();
         assert_eq!(c5.play().to, Square::C5);
-        assert_eq!(c5.meta.comment, Some(comment("Sicilian")));
+        assert_eq!(c5.meta.comment, Some(text("Sicilian")));
     }
 
     #[test]
@@ -948,6 +1053,56 @@ mod tests {
         let e4 = lines.get(0).unwrap();
         assert_eq!(e4.play().from, Square::E2);
         assert_eq!(e4.play().to, Square::E4);
+    }
+
+    #[test]
+    fn converts_from_game() {
+        let mut game = game::Game::new(Position::standard());
+        game.tags.push(TagPair { name: Tag::Event, value: "x".to_string() });
+
+        let e4 =
+            game.lines_mut().push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
+        game.lines_mut().push(crate::Move::normal(Role::Pawn, Square::D2, Square::D4)).unwrap();
+
+        {
+            let mut e4 = game.play_mut(e4).unwrap();
+            e4.meta.nags.push(Nag::Symbol("!".to_string()));
+            e4.lines_mut().push(crate::Move::normal(Role::Pawn, Square::E7, Square::E5)).unwrap();
+            let c5 = e4
+                .lines_mut()
+                .push(crate::Move::normal(Role::Pawn, Square::C7, Square::C5))
+                .unwrap();
+            game.play_mut(c5).unwrap().meta.comment = Some(text("Sicilian"));
+        }
+
+        let pgn = Game::from(game);
+        assert_eq!(
+            pgn.to_string(),
+            r#"[Event "x"]
+
+1. e4! (1. d4) 1... e5 (1... c5 {Sicilian}) *"#
+        );
+    }
+
+    #[test]
+    fn roundtrips_kiwipete_game_tree() {
+        let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+        let position = Position::new(fen::position_fen.parse(fen).unwrap()).unwrap();
+        let mut game = game::Game::new(position);
+
+        for play in position.legal_moves() {
+            let id = game.lines_mut().push(play).unwrap();
+            let replies = game.play(id.clone()).unwrap().legal().to_vec();
+            let mut play = game.play_mut(id).unwrap();
+            for reply in replies {
+                play.lines_mut().push(reply).unwrap();
+            }
+        }
+
+        let pgn = Game::from(game);
+        let roundtrip = Game::from(game::Game::try_from(pgn.clone()).unwrap());
+
+        assert_eq!(roundtrip, pgn);
     }
 
     #[test]
@@ -1075,7 +1230,7 @@ mod tests {
             parse_game.parse(r#"[Event "x"] 1. e4! e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"#).unwrap();
         assert_eq!(
             game.to_string(),
-            "[Event \"x\"]\n\n1. e4 ! 1... e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"
+            "[Event \"x\"]\n\n1. e4! 1... e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"
         );
     }
 

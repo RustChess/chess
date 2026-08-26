@@ -94,11 +94,16 @@ impl From<(crate::Move, game::Short, Option<Check>)> for San {
         let play = if let Some(side) = play.castles() {
             Move::Castle(side)
         } else {
+            let capture = play.capture.is_some() || play.is_en_passant();
             Move::Normal {
                 role: play.role,
-                file: short.file,
+                file: if play.role == Role::Pawn && capture {
+                    Some(play.from.file())
+                } else {
+                    short.file
+                },
                 rank: short.rank,
-                capture: play.capture.is_some() || play.is_en_passant(),
+                capture,
                 to: play.to,
                 promotion: play.promotes(),
             }

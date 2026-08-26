@@ -335,7 +335,7 @@ pub trait Variant: Copy + Sized {
 
 pub mod variant {
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
     pub struct Chess;
     impl super::Variant for Chess {
         // TODO: Actually validate something.
@@ -356,7 +356,7 @@ pub mod variant {
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
     pub struct Freestyle;
     impl super::Variant for Freestyle {
         fn validate(_position: super::Unvalidated) -> Result<super::Position<Self>, super::Error> {
