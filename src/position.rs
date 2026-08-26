@@ -15,10 +15,13 @@
 //! Compared to `shakmaty` our position is a concrete `struct`
 use core::{fmt, num::NonZeroU32, ops};
 
-use crate::bitboard::Bitboard;
+use crate::{bitboard::Bitboard, variant};
 
 pub mod en_passant;
 pub mod id;
+pub mod square;
+
+pub use square::{File, Rank, Square};
 
 pub use Kind::Normal;
 pub use Player::*;
@@ -220,7 +223,7 @@ impl Board {
         Some(piece)
     }
 
-    pub fn apply_unchecked(&mut self, player: Player, play: Move) {
+    fn play_unchecked(&mut self, player: Player, play: Move) {
         let Some(special) = play.specials() else {
             self.remove(play.from);
             self.remove(play.to);
@@ -320,439 +323,29 @@ const fn standard_castle_rook_to(player: Player, side: Side) -> Square {
 
 // pub const INITIAL: Board = Board;
 
-#[derive(Debug, thiserror::Error)]
-#[error("error")]
-pub struct Error;
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum Error {
+    #[error("inconsistent board bitboards")]
+    InconsistentBoard,
+    #[error("expected exactly one {0} king")]
+    KingCount(Player),
+    #[error("pawns cannot be on the first or eighth rank")]
+    PawnOnBackrank,
+    #[error("kings cannot be adjacent")]
+    AdjacentKings,
+    #[error("{0} king is attacked")]
+    KingAttacked(Player),
+    #[error("invalid {0} {1:?}-side castling right")]
+    Castling(Player, Side),
+    #[error("no piece on {0}")]
+    MissingPiece(Square),
+}
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 pub trait Variant: Copy + Sized {
     /// Validate position as being legal
     fn validate(position: Unvalidated) -> Result<Position<Self>>;
-    /// Legal moves in this position
-    fn moves(position: &Position<Self>) -> Moves;
-}
-
-pub mod variant {
-
-    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-    pub struct Chess;
-    impl super::Variant for Chess {
-        // TODO: Actually validate something.
-        fn validate(position: super::Unvalidated) -> Result<super::Position<Self>, super::Error> {
-            Ok(super::Position {
-                board: position.board,
-                turn: position.turn,
-                castle: position.castle,
-                en_passant: position.en_passant,
-                reversible: position.reversible,
-                round: position.round,
-                variant: Chess,
-            })
-        }
-
-        fn moves(_position: &super::Position<Self>) -> super::Moves {
-            todo!();
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-    pub struct Freestyle;
-    impl super::Variant for Freestyle {
-        fn validate(_position: super::Unvalidated) -> Result<super::Position<Self>, super::Error> {
-            todo!();
-        }
-
-        fn moves(_position: &super::Position<Self>) -> super::Moves {
-            todo!();
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    pub struct Unvalidated;
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum File {
-    A = 0,
-    B = 1,
-    C = 2,
-    D = 3,
-    E = 4,
-    F = 5,
-    G = 6,
-    H = 7,
-}
-
-impl File {
-    pub const ALL: [File; 8] =
-        [File::A, File::B, File::C, File::D, File::E, File::F, File::G, File::H];
-
-    #[track_caller]
-    #[inline]
-    pub(crate) const fn panicky_new(coordinate: u8) -> File {
-        use File::*;
-        match coordinate {
-            0 => A,
-            1 => B,
-            2 => C,
-            3 => D,
-            4 => E,
-            5 => F,
-            6 => G,
-            7 => H,
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn panicky_from_char(c: char) -> Self {
-        use File::*;
-        match c {
-            'a' => A,
-            'b' => B,
-            'c' => C,
-            'd' => D,
-            'e' => E,
-            'f' => F,
-            'g' => G,
-            'h' => H,
-            _ => unreachable!(),
-        }
-    }
-
-    #[inline]
-    pub const fn lower(self) -> char {
-        use File::*;
-        match self {
-            A => 'a',
-            B => 'b',
-            C => 'c',
-            D => 'd',
-            E => 'e',
-            F => 'f',
-            G => 'g',
-            H => 'h',
-        }
-    }
-
-    pub fn iter() -> impl Iterator<Item = Self> {
-        (0..8).map(Self::panicky_new)
-    }
-
-    pub fn iter_rev() -> impl Iterator<Item = Self> {
-        (0..8).rev().map(Self::panicky_new)
-    }
-}
-
-impl fmt::Display for File {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use fmt::Write as _;
-
-        f.write_char(self.lower())
-    }
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Rank {
-    One = 0,
-    Two = 1,
-    Three = 2,
-    Four = 3,
-    Five = 4,
-    Six = 5,
-    Seven = 6,
-    Eight = 7,
-}
-
-impl Rank {
-    pub const ALL: [Rank; 8] = [
-        Rank::One,
-        Rank::Two,
-        Rank::Three,
-        Rank::Four,
-        Rank::Five,
-        Rank::Six,
-        Rank::Seven,
-        Rank::Eight,
-    ];
-
-    #[track_caller]
-    #[inline]
-    pub(crate) const fn panicky_new(coordinate: u8) -> Rank {
-        use Rank::*;
-        match coordinate {
-            0 => One,
-            1 => Two,
-            2 => Three,
-            3 => Four,
-            4 => Five,
-            5 => Six,
-            6 => Seven,
-            7 => Eight,
-            _ => unreachable!(),
-        }
-    }
-
-    #[inline]
-    pub const fn char(self) -> char {
-        use Rank::*;
-        match self {
-            One => '1',
-            Two => '2',
-            Three => '3',
-            Four => '4',
-            Five => '5',
-            Six => '6',
-            Seven => '7',
-            Eight => '8',
-        }
-    }
-
-    pub fn iter() -> impl Iterator<Item = Self> {
-        (0..8).map(Self::panicky_new)
-    }
-
-    pub fn iter_rev() -> impl Iterator<Item = Self> {
-        (0..8).rev().map(Self::panicky_new)
-    }
-}
-
-impl fmt::Display for Rank {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use fmt::Write as _;
-
-        f.write_char(self.char())
-    }
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
-pub enum Square {
-    A1 = 0,
-    B1,
-    C1,
-    D1,
-    E1,
-    F1,
-    G1,
-    H1,
-    A2 = 8,
-    B2,
-    C2,
-    D2,
-    E2,
-    F2,
-    G2,
-    H2,
-    A3 = 16,
-    B3,
-    C3,
-    D3,
-    E3,
-    F3,
-    G3,
-    H3,
-    A4 = 24,
-    B4,
-    C4,
-    D4,
-    E4,
-    F4,
-    G4,
-    H4,
-    A5 = 32,
-    B5,
-    C5,
-    D5,
-    E5,
-    F5,
-    G5,
-    H5,
-    A6 = 40,
-    B6,
-    C6,
-    D6,
-    E6,
-    F6,
-    G6,
-    H6,
-    A7 = 48,
-    B7,
-    C7,
-    D7,
-    E7,
-    F7,
-    G7,
-    H7,
-    A8 = 56,
-    B8,
-    C8,
-    D8,
-    E8,
-    F8,
-    G8,
-    H8,
-}
-
-impl Square {
-    pub const fn index_const(self) -> usize {
-        self as u8 as usize
-    }
-}
-
-impl All<64> for Square {
-    const ALL: [Square; 64] = [
-        Square::A1,
-        Square::B1,
-        Square::C1,
-        Square::D1,
-        Square::E1,
-        Square::F1,
-        Square::G1,
-        Square::H1,
-        Square::A2,
-        Square::B2,
-        Square::C2,
-        Square::D2,
-        Square::E2,
-        Square::F2,
-        Square::G2,
-        Square::H2,
-        Square::A3,
-        Square::B3,
-        Square::C3,
-        Square::D3,
-        Square::E3,
-        Square::F3,
-        Square::G3,
-        Square::H3,
-        Square::A4,
-        Square::B4,
-        Square::C4,
-        Square::D4,
-        Square::E4,
-        Square::F4,
-        Square::G4,
-        Square::H4,
-        Square::A5,
-        Square::B5,
-        Square::C5,
-        Square::D5,
-        Square::E5,
-        Square::F5,
-        Square::G5,
-        Square::H5,
-        Square::A6,
-        Square::B6,
-        Square::C6,
-        Square::D6,
-        Square::E6,
-        Square::F6,
-        Square::G6,
-        Square::H6,
-        Square::A7,
-        Square::B7,
-        Square::C7,
-        Square::D7,
-        Square::E7,
-        Square::F7,
-        Square::G7,
-        Square::H7,
-        Square::A8,
-        Square::B8,
-        Square::C8,
-        Square::D8,
-        Square::E8,
-        Square::F8,
-        Square::G8,
-        Square::H8,
-    ];
-
-    fn index(self) -> usize {
-        self.index_const()
-    }
-}
-
-pub struct SquareIter(u8);
-
-impl Iterator for SquareIter {
-    type Item = Square;
-
-    fn next(&mut self) -> Option<Square> {
-        if self.0 == 64 {
-            None
-        } else {
-            let square = Square::panicky_new(self.0);
-            self.0 += 1;
-            Some(square)
-        }
-    }
-}
-
-impl Square {
-    pub const ALL: [Square; 64] = <Square as All<64>>::ALL;
-
-    pub const fn new(file: File, rank: Rank) -> Self {
-        Self::panicky_new(((rank as u8) << 3) | (file as u8))
-    }
-
-    pub const fn iter() -> SquareIter {
-        SquareIter(0)
-    }
-
-    pub fn fen_iter() -> impl Iterator<Item = Square> {
-        Rank::iter_rev().flat_map(|rank| File::iter().map(move |file| Square::new(file, rank)))
-    }
-
-    #[track_caller]
-    #[inline]
-    pub(crate) const fn panicky_new(index: u8) -> Square {
-        assert!(index < 64);
-        unsafe { core::mem::transmute(index) }
-        // match index {
-        //     0 => A1, 1 => A2, 2 => A3, 3 => A4, 4 => A5, 5 => A6, 6 => A7, 7 => A8,
-        //     8 => B1, 9 => B2, 10 => B3, 11 => B4, 12 => B5, 13 => B6, 14 => B7, 15 => B8,
-        //     16 => C1, 17 => C2, 18 => C3, 19 => C4, 20 => C5, 21 => C6, 22 => C7, 23 => C8,
-        //     // 0 => D1, 1 => D2, 2 => D3, 3 => D4, 4 => D5, 5 => D6, 6 => D7, 7 => D8,
-        //     // 0 => E1, 1 => E2, 2 => E3, 3 => E4, 4 => E5, 5 => E6, 6 => E7, 7 => E8,
-        //     // 0 => F1, 1 => F2, 2 => F3, 3 => F4, 4 => F5, 5 => F6, 6 => F7, 7 => F8,
-        //     // 0 => G1, 1 => G2, 2 => G3, 3 => G4, 4 => G5, 5 => G6, 6 => G7, 7 => G8,
-        //     // 0 => H1, 1 => H2, 2 => H3, 3 => H4, 4 => H5, 5 => H6, 6 => H7, 7 => H8,
-        // }
-    }
-
-    #[inline]
-    pub const fn file(self) -> File {
-        File::panicky_new((self as u8) & 0x7)
-    }
-
-    #[inline]
-    pub const fn rank(self) -> Rank {
-        Rank::panicky_new((self as u8) >> 3)
-    }
-
-    #[inline]
-    pub const fn coordinates(self) -> (File, Rank) {
-        (self.file(), self.rank())
-    }
-}
-
-impl fmt::Display for Square {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use fmt::Write as _;
-
-        f.write_char(self.file().lower())?;
-        f.write_char(self.rank().char())
-    }
-}
-
-#[test]
-fn display_square() {
-    assert_eq!(Square::A7.to_string(), "a7".to_string());
-    assert_eq!(Square::B3.to_string(), "b3".to_string());
 }
 
 #[repr(u8)]
@@ -954,50 +547,6 @@ pub struct Position<Variant = variant::Chess> {
     pub(crate) variant: Variant, //PhantomData<Variant>,
 }
 
-// initial: rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
-// compact: rnbqkbnrpppppppp8888PPPPPPPPRNBQKBNRwKQkq
-// compact:
-// FEN: 6k1/7p/6r1/8/8/8/7P/5BRK b - - 0 1
-// Compact FEN: 6k17p6r18887P5BRKb
-// FEN: 6k1/7p/6r1/8/8/8/7P/5BRK b Kq e3 17 31
-// Compact FEN: 6k17p6r18887P5BRK b Kq e3 17 31
-//              6k17p6r18887P5BRK b 17 Kq 31 E
-//              6k17p6r18887P5BRKb31Kq17E
-// - intersperse 2 counters between 3 rights, swap counters (so b31 means 31..?)
-// - drop default values (0 for ply, 1 for fullmove)
-// - use e for e3 (white side) and E for e6 (black side)
-// - drop defaults
-//
-// Characters:
-// - board: {1..8}{p,n,b,q,k}{P,N,B,Q,K}
-// - turn: {b,w}
-//
-// pub struct Position2 {
-//     // What can we see?
-//     pub board: Board,
-//     // What can happen next?
-//     pub right: Rights,
-//     // Snippet of history
-//     pub counter: Counters,
-// }
-
-// pub struct Counters {
-//     pub reversible: u32,
-//     pub round: NonZeroU32,
-// }
-
-// pub struct Rights{
-//     pub turn: Player,
-//     pub castle: Players<Sides>,
-//     pub en_passant: Option<en_passant::Square>,
-// }
-
-// #[test]
-// fn position_size() {
-//     use core::mem::size_of as size;
-//     panic!("castle: {}, board: {}, position: {}", size::<Players<Sides>>(), size::<Board>(), size::<Position>());
-// }
-
 pub type Unvalidated = Position<variant::Unvalidated>;
 
 pub const fn unvalidated(board: Board, turn: Player) -> Unvalidated {
@@ -1032,13 +581,55 @@ impl Position<variant::Chess> {
     }
 }
 
+impl Position<variant::Unvalidated> {
+    pub const fn empty() -> Position<variant::Unvalidated> {
+        unvalidated(Board::empty(), Player::White)
+    }
+
+    pub const fn start() -> Position<variant::Unvalidated> {
+        Position {
+            board: Board::standard(),
+            turn: Player::White,
+            castle: Players {
+                black: Sides { queen: true, king: true },
+                white: Sides { queen: true, king: true },
+            },
+            en_passant: None,
+            reversible: 0,
+            round: NonZeroU32::MIN,
+            variant: variant::Unvalidated,
+        }
+    }
+
+    pub fn set_piece(&mut self, square: Square, piece: Piece) -> Option<Piece> {
+        let previous = self.board.remove(square);
+        self.board.add(square, piece);
+        previous
+    }
+
+    pub fn remove_piece(&mut self, square: Square) -> Option<Piece> {
+        self.board.remove(square)
+    }
+
+    pub fn move_piece(&mut self, from: Square, to: Square) -> Result<Option<Piece>> {
+        let Some(piece) = self.board.remove(from) else {
+            return Err(Error::MissingPiece(from));
+        };
+        let captured = self.board.remove(to);
+        self.board.add(to, piece);
+        Ok(captured)
+    }
+}
+
+impl Default for Position<variant::Unvalidated> {
+    fn default() -> Self {
+        Self::start()
+    }
+}
+
 impl<V: Variant> Position<V> {
     pub fn new(position: Unvalidated) -> Result<Self> {
         V::validate(position)
-    }
-
-    pub fn moves(&self) -> Moves {
-        V::moves(self)
     }
 
     pub const fn checkers(&self) -> Bitboard {
@@ -1053,20 +644,20 @@ impl<V: Variant> Position<V> {
     }
 
     pub fn capture_moves(&self) -> Moves {
-        self.moves().into_iter().filter(|m| m.is_capture()).collect()
+        self.legal_moves().into_iter().filter(|m| m.is_capture()).collect()
     }
 
     pub fn castle_side_moves(&self, side: Side) -> Moves {
-        self.moves().into_iter().filter(|m| m.is_castle_side(side)).collect()
+        self.legal_moves().into_iter().filter(|m| m.is_castle_side(side)).collect()
     }
 
     pub fn castle_moves(&self) -> Moves {
-        self.moves().into_iter().filter(|m| m.is_castle()).collect()
+        self.legal_moves().into_iter().filter(|m| m.is_castle()).collect()
     }
 }
 
 impl<V> Position<V> {
-    pub fn apply_unchecked(mut self, play: Move) -> Position<V> {
+    pub(crate) fn apply_unchecked(mut self, play: Move) -> Position<V> {
         let player = self.turn;
         let captured = if play.is_en_passant() {
             Some(Square::new(play.to.file(), play.from.rank()))
@@ -1088,7 +679,7 @@ impl<V> Position<V> {
             self.clear_standard_castle_rook(player.other(), captured);
         }
 
-        self.board.apply_unchecked(player, play);
+        self.board.play_unchecked(player, play);
 
         self.en_passant = None;
         if play.role == Role::Pawn {
@@ -1096,7 +687,7 @@ impl<V> Position<V> {
             let to = play.to as u8;
             if from.abs_diff(to) == 16 {
                 self.en_passant =
-                    en_passant::Square::try_from(Square::panicky_new((from + to) / 2)).ok();
+                    en_passant::Square::try_from(Square::panicky_from_index((from + to) / 2)).ok();
             }
         }
 

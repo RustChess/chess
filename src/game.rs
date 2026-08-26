@@ -10,6 +10,9 @@ use crate::{
     position::{File, Moves, Rank},
 };
 
+pub mod cursor;
+pub use cursor::Cursor;
+
 pub type Id = String;
 pub type Duplicate = usize;
 
@@ -243,6 +246,10 @@ impl Game {
 
     pub fn lines_mut(&mut self) -> LinesMut<'_> {
         LinesMut { game: self, id: None }
+    }
+
+    pub fn cursor(self) -> Cursor {
+        Cursor::new(self)
     }
 
     pub fn lines_mut_at(&mut self, id: Option<Id>) -> Option<LinesMut<'_>> {

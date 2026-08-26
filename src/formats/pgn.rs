@@ -1041,7 +1041,7 @@ mod tests {
     fn converts_fen_game() {
         let pgn = parse_game
             .parse(
-                r#"[FEN "8/8/8/8/8/8/4P3/4K3 w - - 0 1"]
+                r#"[FEN "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1"]
 
 1. e4 *
 "#,

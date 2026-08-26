@@ -19,10 +19,12 @@ pub mod const_map;
 pub use const_map::Map;
 pub mod formats;
 pub mod game;
+pub use game::{Cursor, Game, Id};
 #[cfg(feature = "lichess")]
 pub mod lichess;
 pub mod moves;
 #[cfg(test)]
 mod perft;
 pub mod position;
-pub use position::{Move, Position};
+pub use position::{Board, File, Move, Piece, Player, Position, Rank, Role, Side, Square};
+pub mod variant;

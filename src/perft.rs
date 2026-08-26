@@ -1,17 +1,8 @@
 use crate::{
     formats::{Parser as _, fen::position_fen},
-    position::{Moves, Position, Result, Variant, variant::Unvalidated},
+    position::Position,
+    variant::Unvalidated,
 };
-
-impl Variant for Unvalidated {
-    fn validate(position: Position<Unvalidated>) -> Result<Position<Self>> {
-        Ok(position)
-    }
-
-    fn moves(position: &Position<Self>) -> Moves {
-        position.legal_moves()
-    }
-}
 
 pub(crate) fn perft(position: Position<Unvalidated>, depth: u32) -> u64 {
     if depth == 0 {

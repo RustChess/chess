@@ -194,7 +194,7 @@ pub fn token<'a>(count: &mut usize) -> impl FnMut(&mut Input<'a>) -> ModalResult
                 use PawnMove::*;
 
                 let offset = pawn - 0x6f;
-                let file = File::panicky_new(offset / 8);
+                let file = File::panicky_from_index(offset / 8);
                 match offset % 4 {
                     0 => Pawn(file, One),
                     1 => Pawn(file, Two),
@@ -224,8 +224,8 @@ pub fn token<'a>(count: &mut usize) -> impl FnMut(&mut Input<'a>) -> ModalResult
                 };
 
                 Move::FromTo(
-                    Square::panicky_new(from as u8),
-                    Square::panicky_new(to as u8),
+                    Square::panicky_from_index(from as u8),
+                    Square::panicky_from_index(to as u8),
                     promoted,
                 )
             }

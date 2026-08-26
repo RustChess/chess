@@ -354,7 +354,7 @@ impl Square {
         // adding coordinates, and then checking if file + rank are in 0..=7
         let file_diff = (target & 0x7) - (square & 0x7);
         if target >= 0 && target < 64 && file_diff >= -2 && file_diff <= 2 {
-            Some(Square::panicky_new(target as u8))
+            Some(Square::panicky_from_index(target as u8))
         } else {
             None
         }

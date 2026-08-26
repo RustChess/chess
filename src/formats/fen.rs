@@ -1,11 +1,14 @@
 use core::num::NonZeroU32;
 
+#[cfg(test)]
+use crate::variant::Chess;
 use crate::{
     bitboard::Bitboard,
     position::{
-        Board, File, Player, Players, Position, Rank, Role, Roles, Side, Sides, Square, en_passant,
-        variant::{Chess, Unvalidated},
+        Board, File, Player, Players, Position, Rank, Role, Roles, Side, Sides, Square, Variant,
+        en_passant,
     },
+    variant::Unvalidated,
 };
 
 use super::{StrInput as Input, prelude::*};
@@ -16,7 +19,22 @@ use super::{StrInput as Input, prelude::*};
 
 // pub struct Fen(String);
 
-impl Position<Chess> {
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid FEN: {0}")]
+    Invalid(String),
+}
+
+pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+impl<V: Variant> Position<V> {
+    pub fn from_fen(fen: &str) -> Result<Self> {
+        let position = position_fen.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))?;
+        Position::new(position).map_err(|_| Error::Invalid(fen.to_string()))
+    }
+}
+
+impl<V> Position<V> {
     pub fn fen(&self) -> String {
         format!(
             "{} {} {} {} {} {}",
@@ -113,7 +131,7 @@ pub fn board_fen(input: &mut Input<'_>) -> ModalResult<Board> {
 
     let mut players: Players<Bitboard> = Default::default();
     let mut roles: Roles<Bitboard> = Default::default();
-    let mut it = Square::fen_iter();
+    let mut it = Square::rank_rev_iter();
     while let Some(square) = it.next() {
         match preceded(opt('/'), board_fen_char).parse_next(input)? {
             i @ '1'..='8' => {
@@ -246,7 +264,8 @@ fn board_fen_example() {
     assert_eq!(position.en_passant.map(Into::into), Some(Square::new(File::E, Rank::Three)));
     assert_eq!(position.reversible, 1);
     assert_eq!(u32::from(position.round), 3);
-    assert_eq!(Position::new(position).unwrap().fen(), fen);
+    assert_eq!(Position::<Chess>::new(position).unwrap().fen(), fen);
+    assert_eq!(Position::<Chess>::from_fen(fen).unwrap().fen(), fen);
 
     let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
     let position = position_partial_fen.parse(partial_fen).unwrap();
@@ -259,7 +278,7 @@ fn board_fen_example() {
     assert_eq!(position.reversible, 0);
     assert_eq!(u32::from(position.round), 1);
     assert_eq!(
-        Position::new(position).unwrap().fen(),
+        Position::<Chess>::new(position).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
     );
 
@@ -274,7 +293,7 @@ fn board_fen_example() {
     assert_eq!(position.reversible, 0);
     assert_eq!(u32::from(position.round), 1);
     assert_eq!(
-        Position::new(position).unwrap().fen(),
+        Position::<Chess>::new(position).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
     );
 }

@@ -291,7 +291,7 @@ impl Bitboard {
         if self.is_empty() {
             None
         } else {
-            Some(Square::panicky_new(self.0.trailing_zeros() as u8))
+            Some(Square::panicky_from_index(self.0.trailing_zeros() as u8))
         }
     }
 
@@ -328,7 +328,7 @@ impl Bitboard {
     #[inline]
     pub const fn last(self) -> Option<Square> {
         if let Some(index) = self.0.checked_ilog2() {
-            Some(Square::panicky_new(index as u8))
+            Some(Square::panicky_from_index(index as u8))
         } else {
             None
         }
@@ -721,7 +721,7 @@ impl Iterator for IntoIter {
         let mut accum = init;
         let Bitboard(mut mask) = self.0;
         while mask != 0 {
-            accum = f(accum, Square::panicky_new(mask.trailing_zeros() as u8));
+            accum = f(accum, Square::panicky_from_index(mask.trailing_zeros() as u8));
             mask = mask & mask.wrapping_sub(1);
         }
         accum

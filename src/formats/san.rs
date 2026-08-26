@@ -252,7 +252,7 @@ fn file(input: &mut Input<'_>) -> ModalResult<File> {
 }
 
 fn rank(input: &mut Input<'_>) -> ModalResult<Rank> {
-    one_of(|c| "12345678".contains(c)).map(|c| Rank::panicky_new(c as u8 - b'1')).parse_next(input)
+    one_of(|c| "12345678".contains(c)).map(Rank::panicky_from_char).parse_next(input)
 }
 
 fn check(input: &mut Input<'_>) -> ModalResult<Check> {
