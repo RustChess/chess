@@ -11,7 +11,7 @@
 extern crate serde;
 
 #[cfg(feature = "serde")]
-#[macro_use(SerializeDisplay)]
+#[macro_use(DeserializeFromStr, SerializeDisplay)]
 extern crate serde_with;
 
 pub mod bitboard;

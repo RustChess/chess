@@ -441,6 +441,18 @@ impl Role {
         }
     }
 
+    pub const fn figurine(self) -> char {
+        use Role::*;
+        match self {
+            Pawn => '♙',
+            Knight => '♘',
+            Bishop => '♗',
+            Rook => '♖',
+            Queen => '♕',
+            King => '♔',
+        }
+    }
+
     pub const fn black(self) -> char {
         self.lower()
     }
@@ -657,6 +669,23 @@ impl<V: Variant> Position<V> {
 }
 
 impl<V> Position<V> {
+    pub fn first_ply(&self) -> usize {
+        let round = self.round.get() as usize - 1;
+        round * 2 + usize::from(self.turn == Player::Black)
+    }
+
+    pub fn unvalidated(self) -> Position<variant::Unvalidated> {
+        Position {
+            board: self.board,
+            turn: self.turn,
+            castle: self.castle,
+            en_passant: self.en_passant,
+            reversible: self.reversible,
+            round: self.round,
+            variant: variant::Unvalidated,
+        }
+    }
+
     pub(crate) fn apply_unchecked(mut self, play: Move) -> Position<V> {
         let player = self.turn;
         let captured = if play.is_en_passant() {

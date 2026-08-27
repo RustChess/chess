@@ -194,6 +194,35 @@ fn annotations(meta: &game::Meta) -> Vec<Annotation> {
         .collect()
 }
 
+impl Game {
+    pub fn start(&self) -> Option<Position> {
+        position(&self.tag_pairs).ok()
+    }
+
+    pub fn first_ply(&self) -> usize {
+        self.start().map(|position| position.first_ply()).unwrap_or(0)
+    }
+
+    pub fn movetext(&self) -> String {
+        self.write_movetext(Notation::San)
+    }
+
+    pub fn figurine_movetext(&self) -> String {
+        self.write_movetext(Notation::Figurine)
+    }
+
+    fn write_movetext(&self, notation: Notation) -> String {
+        let mut movetext = String::new();
+        let mut wrap = Wrap::<_, 0>::new(&mut movetext);
+        if let Some(intro) = &self.intro {
+            wrap.token(intro).expect("writing PGN movetext to string");
+        }
+        write_moves(&self.moves, &mut wrap, self.first_ply(), notation)
+            .expect("writing PGN movetext to string");
+        movetext
+    }
+}
+
 fn position(tag_pairs: &[TagPair]) -> Result<Position, Error> {
     if let Some(fen) = tag_pairs.iter().find(|tag_pair| tag_pair.name == Tag::Fen) {
         let unvalidated = fen::position_fen
@@ -280,11 +309,11 @@ impl fmt::Display for Game {
         if !self.tag_pairs.is_empty() {
             writeln!(f)?;
         }
-        let mut wrap = Wrap::new(f);
+        let mut wrap = Wrap::<_, 80>::new(f);
         if let Some(intro) = &self.intro {
             wrap.token(intro)?;
         }
-        write_moves(&self.moves, &mut wrap, 0)?;
+        write_moves(&self.moves, &mut wrap, self.first_ply(), Notation::San)?;
         wrap.token(self.outcome)
     }
 }
@@ -515,21 +544,32 @@ impl fmt::Display for Outcome {
     }
 }
 
-fn write_moves(moves: &[Move], wrap: &mut Wrap<'_, '_>, first_ply: usize) -> fmt::Result {
+fn write_moves<W: fmt::Write + ?Sized, const WIDTH: usize>(
+    moves: &[Move],
+    wrap: &mut Wrap<'_, W, WIDTH>,
+    first_ply: usize,
+    notation: Notation,
+) -> fmt::Result {
     for (ply, (index, play)) in (first_ply..).zip(moves.iter().enumerate()) {
         if should_write_move_number(ply, index, moves) {
             wrap.token(MoveNumber(ply))?;
-            wrap.token(play.san)?;
-        } else {
-            wrap.token(play.san)?;
         }
-        play.write_tail(wrap, ply)?;
+        match notation {
+            Notation::San => wrap.token(play.san)?,
+            Notation::Figurine => wrap.token(play.san.figurine())?,
+        }
+        play.write_tail(wrap, ply, notation)?;
     }
     Ok(())
 }
 
 impl Move {
-    fn write_tail(&self, wrap: &mut Wrap<'_, '_>, ply: usize) -> fmt::Result {
+    fn write_tail<W: fmt::Write + ?Sized, const WIDTH: usize>(
+        &self,
+        wrap: &mut Wrap<'_, W, WIDTH>,
+        ply: usize,
+        notation: Notation,
+    ) -> fmt::Result {
         let mut commands = Vec::new();
         for annotation in &self.annotations {
             match annotation {
@@ -541,24 +581,35 @@ impl Move {
         if !commands.is_empty() || self.comment.is_some() {
             wrap.token(MoveComment { commands, text: self.comment.clone() })?;
         }
-        write_variations(&self.variations, wrap, ply)?;
+        write_variations(&self.variations, wrap, ply, notation)?;
         Ok(())
     }
 }
 
-fn write_variations(variations: &[Variation], wrap: &mut Wrap<'_, '_>, ply: usize) -> fmt::Result {
+fn write_variations<W: fmt::Write + ?Sized, const WIDTH: usize>(
+    variations: &[Variation],
+    wrap: &mut Wrap<'_, W, WIDTH>,
+    ply: usize,
+    notation: Notation,
+) -> fmt::Result {
     for variation in variations {
         wrap.open("(")?;
         if let Some(intro) = &variation.intro {
             wrap.token(intro)?;
         }
-        write_moves(&variation.moves, wrap, ply)?;
+        write_moves(&variation.moves, wrap, ply, notation)?;
         wrap.close(")")?;
         if let Some(outro) = &variation.outro {
             wrap.token(outro)?;
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum Notation {
+    San,
+    Figurine,
 }
 
 #[derive(Debug)]
@@ -614,23 +665,21 @@ impl fmt::Display for MoveNumber {
     }
 }
 
-struct Wrap<'a, 'b> {
-    f: &'a mut fmt::Formatter<'b>,
+struct Wrap<'a, W: fmt::Write + ?Sized, const WIDTH: usize = 80> {
+    f: &'a mut W,
     line: usize,
     glued: bool,
 }
 
-impl<'a, 'b> Wrap<'a, 'b> {
-    const WIDTH: usize = 80;
-
-    fn new(f: &'a mut fmt::Formatter<'b>) -> Self {
+impl<'a, W: fmt::Write + ?Sized, const WIDTH: usize> Wrap<'a, W, WIDTH> {
+    fn new(f: &'a mut W) -> Self {
         Self { f, line: 0, glued: false }
     }
 
     fn token(&mut self, token: impl fmt::Display) -> fmt::Result {
         let token = token.to_string();
         let separator = usize::from(self.line > 0 && !self.glued);
-        if self.line > 0 && self.line + separator + token.len() > Self::WIDTH {
+        if WIDTH > 0 && self.line > 0 && self.line + separator + token.len() > WIDTH {
             writeln!(self.f)?;
             self.line = 0;
             self.glued = false;
@@ -1053,6 +1102,34 @@ mod tests {
         let e4 = lines.get(0).unwrap();
         assert_eq!(e4.play().from, Square::E2);
         assert_eq!(e4.play().to, Square::E4);
+    }
+
+    #[test]
+    fn displays_fen_game_from_its_start_ply() {
+        let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
+        let position = Position::new(fen::position_fen.parse(fen).unwrap()).unwrap();
+        let mut game = game::Game::new(position);
+        game.lines_mut().push(crate::Move::normal(Role::King, Square::E8, Square::D8)).unwrap();
+
+        let pgn = Game::from(game);
+        assert!(pgn.to_string().contains("\n17... Kd8 *"), "{}", pgn);
+        assert_eq!(pgn.movetext(), "17... Kd8");
+    }
+
+    #[test]
+    fn displays_figurine_movetext() {
+        let mut game = game::Game::new(Position::standard());
+        let e4 =
+            game.lines_mut().push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
+        game.play_mut(e4)
+            .unwrap()
+            .lines_mut()
+            .push(crate::Move::normal(Role::Knight, Square::G8, Square::F6))
+            .unwrap();
+
+        let pgn = Game::from(game);
+        assert_eq!(pgn.movetext(), "1. e4 Nf6");
+        assert_eq!(pgn.figurine_movetext(), "1. e4 ♘f6");
     }
 
     #[test]

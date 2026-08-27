@@ -1,6 +1,6 @@
 //! Standard Algebraic Notation.
 
-use core::fmt;
+use core::{fmt, str::FromStr};
 
 use crate::{
     game,
@@ -36,6 +36,8 @@ pub enum Check {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("invalid SAN move")]
+    Invalid,
     #[error("illegal SAN move")]
     Illegal,
     #[error("ambiguous SAN move")]
@@ -49,6 +51,16 @@ impl fmt::Display for San {
             check.fmt(f)?;
         }
         Ok(())
+    }
+}
+
+impl San {
+    pub fn figurine(&self) -> String {
+        let mut text = self.play.figurine();
+        if let Some(check) = self.check {
+            text.push_str(&check.to_string());
+        }
+        text
     }
 }
 
@@ -76,6 +88,36 @@ impl fmt::Display for Move {
             }
             Move::Castle(Side::King) => write!(f, "O-O"),
             Move::Castle(Side::Queen) => write!(f, "O-O-O"),
+        }
+    }
+}
+
+impl Move {
+    fn figurine(&self) -> String {
+        match *self {
+            Move::Normal { role, file, rank, capture, to, promotion } => {
+                let mut text = String::new();
+                if role != Role::Pawn {
+                    text.push(role.figurine());
+                }
+                if let Some(file) = file {
+                    text.push_str(&file.to_string());
+                }
+                if let Some(rank) = rank {
+                    text.push_str(&rank.to_string());
+                }
+                if capture {
+                    text.push('x');
+                }
+                text.push_str(&to.to_string());
+                if let Some(promotion) = promotion {
+                    text.push('=');
+                    text.push(promotion.figurine());
+                }
+                text
+            }
+            Move::Castle(Side::King) => "O-O".to_string(),
+            Move::Castle(Side::Queen) => "O-O-O".to_string(),
         }
     }
 }
@@ -135,22 +177,47 @@ impl San {
     }
 }
 
+impl FromStr for San {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut input = s.trim();
+        let san = san(&mut input).map_err(|_| Error::Invalid)?;
+        input.is_empty().then_some(san).ok_or(Error::Invalid)
+    }
+}
+
 pub fn san(input: &mut Input<'_>) -> ModalResult<San> {
-    trim(input);
     let play = alt((castle, normal)).context(StrContext::Label("SAN move")).parse_next(input)?;
     let check = opt(check).context(StrContext::Label("SAN check")).parse_next(input)?;
-    trim(input);
     Ok(San { play, check })
 }
 
 fn castle(input: &mut Input<'_>) -> ModalResult<Move> {
+    alt((queen_castle, king_castle)).context(StrContext::Label("SAN castle")).parse_next(input)
+}
+
+fn queen_castle(input: &mut Input<'_>) -> ModalResult<Move> {
     alt((
         "O-O-O".value(Move::Castle(Side::Queen)),
+        "o-o-o".value(Move::Castle(Side::Queen)),
+        "OOO".value(Move::Castle(Side::Queen)),
+        "ooo".value(Move::Castle(Side::Queen)),
         "0-0-0".value(Move::Castle(Side::Queen)),
-        "O-O".value(Move::Castle(Side::King)),
-        "0-0".value(Move::Castle(Side::King)),
+        "000".value(Move::Castle(Side::Queen)),
     ))
-    .context(StrContext::Label("SAN castle"))
+    .parse_next(input)
+}
+
+fn king_castle(input: &mut Input<'_>) -> ModalResult<Move> {
+    alt((
+        "O-O".value(Move::Castle(Side::King)),
+        "o-o".value(Move::Castle(Side::King)),
+        "OO".value(Move::Castle(Side::King)),
+        "oo".value(Move::Castle(Side::King)),
+        "0-0".value(Move::Castle(Side::King)),
+        "00".value(Move::Castle(Side::King)),
+    ))
     .parse_next(input)
 }
 
@@ -226,20 +293,16 @@ fn normal_inner(input: &mut Input<'_>) -> ModalResult<Move> {
     }
 }
 
-fn trim(input: &mut Input<'_>) {
-    *input = input.trim_start();
-}
-
 fn square(input: &mut Input<'_>) -> ModalResult<Square> {
     (file, rank).map(|(file, rank)| Square::new(file, rank)).parse_next(input)
 }
 
 fn role(input: &mut Input<'_>) -> ModalResult<Role> {
-    one_of(|c| "NBRQK".contains(c)).map(Role::panicky_from_char).parse_next(input)
+    one_of(|c| "NBRQKnbrqk".contains(c)).map(Role::panicky_from_char).parse_next(input)
 }
 
 fn promotion_role(input: &mut Input<'_>) -> ModalResult<Role> {
-    one_of(|c| "NBRQ".contains(c)).map(Role::panicky_from_char).parse_next(input)
+    one_of(|c| "NBRQnbrq".contains(c)).map(Role::panicky_from_char).parse_next(input)
 }
 
 fn promotion(input: &mut Input<'_>) -> ModalResult<Role> {
@@ -287,9 +350,14 @@ mod tests {
 
     #[test]
     fn tolerates_whitespace() {
-        let parsed = san.parse("  O-O-O#  ").unwrap();
+        let parsed = San::from_str("  O-O-O#  ").unwrap();
         assert_eq!(parsed.play, Move::Castle(Side::Queen));
         assert_eq!(parsed.check, Some(Check::Checkmate));
+    }
+
+    #[test]
+    fn san_parser_does_not_consume_padding() {
+        assert!(san.parse("  O-O-O#  ").is_err());
     }
 
     #[test]
@@ -307,6 +375,17 @@ mod tests {
             }
         );
         assert_eq!(parsed.check, Some(Check::Check));
+    }
+
+    #[test]
+    fn parses_lowercase_user_input() {
+        assert_eq!(San::from_str("nf3").unwrap().to_string(), "Nf3");
+        assert_eq!(San::from_str("exd8=q#").unwrap().to_string(), "exd8=Q#");
+        assert_eq!(San::from_str("o-o").unwrap().to_string(), "O-O");
+        assert_eq!(San::from_str("oo").unwrap().to_string(), "O-O");
+        assert_eq!(San::from_str("ooo").unwrap().to_string(), "O-O-O");
+        assert_eq!(San::from_str("00").unwrap().to_string(), "O-O");
+        assert_eq!(San::from_str("000").unwrap().to_string(), "O-O-O");
     }
 
     #[test]

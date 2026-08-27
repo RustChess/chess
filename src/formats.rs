@@ -36,3 +36,4 @@ pub mod cbv;
 pub mod fen;
 pub mod pgn;
 pub mod san;
+pub mod uci;

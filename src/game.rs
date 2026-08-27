@@ -36,14 +36,14 @@ pub fn id() -> Id {
     id
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct State {
     pub position: Position,
     pub legal: Moves,
     pub check: Option<Check>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Game {
     pub id: Id,
     pub tags: Vec<TagPair>,
@@ -58,7 +58,7 @@ pub struct Game {
     slots: Map<Id, Play>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Play {
     id: Id,
     previous: Option<Id>,
@@ -69,7 +69,7 @@ pub struct Play {
     lines: Vec<Id>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Meta {
     pub intro: Option<Text>,
     pub comment: Option<Text>,
@@ -471,6 +471,14 @@ impl LinesRef<'_> {
         self.position(play).is_some()
     }
 
+    pub fn state(&self) -> &State {
+        self.game.previous_state(self.id.as_ref())
+    }
+
+    pub fn legal(&self) -> &[Move] {
+        &self.state().legal
+    }
+
     pub fn lines(&self) -> &[Id] {
         self.lines
     }
@@ -526,6 +534,10 @@ pub struct LinesMut<'a> {
 impl LinesMut<'_> {
     pub fn state(&self) -> &State {
         self.game.previous_state(self.id.as_ref())
+    }
+
+    pub fn legal(&self) -> &[Move] {
+        &self.state().legal
     }
 
     pub fn as_ref(&self) -> LinesRef<'_> {

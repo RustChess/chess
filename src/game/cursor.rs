@@ -1,7 +1,7 @@
 use super::*;
 
 /// Cursor over the main line of a linear game.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Cursor {
     game: Game,
     at: Option<Id>,
@@ -30,6 +30,20 @@ impl Cursor {
 
     pub fn at(&self) -> Option<&Id> {
         self.at.as_ref()
+    }
+
+    pub fn state(&self) -> &State {
+        self.game.previous_state(self.at.as_ref())
+    }
+
+    #[must_use]
+    pub fn set(&mut self, at: Option<Id>) -> bool {
+        if at.as_ref().is_some_and(|id| !self.game.slots.contains_key(id)) {
+            return false;
+        }
+
+        self.at = at;
+        true
     }
 
     pub fn play(&self) -> Option<PlayRef<'_>> {
