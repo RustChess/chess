@@ -12,9 +12,13 @@ use crate::{
 
 pub mod cursor;
 pub use cursor::Cursor;
+#[cfg(feature = "serde")]
+pub mod storage;
 
-pub type Id = String;
 pub type Duplicate = usize;
+pub type Result<T, E = Error> = core::result::Result<T, E>;
+/// A local index into the game's slot map, which actually stores the moves of the game.
+pub type Slot = u32;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -26,56 +30,298 @@ pub enum Error {
     OutOfBounds { index: usize, len: usize },
 }
 
-pub fn id() -> Id {
-    const LETTERS: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    let mut id = String::with_capacity(12);
-    for _ in 0..12 {
-        let index = rand::random::<u64>() as usize % LETTERS.len();
-        id.push(LETTERS[index] as char);
-    }
-    id
-}
-
-#[derive(Clone, PartialEq)]
-pub struct State {
-    pub position: Position,
-    pub legal: Moves,
-    pub check: Option<Check>,
-}
-
+/// A game of chess, including variations and annotations.
 #[derive(Clone, PartialEq)]
 pub struct Game {
-    pub id: Id,
     pub tags: Vec<TagPair>,
     pub intro: Option<Text>,
     pub outcome: Outcome,
-    /// State before any lines start.
-    state: State,
-    /// The (initial) lines of the game, each containing a sequence of moves,
-    /// with recursively nested lines after each move.
-    lines: Vec<Id>,
-    /// The "arena" in which plays are stored.
-    slots: Map<Id, Play>,
+    /// Position before any options are played.
+    start: Position,
+    cache: Cache,
+    /// Options to play from the start position.
+    options: Vec<Slot>,
+    slots: Map<Slot, Play>,
+    next_slot: Slot,
 }
 
 #[derive(Clone, PartialEq)]
 pub struct Play {
-    id: Id,
-    previous: Option<Id>,
+    slot: Slot,
+    previous: Node,
     pub meta: Meta,
-    state: State,
+    // Position after playing this move, before any options are played.
+    position: Position,
+    cache: Cache,
     play: Move,
     short: Short,
-    lines: Vec<Id>,
+    /// Options to play after this position.
+    options: Vec<Slot>,
 }
 
-#[derive(Clone, Default, PartialEq)]
+/// A handle to a node in the tree of variations of a game of chess.
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
+pub enum Node {
+    #[default]
+    Start,
+    Play(Slot),
+}
+
+impl Node {
+    pub fn is_start(&self) -> bool {
+        matches!(self, Self::Start)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Node {
+    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Start => Option::<Slot>::None.serialize(serializer),
+            Self::Play(slot) => Some(*slot).serialize(serializer),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Node {
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match Option::<Slot>::deserialize(deserializer)? {
+            Some(slot) => Self::Play(slot),
+            None => Self::Start,
+        })
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Cache {
+    pub legal: Moves,
+    pub check: Option<Check>,
+}
+
+impl Game {
+    pub fn new(position: Position) -> Self {
+        let legal = position.legal_moves();
+        Self {
+            tags: Default::default(),
+            intro: None,
+            outcome: Default::default(),
+            start: position,
+            cache: Cache { legal, check: None },
+            options: Default::default(),
+            slots: Default::default(),
+            next_slot: 0,
+        }
+    }
+
+    pub fn start(&self) -> Position {
+        self.start
+    }
+
+    pub fn play(&self, slot: Slot) -> Option<PlayRef<'_>> {
+        self.slots.contains_key(&slot).then_some(PlayRef { game: self, slot })
+    }
+
+    pub fn play_mut(&mut self, slot: Slot) -> Option<PlayMut<'_>> {
+        self.slots.contains_key(&slot).then_some(PlayMut { game: self, slot })
+    }
+
+    pub fn options(&self) -> OptionsRef<'_> {
+        self.options_ref(Node::Start)
+    }
+
+    pub fn options_mut(&mut self) -> OptionsMut<'_> {
+        OptionsMut { game: self, node: Node::Start }
+    }
+
+    pub fn cursor(self) -> Cursor {
+        Cursor::new(self)
+    }
+
+    pub fn options_mut_at(&mut self, node: Node) -> Option<OptionsMut<'_>> {
+        if self.contains_node(node) { Some(OptionsMut { game: self, node }) } else { None }
+    }
+
+    fn contains_node(&self, node: Node) -> bool {
+        match node {
+            Node::Start => true,
+            Node::Play(slot) => self.slots.contains_key(&slot),
+        }
+    }
+
+    fn options_ref(&self, node: Node) -> OptionsRef<'_> {
+        let options = self.options_slice(node);
+        OptionsRef { game: self, node, options }
+    }
+
+    fn options_slice(&self, node: Node) -> &[Slot] {
+        match node {
+            Node::Start => &self.options,
+            Node::Play(slot) => &self.slots.get(&slot).expect("slot exists").options,
+        }
+    }
+
+    fn options_mut_raw(&mut self, node: Node) -> &mut Vec<Slot> {
+        match node {
+            Node::Start => &mut self.options,
+            Node::Play(slot) => &mut self.slots.get_mut(&slot).expect("slot exists").options,
+        }
+    }
+
+    // push a new Move option in last position to the game's specified node.
+    pub(crate) fn push_option(&mut self, node: Node, play: Move) -> Result<Slot, Error> {
+        let play = self.create_play(node, play)?;
+        self.options_mut_raw(node).push(play.slot);
+        Ok(play.slot)
+    }
+
+    // insert a new Move option at the indicated position to the game's specified node.
+    pub(crate) fn insert_option(
+        &mut self,
+        node: Node,
+        index: usize,
+        play: Move,
+    ) -> Result<Slot, Error> {
+        let len = self.options_ref(node).len();
+        if index > len {
+            return Err(Error::OutOfBounds { index, len });
+        }
+        let play = self.create_play(node, play)?;
+        self.options_mut_raw(node).insert(index, play.slot);
+        Ok(play.slot)
+    }
+
+    // Responsible for validating the move, calculating derived state, assigning
+    // a slot, and storing the play. It does not attach the play to the options of the node yet.
+    fn create_play(&mut self, node: Node, play: Move) -> Result<Play, Error> {
+        // avoid move generation
+        if let Some(index) = self.options_ref(node).index(play) {
+            return Err(Error::Duplicate(index));
+        }
+
+        let previous_position = self.previous_position(node);
+        let previous_cache = self.previous_cache(node);
+        if let Some(Check::Checkmate) = previous_cache.check {
+            return Err(Error::Illegal);
+        }
+
+        // legality check (legal moves are already computed)
+        if !previous_cache.legal.contains(&play) {
+            return Err(Error::Illegal);
+        }
+
+        // apply
+        let position = previous_position.apply_unchecked(play);
+
+        // compute legal moves - with cache this with the new position
+        let legal = position.legal_moves();
+
+        // update derived state
+        let check = if position.is_check() {
+            Some(if legal.is_empty() { Check::Checkmate } else { Check::Check })
+        } else {
+            None
+        };
+        let short = Short::new(&previous_cache.legal, play);
+
+        // create the detached play
+        let play = Play {
+            slot: self.next_slot,
+            previous: node,
+            meta: Default::default(),
+            position,
+            cache: Cache { legal, check },
+            play,
+            short,
+            options: Default::default(),
+        };
+        self.next_slot += 1;
+        self.slots.insert(play.slot, play.clone());
+
+        Ok(play)
+    }
+
+    fn previous_position(&self, node: Node) -> Position {
+        match node {
+            Node::Start => self.start,
+            Node::Play(slot) => self.slots.get(&slot).expect("slot exists").position,
+        }
+    }
+
+    fn previous_cache(&self, node: Node) -> &Cache {
+        match node {
+            Node::Start => &self.cache,
+            Node::Play(slot) => &self.slots.get(&slot).expect("slot exists").cache,
+        }
+    }
+
+    fn delete_slot(&mut self, slot: Slot) {
+        let play = self.slots.remove(&slot).expect("play exists");
+        for option in &play.options {
+            self.delete_slot(*option);
+        }
+    }
+}
+
+impl Play {
+    pub fn slot(&self) -> Slot {
+        self.slot
+    }
+
+    pub fn previous(&self) -> Node {
+        self.previous
+    }
+
+    pub fn play(&self) -> Move {
+        self.play
+    }
+
+    pub fn short(&self) -> Short {
+        self.short
+    }
+
+    pub fn check(&self) -> Option<Check> {
+        self.cache.check
+    }
+
+    pub fn position(&self) -> Position {
+        self.position
+    }
+
+    pub fn legal(&self) -> &[Move] {
+        &self.cache.legal
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Meta {
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub intro: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub comment: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub outro: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
     pub nags: Vec<Nag>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
     pub commands: Vec<Command>,
+}
+
+impl Meta {
+    pub fn is_empty(&self) -> bool {
+        self.intro.is_none()
+            && self.comment.is_none()
+            && self.outro.is_none()
+            && self.nags.is_empty()
+            && self.commands.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -139,12 +385,14 @@ impl Ambiguity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TagPair {
     pub name: Tag,
     pub value: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Tag {
     Event,
     Site,
@@ -159,6 +407,7 @@ pub enum Tag {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Outcome {
     White,
     Black,
@@ -168,6 +417,8 @@ pub enum Outcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Text(String);
 
 impl Text {
@@ -203,401 +454,267 @@ impl Deref for Text {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Command {
     pub command: String,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
     pub parameters: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
 pub enum Nag {
     Numeric(u32),
     Symbol(String),
 }
 
-impl Game {
-    pub fn new(position: Position) -> Self {
-        let legal = position.legal_moves();
-        Self {
-            id: id(),
-            tags: Default::default(),
-            intro: None,
-            outcome: Default::default(),
-            state: State { position, legal, check: None },
-            lines: Default::default(),
-            slots: Default::default(),
-        }
-    }
-
-    pub fn start(&self) -> Position {
-        self.state.position
-    }
-
-    pub fn play(&self, id: Id) -> Option<PlayRef<'_>> {
-        self.slots.contains_key(&id).then_some(PlayRef { game: self, id })
-    }
-
-    pub fn play_mut(&mut self, id: Id) -> Option<PlayMut<'_>> {
-        self.slots.contains_key(&id).then_some(PlayMut { game: self, id })
-    }
-
-    pub fn lines(&self) -> LinesRef<'_> {
-        self.lines_ref(None)
-    }
-
-    pub fn lines_mut(&mut self) -> LinesMut<'_> {
-        LinesMut { game: self, id: None }
-    }
-
-    pub fn cursor(self) -> Cursor {
-        Cursor::new(self)
-    }
-
-    pub fn lines_mut_at(&mut self, id: Option<Id>) -> Option<LinesMut<'_>> {
-        if id.as_ref().is_none_or(|id| self.slots.contains_key(id)) {
-            Some(LinesMut { game: self, id })
-        } else {
-            None
-        }
-    }
-
-    fn lines_ref(&self, id: Option<Id>) -> LinesRef<'_> {
-        let lines = self.lines_slice(id.as_ref());
-        LinesRef { game: self, id, lines }
-    }
-
-    fn lines_slice(&self, id: Option<&Id>) -> &[Id] {
-        match id {
-            None => &self.lines,
-            Some(id) => &self.slots.get(id).expect("id exists").lines,
-        }
-    }
-
-    fn lines_mut_raw(&mut self, id: Option<&Id>) -> &mut Vec<Id> {
-        match id {
-            None => &mut self.lines,
-            Some(id) => &mut self.slots.get_mut(id).expect("id exists").lines,
-        }
-    }
-
-    pub(crate) fn push_line(&mut self, id: Option<Id>, play: Move) -> Result<Id, Error> {
-        let play = self.new_detached_play(id.clone(), play)?;
-        self.lines_mut_raw(id.as_ref()).push(play.id.clone());
-        Ok(play.id)
-    }
-
-    pub(crate) fn insert_line(
-        &mut self,
-        id: Option<Id>,
-        index: usize,
-        play: Move,
-    ) -> Result<Id, Error> {
-        let len = self.lines_ref(id.clone()).len();
-        if index > len {
-            return Err(Error::OutOfBounds { index, len });
-        }
-        let play = self.new_detached_play(id.clone(), play)?;
-        self.lines_mut_raw(id.as_ref()).insert(index, play.id.clone());
-        Ok(play.id)
-    }
-
-    fn new_detached_play(&mut self, id: Option<Id>, play: Move) -> Result<Play, Error> {
-        // avoid move generation
-        if let Some(index) = self.lines_ref(id.clone()).position(play) {
-            return Err(Error::Duplicate(index));
-        }
-
-        let previous_state = self.previous_state(id.as_ref());
-        if let Some(Check::Checkmate) = previous_state.check {
-            return Err(Error::Illegal);
-        }
-
-        // legality check (legal moves are already computed)
-        if !previous_state.legal.contains(&play) {
-            return Err(Error::Illegal);
-        }
-
-        // apply
-        let position = previous_state.position.apply_unchecked(play);
-
-        // compute legal moves - with cache this with the new position
-        let legal = position.legal_moves();
-
-        // update derived state
-        let check = if position.is_check() {
-            Some(if legal.is_empty() { Check::Checkmate } else { Check::Check })
-        } else {
-            None
-        };
-        let short = Short::new(&previous_state.legal, play);
-
-        // create the (detached) play in the arena
-        let play = Play::new(id.clone(), play, short, State { position, legal, check });
-        self.slots.insert(play.id.clone(), play.clone());
-
-        Ok(play)
-    }
-
-    fn previous_state(&self, id: Option<&Id>) -> &State {
-        match id {
-            None => &self.state,
-            Some(id) => {
-                let play = self.slots.get(id).expect("id exists");
-                &play.state
-            }
-        }
-    }
-
-    fn delete_play(&mut self, id: &Id) -> Play {
-        let play = self.slots.remove(id).expect("play exists");
-        for line in &play.lines {
-            self.delete_play(line);
-        }
-        play
-    }
-}
-
-impl Play {
-    fn new(previous: Option<Id>, play: Move, short: Short, state: State) -> Self {
-        Self {
-            id: id(),
-            previous,
-            meta: Default::default(),
-            state,
-            play,
-            short,
-            lines: Default::default(),
-        }
-    }
-
-    pub fn id(&self) -> &Id {
-        &self.id
-    }
-
-    pub fn previous(&self) -> Option<&Id> {
-        self.previous.as_ref()
-    }
-
-    pub fn play(&self) -> Move {
-        self.play
-    }
-
-    pub fn short(&self) -> Short {
-        self.short
-    }
-
-    pub fn check(&self) -> Option<Check> {
-        self.state.check
-    }
-
-    pub fn position(&self) -> Position {
-        self.state.position
-    }
-
-    pub fn legal(&self) -> &[Move] {
-        &self.state.legal
-    }
-}
-
 pub struct PlayRef<'a> {
     game: &'a Game,
-    id: Id,
+    slot: Slot,
 }
 
 impl Deref for PlayRef<'_> {
     type Target = Play;
 
     fn deref(&self) -> &Play {
-        self.game.slots.get(&self.id).expect("valid play")
+        self.game.slots.get(&self.slot).expect("valid play")
     }
 }
 
 impl<'a> PlayRef<'a> {
-    pub fn lines(&self) -> LinesRef<'a> {
-        self.game.lines_ref(Some(self.id.clone()))
+    pub fn options(&self) -> OptionsRef<'a> {
+        self.game.options_ref(Node::Play(self.slot))
     }
 }
 
 pub struct PlayMut<'a> {
     game: &'a mut Game,
-    id: Id,
+    slot: Slot,
 }
 
 impl Deref for PlayMut<'_> {
     type Target = Play;
 
     fn deref(&self) -> &Play {
-        self.game.slots.get(&self.id).expect("valid play")
+        self.game.slots.get(&self.slot).expect("valid play")
     }
 }
 
 impl DerefMut for PlayMut<'_> {
     fn deref_mut(&mut self) -> &mut Play {
-        self.game.slots.get_mut(&self.id).expect("valid play")
+        self.game.slots.get_mut(&self.slot).expect("valid play")
     }
 }
 
 impl PlayMut<'_> {
-    pub fn lines(&self) -> LinesRef<'_> {
-        self.game.lines_ref(Some(self.id.clone()))
+    pub fn options(&self) -> OptionsRef<'_> {
+        self.game.options_ref(Node::Play(self.slot))
     }
 
-    pub fn lines_mut(&mut self) -> LinesMut<'_> {
-        LinesMut { game: self.game, id: Some(self.id.clone()) }
+    pub fn options_mut(&mut self) -> OptionsMut<'_> {
+        OptionsMut { game: self.game, node: Node::Play(self.slot) }
     }
 }
 
 #[derive(Clone)]
-pub struct LinesRef<'a> {
+pub struct OptionsRef<'a> {
     game: &'a Game,
     #[allow(dead_code)]
-    id: Option<Id>,
-    lines: &'a [Id],
+    node: Node,
+    options: &'a [Slot],
 }
 
-impl LinesRef<'_> {
+impl OptionsRef<'_> {
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.options.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.lines.len()
+        self.options.len()
     }
 
-    pub fn position(&self, play: Move) -> Option<usize> {
+    pub fn index(&self, play: Move) -> Option<usize> {
         self.values().position(|option| option.play == play)
     }
 
     pub fn contains(&self, play: Move) -> bool {
-        self.position(play).is_some()
+        self.index(play).is_some()
     }
 
-    pub fn state(&self) -> &State {
-        self.game.previous_state(self.id.as_ref())
+    pub fn cache(&self) -> &Cache {
+        self.game.previous_cache(self.node)
     }
 
     pub fn legal(&self) -> &[Move] {
-        &self.state().legal
+        &self.cache().legal
     }
 
-    pub fn lines(&self) -> &[Id] {
-        self.lines
+    pub fn options(&self) -> &[Slot] {
+        self.options
     }
 
     pub fn get(&self, index: usize) -> Option<&Play> {
-        let id = self.lines.get(index)?;
-        Some(self.game.slots.get(id).expect("line must reference an existing play"))
+        let slot = self.options.get(index)?;
+        Some(self.game.slots.get(slot).expect("option must reference an existing play"))
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &Id> {
-        self.lines().iter()
+    pub fn keys(&self) -> impl Iterator<Item = &Slot> {
+        self.options().iter()
     }
 
     pub fn values(&self) -> impl Iterator<Item = &Play> {
         self.iter().map(|(_, play)| play)
     }
 
-    pub fn iter(&self) -> LinesIter<'_> {
-        LinesIter { game: self.game, lines: self.lines, index: 0 }
+    pub fn iter(&self) -> OptionsIter<'_> {
+        OptionsIter { game: self.game, options: self.options, index: 0 }
     }
 }
 
-impl<'a> IntoIterator for LinesRef<'a> {
-    type Item = (&'a Id, &'a Play);
-    type IntoIter = LinesIter<'a>;
+impl<'a> IntoIterator for OptionsRef<'a> {
+    type Item = (&'a Slot, &'a Play);
+    type IntoIter = OptionsIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        LinesIter { game: self.game, lines: self.lines, index: 0 }
+        OptionsIter { game: self.game, options: self.options, index: 0 }
     }
 }
 
-pub struct LinesIter<'a> {
+pub struct OptionsIter<'a> {
     game: &'a Game,
-    lines: &'a [Id],
+    options: &'a [Slot],
     index: usize,
 }
 
-impl<'a> Iterator for LinesIter<'a> {
-    type Item = (&'a Id, &'a Play);
+impl<'a> Iterator for OptionsIter<'a> {
+    type Item = (&'a Slot, &'a Play);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let id = self.lines.get(self.index)?;
+        let slot = self.options.get(self.index)?;
         self.index += 1;
-        Some((id, self.game.slots.get(id).expect("line must reference an existing play")))
+        Some((slot, self.game.slots.get(slot).expect("option must reference an existing play")))
     }
 }
 
-pub struct LinesMut<'a> {
+pub struct OptionsMut<'a> {
     game: &'a mut Game,
-    id: Option<Id>,
+    node: Node,
 }
 
-impl LinesMut<'_> {
-    pub fn state(&self) -> &State {
-        self.game.previous_state(self.id.as_ref())
+impl OptionsMut<'_> {
+    pub fn cache(&self) -> &Cache {
+        self.game.previous_cache(self.node)
     }
 
     pub fn legal(&self) -> &[Move] {
-        &self.state().legal
+        &self.cache().legal
     }
 
-    pub fn as_ref(&self) -> LinesRef<'_> {
-        self.game.lines_ref(self.id.clone())
+    pub fn as_ref(&self) -> OptionsRef<'_> {
+        self.game.options_ref(self.node)
     }
 
-    pub fn lines(&self) -> &[Id] {
-        self.game.lines_slice(self.id.as_ref())
+    pub fn options(&self) -> &[Slot] {
+        self.game.options_slice(self.node)
     }
 
-    fn lines_mut_raw(&mut self) -> &mut Vec<Id> {
-        self.game.lines_mut_raw(self.id.as_ref())
+    fn options_mut_raw(&mut self) -> &mut Vec<Slot> {
+        self.game.options_mut_raw(self.node)
     }
 
-    pub fn push(&mut self, play: Move) -> Result<Id, Error> {
-        self.game.push_line(self.id.clone(), play)
+    pub fn push(&mut self, play: Move) -> Result<Slot, Error> {
+        self.game.push_option(self.node, play)
     }
 
-    pub fn insert(&mut self, index: usize, play: Move) -> Result<Id, Error> {
-        self.game.insert_line(self.id.clone(), index, play)
-    }
-
-    pub fn take(&mut self, index: usize) -> Option<Play> {
-        let id = self.lines_mut_raw().get(index)?.clone();
-        self.lines_mut_raw().remove(index);
-        Some(self.game.delete_play(&id))
+    pub fn insert(&mut self, index: usize, play: Move) -> Result<Slot, Error> {
+        self.game.insert_option(self.node, index, play)
     }
 
     #[must_use]
-    pub fn swap(&mut self, a: usize, b: usize) -> bool {
-        let len = self.lines().len();
+    pub fn remove(&mut self, play: Move) -> bool {
+        let Some(index) = self.as_ref().index(play) else {
+            return false;
+        };
+        self.remove_index(index)
+    }
+
+    fn remove_index(&mut self, index: usize) -> bool {
+        let Some(slot) = self.options_mut_raw().get(index).copied() else {
+            return false;
+        };
+        self.options_mut_raw().remove(index);
+        self.game.delete_slot(slot);
+        true
+    }
+
+    #[must_use]
+    pub fn swap(&mut self, a: Move, b: Move) -> bool {
+        let Some(a) = self.as_ref().index(a) else {
+            return false;
+        };
+        let Some(b) = self.as_ref().index(b) else {
+            return false;
+        };
+        self.swap_index(a, b)
+    }
+
+    fn swap_index(&mut self, a: usize, b: usize) -> bool {
+        let len = self.options().len();
         if a >= len || b >= len {
             false
         } else {
-            self.lines_mut_raw().swap(a, b);
+            self.options_mut_raw().swap(a, b);
             true
         }
     }
 
     #[must_use]
-    pub fn raise(&mut self, index: usize) -> bool {
-        if index >= self.lines().len() { false } else { index == 0 || self.swap(index - 1, index) }
+    pub fn raise(&mut self, play: Move) -> bool {
+        let Some(index) = self.as_ref().index(play) else {
+            return false;
+        };
+        self.raise_index(index)
+    }
+
+    fn raise_index(&mut self, index: usize) -> bool {
+        if index >= self.options().len() {
+            false
+        } else {
+            index == 0 || self.swap_index(index - 1, index)
+        }
     }
 
     #[must_use]
-    pub fn lower(&mut self, index: usize) -> bool {
-        let len = self.lines().len();
-        if index >= len { false } else { index + 1 == len || self.swap(index, index + 1) }
+    pub fn lower(&mut self, play: Move) -> bool {
+        let Some(index) = self.as_ref().index(play) else {
+            return false;
+        };
+        self.lower_index(index)
+    }
+
+    fn lower_index(&mut self, index: usize) -> bool {
+        let len = self.options().len();
+        if index >= len { false } else { index + 1 == len || self.swap_index(index, index + 1) }
     }
 
     #[must_use]
-    pub fn promote(&mut self, index: usize) -> bool {
-        let len = self.lines().len();
+    pub fn promote(&mut self, play: Move) -> bool {
+        let Some(index) = self.as_ref().index(play) else {
+            return false;
+        };
+        self.promote_index(index)
+    }
+
+    fn promote_index(&mut self, index: usize) -> bool {
+        let len = self.options().len();
         if index >= len {
             return false;
         }
 
-        let lines = self.lines_mut_raw();
-        let line = lines.remove(index);
-        lines.insert(0, line);
+        let options = self.options_mut_raw();
+        let option = options.remove(index);
+        options.insert(0, option);
         true
     }
 
@@ -606,8 +723,8 @@ impl LinesMut<'_> {
     // pub fn for_each_mut(&mut self, mut f: impl FnMut(&mut Play)) {
     //     let ids = self.ids().to_vec();
 
-    //     for id in ids {
-    //         f(self.game.slots.get_mut(&id).expect("option id must reference an existing play"));
+    //     for slot in slots {
+    //         f(self.game.slots.get_mut(&slot).expect("option slot must reference an existing play"));
     //     }
     // }
 }

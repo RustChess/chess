@@ -19,7 +19,7 @@ pub(crate) mod prelude {
             alt, cut_err, delimited, opt, preceded, repeat, separated, separated_pair, seq,
             terminated,
         },
-        error::{ErrMode, StrContext},
+        error::{ContextError, StrContext},
         // stream::Bytes,
         token::{any, none_of, one_of, take, take_till, take_while},
     };

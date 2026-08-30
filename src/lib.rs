@@ -1,13 +1,9 @@
 //! # Chess
 //!
 //! Attempt at building an ergonomic, idiomatic, and fast foundation for Chess programming in Rust.
-//!
-//! ```
-//! use chess::Position;
-//! ```
 
 #[cfg(feature = "serde")]
-#[macro_use(Serialize)]
+#[macro_use(Deserialize, Serialize)]
 extern crate serde;
 
 #[cfg(feature = "serde")]
@@ -15,16 +11,20 @@ extern crate serde;
 extern crate serde_with;
 
 pub mod bitboard;
-pub mod const_map;
-pub use const_map::Map;
+pub mod finite;
 pub mod formats;
 pub mod game;
-pub use game::{Cursor, Game, Id};
+#[doc(inline)]
+pub use game::{Game, Node};
+pub mod id;
+#[doc(inline)]
+pub use id::Id;
 #[cfg(feature = "lichess")]
 pub mod lichess;
 pub mod moves;
 #[cfg(test)]
 mod perft;
 pub mod position;
-pub use position::{Board, File, Move, Piece, Player, Position, Rank, Role, Side, Square};
+#[doc(inline)]
+pub use position::{Board, Move, Piece, Player, Position, Role, Side, Square};
 pub mod variant;

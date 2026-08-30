@@ -4,20 +4,29 @@ use super::*;
 #[derive(Clone, PartialEq)]
 pub struct Cursor {
     game: Game,
-    at: Option<Id>,
+    node: Node,
+}
+
+pub struct Mainline<'a> {
+    game: &'a Game,
+    node: Node,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Game(#[from] super::Error),
-    #[error("position already has main play {0}")]
-    Nonlinear(Id),
+    #[error("position already has main play {0:?}")]
+    Nonlinear(Node),
 }
 
 impl Cursor {
     pub fn new(game: Game) -> Self {
-        Self { game, at: None }
+        Self { game, node: Node::Start }
+    }
+
+    pub fn into_inner(self) -> Game {
+        self.game
     }
 
     pub fn game(&self) -> &Game {
@@ -28,91 +37,127 @@ impl Cursor {
         self.game
     }
 
-    pub fn at(&self) -> Option<&Id> {
-        self.at.as_ref()
+    pub fn node(&self) -> Node {
+        self.node
     }
 
-    pub fn state(&self) -> &State {
-        self.game.previous_state(self.at.as_ref())
+    pub fn cache(&self) -> &Cache {
+        self.game.previous_cache(self.node)
     }
 
     #[must_use]
-    pub fn set(&mut self, at: Option<Id>) -> bool {
-        if at.as_ref().is_some_and(|id| !self.game.slots.contains_key(id)) {
+    pub fn set(&mut self, node: Node) -> bool {
+        if !self.game.contains_node(node) {
             return false;
         }
 
-        self.at = at;
+        self.node = node;
         true
     }
 
     pub fn play(&self) -> Option<PlayRef<'_>> {
-        self.at.clone().and_then(|id| self.game.play(id))
+        match self.node {
+            Node::Start => None,
+            Node::Play(slot) => self.game.play(slot),
+        }
     }
 
     pub fn position(&self) -> Position {
-        self.game.previous_state(self.at.as_ref()).position
+        self.game.previous_position(self.node)
     }
 
-    pub fn lines(&self) -> LinesRef<'_> {
-        self.game.lines_ref(self.at.clone())
+    pub fn options(&self) -> OptionsRef<'_> {
+        self.game.options_ref(self.node)
     }
 
-    pub fn previous(&self) -> Option<&Id> {
-        let at = self.at.as_ref()?;
-        self.game.slots.get(at).expect("cursor id must reference an existing play").previous()
+    pub fn previous(&self) -> Node {
+        match self.node {
+            Node::Start => Node::Start,
+            Node::Play(slot) => self
+                .game
+                .slots
+                .get(&slot)
+                .expect("cursor slot must reference an existing play")
+                .previous(),
+        }
     }
 
-    pub fn next(&self) -> Option<&Id> {
-        self.game.lines_slice(self.at.as_ref()).first()
+    pub fn next(&self) -> Option<Node> {
+        self.game.options_slice(self.node).first().copied().map(Node::Play)
     }
 
     #[must_use]
     pub fn back(&mut self) -> bool {
-        match self.previous().cloned() {
-            Some(previous) => {
-                self.at = Some(previous);
-                true
-            }
-            None if self.at.is_some() => {
-                self.at = None;
-                true
-            }
-            None => false,
+        let previous = self.previous();
+        if self.node == previous {
+            false
+        } else {
+            self.node = previous;
+            true
         }
     }
 
     #[must_use]
     pub fn forward(&mut self) -> bool {
-        let Some(next) = self.next().cloned() else {
+        let Some(next) = self.next() else {
             return false;
         };
-        self.at = Some(next);
+        self.node = next;
         true
     }
 
     pub fn start(&mut self) {
-        self.at = None;
+        self.node = Node::Start;
     }
 
     pub fn end(&mut self) {
         while self.forward() {}
     }
 
-    pub fn push(&mut self, play: Move) -> Result<Id, Error> {
+    #[must_use]
+    pub fn take_back(&mut self) -> bool {
+        let Node::Play(slot) = self.node else {
+            return false;
+        };
+        let previous = self.previous();
+        let play = self.game.play(slot).expect("cursor slot must exist").play();
+
+        let _ =
+            self.game.options_mut_at(previous).expect("previous options must exist").remove(play);
+        self.node = previous;
+        true
+    }
+
+    pub fn push(&mut self, play: Move) -> Result<Slot, Error> {
         if let Some(next) = self.next() {
-            return Err(Error::Nonlinear(next.clone()));
+            return Err(Error::Nonlinear(next));
         }
 
-        let id = self.game.push_line(self.at.clone(), play)?;
-        self.at = Some(id.clone());
-        Ok(id)
+        let slot = self.game.push_option(self.node, play)?;
+        self.node = Node::Play(slot);
+        Ok(slot)
+    }
+}
+
+impl<'a> Mainline<'a> {
+    pub fn new(game: &'a Game) -> Self {
+        Self { game, node: Node::Start }
+    }
+}
+
+impl<'a> Iterator for Mainline<'a> {
+    type Item = &'a Play;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let slot = self.game.options_slice(self.node).first().copied()?;
+        self.node = Node::Play(slot);
+        Some(self.game.slots.get(&slot).expect("mainline slot must exist"))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::Position;
+    use crate::{Position, Role, Square};
 
     use super::*;
 
@@ -120,19 +165,35 @@ mod tests {
     fn walks_main_line() {
         let mut cursor = Game::new(Position::standard()).cursor();
         let play = cursor.position().legal_moves()[0];
-        let id = cursor.push(play).unwrap();
+        let slot = cursor.push(play).unwrap();
 
-        assert_eq!(cursor.at(), Some(&id));
+        assert_eq!(cursor.node(), Node::Play(slot));
         assert!(!cursor.forward());
         assert!(cursor.back());
-        assert_eq!(cursor.at(), None);
+        assert_eq!(cursor.node(), Node::Start);
         assert!(cursor.forward());
-        assert_eq!(cursor.at(), Some(&id));
+        assert_eq!(cursor.node(), Node::Play(slot));
 
         cursor.start();
         assert!(matches!(
             cursor.push(cursor.position().legal_moves()[0]),
-            Err(Error::Nonlinear(existing)) if existing == id
+            Err(Error::Nonlinear(existing)) if existing == Node::Play(slot)
         ));
+    }
+
+    #[test]
+    fn takes_back_current_play() {
+        let mut cursor = Game::new(Position::standard()).cursor();
+        let e4 = cursor.push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
+        cursor.push(crate::Move::normal(Role::Pawn, Square::E7, Square::E5)).unwrap();
+
+        assert!(cursor.take_back());
+        assert_eq!(cursor.node(), Node::Play(e4));
+        assert!(cursor.next().is_none());
+
+        assert!(cursor.take_back());
+        assert_eq!(cursor.node(), Node::Start);
+        assert!(cursor.next().is_none());
+        assert!(!cursor.take_back());
     }
 }

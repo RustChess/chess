@@ -31,6 +31,7 @@ reqwest = { version = "0.13", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = "3"
+ciborium = "0.2"
 sha2-const = "0.1"
 # sqlx  = { version = "0.8", features = ["sqlite"] }
 thiserror = "2"
@@ -49,6 +50,8 @@ name = "chess"
 
 [features]
 default = []
+empty-id = []
+const-fn-standard-id = []
 lichess = ["dep:chess-lichess"]
 serde = ["dep:serde", "dep:serde_with"]
 
@@ -67,6 +70,7 @@ serde_with = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow.workspace = true
+ciborium.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true

@@ -35,6 +35,10 @@ impl<V: Variant> Position<V> {
 }
 
 impl<V> Position<V> {
+    pub fn apparent_fen(&self) -> String {
+        format!("{} {}", self.board.fen(), self.turn.fen(),)
+    }
+
     pub fn fen(&self) -> String {
         format!(
             "{} {} {} {} {} {}",
@@ -44,6 +48,18 @@ impl<V> Position<V> {
             en_passant_square(self.en_passant),
             self.reversible,
             self.round
+        )
+    }
+}
+
+impl<V: Variant> Position<V> {
+    pub fn transposition_fen(&self) -> String {
+        format!(
+            "{} {} {} {}",
+            self.board.fen(),
+            self.turn.fen(),
+            self.castle.fen(),
+            en_passant_square(self.effective_en_passant()),
         )
     }
 }

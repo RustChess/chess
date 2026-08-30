@@ -27,6 +27,14 @@ freestyle-positions:
 slider-sights:
     rust-script scripts/slider_sights.rs
 
+standard-id:
+    rust-script scripts/standard-id.rs
+    rustfmt src/id/standard.rs
+
+polyglot-id:
+    rust-script scripts/polyglot-id.rs
+    rustfmt src/id/polyglot.rs
+
 clean:
     rm -f *.cb{a,c,e,g,h,j,l,m,p,s,t,tt,ini} *.{flags,ini}
 

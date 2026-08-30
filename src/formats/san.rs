@@ -156,16 +156,16 @@ impl From<(crate::Move, game::Short, Option<Check>)> for San {
 }
 
 impl San {
-    pub fn resolve(&self, state: &game::State) -> Result<crate::Move, Error> {
+    pub fn resolve(&self, cache: &game::Cache) -> Result<crate::Move, Error> {
         // We ignore incorrect check(mate) annotations.
         // crate::Move is converted to SAN, and compared against the input move.
         let resolves_to_self = |play: &crate::Move| {
             // Check/checkmate markers are notation adornments. The concrete move
             // is resolved from the SAN move body and the legal moves in this state.
-            San::from((*play, game::Short::new(&state.legal, *play), None)).play == self.play
+            San::from((*play, game::Short::new(&cache.legal, *play), None)).play == self.play
         };
         // legal crate moves that would match the input SAN move
-        let mut matches = state.legal.iter().copied().filter(resolves_to_self);
+        let mut matches = cache.legal.iter().copied().filter(resolves_to_self);
 
         let Some(play) = matches.next() else {
             return Err(Error::Illegal);
@@ -298,7 +298,7 @@ fn square(input: &mut Input<'_>) -> ModalResult<Square> {
 }
 
 fn role(input: &mut Input<'_>) -> ModalResult<Role> {
-    one_of(|c| "NBRQKnbrqk".contains(c)).map(Role::panicky_from_char).parse_next(input)
+    one_of(|c| "NBRQK".contains(c)).map(Role::panicky_from_char).parse_next(input)
 }
 
 fn promotion_role(input: &mut Input<'_>) -> ModalResult<Role> {
@@ -349,6 +349,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_b_file_pawn_move() {
+        let parsed = san.parse("b6").unwrap();
+        assert_eq!(
+            parsed.play,
+            Move::Normal {
+                role: Role::Pawn,
+                file: None,
+                rank: None,
+                capture: false,
+                to: Square::B6,
+                promotion: None,
+            }
+        );
+    }
+
+    #[test]
     fn tolerates_whitespace() {
         let parsed = San::from_str("  O-O-O#  ").unwrap();
         assert_eq!(parsed.play, Move::Castle(Side::Queen));
@@ -379,7 +395,9 @@ mod tests {
 
     #[test]
     fn parses_lowercase_user_input() {
-        assert_eq!(San::from_str("nf3").unwrap().to_string(), "Nf3");
+        // Not doing this for now - accepting lowercase pieces
+        // leads to ambiguity for e.g. `b3` which might be invalid `B3`.
+        // assert_eq!(San::from_str("nf3").unwrap().to_string(), "Nf3");
         assert_eq!(San::from_str("exd8=q#").unwrap().to_string(), "exd8=Q#");
         assert_eq!(San::from_str("o-o").unwrap().to_string(), "O-O");
         assert_eq!(San::from_str("oo").unwrap().to_string(), "O-O");

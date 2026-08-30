@@ -3,7 +3,7 @@
 use core::{fmt, str::FromStr};
 
 use crate::{
-    Move as ChessMove, Role,
+    Role,
     position::{File, Rank, Square},
 };
 
@@ -17,8 +17,22 @@ pub struct Move {
     pub promotion: Option<Role>,
 }
 
+impl From<crate::Move> for Move {
+    // TODO: This is only valid for standard chess.
+    // In Freestyle, castling is a move to the rook.
+    fn from(play: crate::Move) -> Self {
+        Self { from: play.from, to: play.to, promotion: play.promotes() }
+    }
+}
+
+impl crate::Move {
+    pub fn uci(self) -> Move {
+        self.into()
+    }
+}
+
 impl Move {
-    pub fn resolve(self, legal: &[ChessMove]) -> Option<ChessMove> {
+    pub fn resolve(self, legal: &[crate::Move]) -> Option<crate::Move> {
         legal.iter().copied().find(|play| {
             play.from == self.from && play.to == self.to && play.promotes() == self.promotion
         })
@@ -93,7 +107,7 @@ pub enum Bound {
 }
 
 /// Parse a UCI move and resolve it against legal moves.
-pub fn parse_move(text: &str, legal: &[ChessMove]) -> Option<ChessMove> {
+pub fn parse_move(text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
     let mut input = text.trim();
     let play = uci_move(&mut input).ok()?;
     input.is_empty().then_some(())?;
@@ -217,7 +231,7 @@ fn promotion(input: &mut Input<'_>) -> ModalResult<Role> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Move as ChessMove, Position, Role, Square, variant::Chess};
+    use crate::{Position, Role, Square, variant::Chess};
 
     use super::*;
 
@@ -243,12 +257,12 @@ mod tests {
     fn resolves_special_moves_from_legal_moves() {
         let castle: Position<Chess> =
             Position::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
-        assert!(parse_move("e1g1", &castle.legal_moves()).is_some_and(ChessMove::is_castle));
+        assert!(parse_move("e1g1", &castle.legal_moves()).is_some_and(crate::Move::is_castle));
 
         let en_passant: Position<Chess> =
             Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
         assert!(
-            parse_move("e5d6", &en_passant.legal_moves()).is_some_and(ChessMove::is_en_passant)
+            parse_move("e5d6", &en_passant.legal_moves()).is_some_and(crate::Move::is_en_passant)
         );
     }
 

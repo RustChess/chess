@@ -13,12 +13,11 @@
 //! chess variants, and implement for "freestyle" (aka Fisher Random aka Chess960) chess - to exercise our generality mindedness
 //!
 //! Compared to `shakmaty` our position is a concrete `struct`
-use core::{fmt, num::NonZeroU32, ops};
+use core::{fmt, num::NonZeroU32};
 
 use crate::{bitboard::Bitboard, variant};
 
 pub mod en_passant;
-pub mod id;
 pub mod square;
 
 pub use square::{File, Rank, Square};
@@ -40,13 +39,16 @@ pub const ALGEBRAIC_LONG_CASTLE: &str = PGN_LONG_CASTLE;
 pub const ALGEBRAIC_MOVE: char = '-';
 pub const ALGEBRAIC_CAPTURE: char = 'x';
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
-pub enum Player {
-    Black = 0,
-    White = 1,
-}
+crate::finite_set!(
+    /// Black and white
+    Player,
+    Players,
+    PlayerTable,
+    Players {
+        Black = 0 as black,
+        White = 1 as white,
+    }
+);
 
 impl fmt::Display for Player {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -58,7 +60,9 @@ impl fmt::Display for Player {
 }
 
 impl Player {
-    pub const ALL: [Player; 2] = [Player::Black, Player::White];
+    pub const fn eq(self, other: Player) -> bool {
+        self as u8 == other as u8
+    }
 
     pub const fn other(self) -> Player {
         match self {
@@ -201,12 +205,12 @@ impl Board {
 
     #[inline]
     pub const fn player(self, player: Player) -> Bitboard {
-        *self.players.get(player)
+        self.players.get(player)
     }
 
     #[inline]
     pub const fn role(self, role: Role) -> Bitboard {
-        *self.roles.get(role)
+        self.roles.get(role)
     }
 
     pub fn add(&mut self, square: Square, piece: Piece) {
@@ -284,24 +288,47 @@ impl Board {
     }
 
     #[inline]
-    pub fn player_at(self, square: Square) -> Option<Player> {
-        self.players.find(|player| player.contains(square))
-    }
-
-    #[inline]
-    pub fn role_at(self, square: Square) -> Option<Role> {
-        if self.occupied.contains(square) {
-            Some(self.roles.find_or_king(|role| role.contains(square)))
+    pub const fn player_at(self, square: Square) -> Option<Player> {
+        // not using Board::find to stay const fn
+        if self.players.black.contains(square) {
+            Some(Player::Black)
+        } else if self.players.white.contains(square) {
+            Some(Player::White)
         } else {
-            // catch early
             None
         }
     }
 
     #[inline]
-    pub fn piece_at(self, square: Square) -> Option<Piece> {
-        self.player_at(square)
-            .map(|player| self.roles.find_or_king(|role| role.contains(square)).of(player))
+    pub const fn role_at(self, square: Square) -> Option<Role> {
+        // not using Board::find to stay const fn
+        if !self.occupied.contains(square) {
+            // early return
+            return None;
+        }
+        if self.roles.pawn.contains(square) {
+            Some(Role::Pawn)
+        } else if self.roles.knight.contains(square) {
+            Some(Role::Knight)
+        } else if self.roles.bishop.contains(square) {
+            Some(Role::Bishop)
+        } else if self.roles.rook.contains(square) {
+            Some(Role::Rook)
+        } else if self.roles.queen.contains(square) {
+            Some(Role::Queen)
+        } else if self.roles.king.contains(square) {
+            Some(Role::King)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub const fn piece_at(self, square: Square) -> Option<Piece> {
+        match (self.player_at(square), self.role_at(square)) {
+            (Some(player), Some(role)) => Some(role.of(player)),
+            _ => None,
+        }
     }
 }
 
@@ -348,17 +375,20 @@ pub trait Variant: Copy + Sized {
     fn validate(position: Unvalidated) -> Result<Position<Self>>;
 }
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
-pub enum Role {
-    Pawn = 1,
-    Knight = 2,
-    Bishop = 3,
-    Rook = 5,
-    Queen = 9,
-    King = 4,
-}
+crate::finite_set!(
+    /// A chess piece role, such as pawn, knight, bishop, etc.
+    Role,
+    Roles,
+    RoleTable,
+    Roles {
+        Pawn = 1 as pawn,
+        Knight = 2 as knight,
+        Bishop = 3 as bishop,
+        Rook = 5 as rook,
+        Queen = 9 as queen,
+        King = 4 as king,
+    }
+);
 
 impl fmt::Display for Role {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -378,24 +408,10 @@ impl fmt::Display for Role {
     }
 }
 
-impl All<6> for Role {
-    const ALL: [Role; 6] = Role::ALL;
-
-    fn index(self) -> usize {
-        match self {
-            Pawn => 0,
-            Knight => 1,
-            Bishop => 2,
-            Rook => 3,
-            Queen => 4,
-            King => 5,
-        }
-    }
-}
-
 impl Role {
-    pub const ALL: [Role; 6] =
-        [Role::Pawn, Role::Knight, Role::Bishop, Role::Rook, Role::Queen, Role::King];
+    pub const fn eq(self, other: Role) -> bool {
+        self as u8 == other as u8
+    }
 
     pub(crate) fn panicky_from_char(c: char) -> Self {
         use Role::*;
@@ -462,6 +478,7 @@ impl Role {
     }
 }
 
+/// A chess piece, for instance a white pawn or a black queen.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Piece {
     pub player: Player,
@@ -475,48 +492,14 @@ impl Piece {
             Player::White => self.role.white(),
         }
     }
-}
 
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-/// Castling rights
-pub struct Sides<T = bool> {
-    pub queen: T,
-    pub king: T,
-}
-
-impl<T> ops::Index<Side> for Sides<T> {
-    type Output = T;
-    fn index(&self, side: Side) -> &T {
-        self.get(side)
+    // Eq::eq is not const
+    pub const fn eq(self, other: Piece) -> bool {
+        self.player.eq(other.player) && self.role.eq(other.role)
     }
 }
 
-impl<T> ops::IndexMut<Side> for Sides<T> {
-    #[inline]
-    fn index_mut(&mut self, side: Side) -> &mut T {
-        self.get_mut(side)
-    }
-}
-
-impl<T> Sides<T> {
-    #[inline]
-    pub const fn get(&self, side: Side) -> &T {
-        match side {
-            Side::Queen => &self.queen,
-            Side::King => &self.king,
-        }
-    }
-
-    #[inline]
-    pub const fn get_mut(&mut self, side: Side) -> &mut T {
-        match side {
-            Side::Queen => &mut self.queen,
-            Side::King => &mut self.king,
-        }
-    }
-}
-
-/// Chess position
+/// Chess position, including the board, turn, rights, and counters.
 ///
 /// Size:
 /// - board: 9 * 8 = 72 bytes
@@ -749,44 +732,7 @@ impl<V> Position<V> {
 //     Position { board: INITIAL, turn: Player::White, en_passant: None, ply_since: 0,
 // }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-/// Container (both players)
-pub struct Players<T> {
-    pub black: T,
-    pub white: T,
-}
-
-impl<T> ops::Index<Player> for Players<T> {
-    type Output = T;
-    fn index(&self, player: Player) -> &T {
-        self.get(player)
-    }
-}
-
-impl<T> ops::IndexMut<Player> for Players<T> {
-    #[inline]
-    fn index_mut(&mut self, player: Player) -> &mut T {
-        self.get_mut(player)
-    }
-}
-
 impl<T> Players<T> {
-    #[inline]
-    pub const fn get(&self, player: Player) -> &T {
-        match player {
-            Player::Black => &self.black,
-            Player::White => &self.white,
-        }
-    }
-
-    #[inline]
-    pub const fn get_mut(&mut self, player: Player) -> &mut T {
-        match player {
-            Player::Black => &mut self.black,
-            Player::White => &mut self.white,
-        }
-    }
-
     #[inline]
     pub fn swap(self) -> Players<T> {
         Players { black: self.white, white: self.black }
@@ -824,71 +770,7 @@ impl<T> Players<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-/// Container (all roles)
-pub struct Roles<T> {
-    pub pawn: T,
-    pub knight: T,
-    pub bishop: T,
-    pub rook: T,
-    pub queen: T,
-    pub king: T,
-}
-
-impl<T> ops::Index<Role> for Roles<T> {
-    type Output = T;
-    fn index(&self, role: Role) -> &T {
-        match role {
-            Role::Pawn => &self.pawn,
-            Role::Knight => &self.knight,
-            Role::Bishop => &self.bishop,
-            Role::Rook => &self.rook,
-            Role::Queen => &self.queen,
-            Role::King => &self.king,
-        }
-    }
-}
-
-impl<T> ops::IndexMut<Role> for Roles<T> {
-    fn index_mut(&mut self, role: Role) -> &mut T {
-        match role {
-            Role::Pawn => &mut self.pawn,
-            Role::Knight => &mut self.knight,
-            Role::Bishop => &mut self.bishop,
-            Role::Rook => &mut self.rook,
-            Role::Queen => &mut self.queen,
-            Role::King => &mut self.king,
-        }
-    }
-}
-
 impl<T> Roles<T> {
-    #[inline]
-    pub const fn get(&self, role: Role) -> &T {
-        use Role::*;
-        match role {
-            Pawn => &self.pawn,
-            Knight => &self.knight,
-            Bishop => &self.bishop,
-            Rook => &self.rook,
-            Queen => &self.queen,
-            King => &self.king,
-        }
-    }
-
-    #[inline]
-    pub const fn get_mut(&mut self, role: Role) -> &mut T {
-        use Role::*;
-        match role {
-            Pawn => &mut self.pawn,
-            Knight => &mut self.knight,
-            Bishop => &mut self.bishop,
-            Rook => &mut self.rook,
-            Queen => &mut self.queen,
-            King => &mut self.king,
-        }
-    }
-
     #[inline]
     pub fn for_each<F>(self, mut f: F)
     where
@@ -936,26 +818,6 @@ impl<T> Roles<T> {
             Some(Role::King)
         } else {
             None
-        }
-    }
-
-    #[inline]
-    pub(crate) fn find_or_king<F>(&self, mut predicate: F) -> Role
-    where
-        F: FnMut(&T) -> bool,
-    {
-        if predicate(&self.pawn) {
-            Role::Pawn
-        } else if predicate(&self.knight) {
-            Role::Knight
-        } else if predicate(&self.bishop) {
-            Role::Bishop
-        } else if predicate(&self.rook) {
-            Role::Rook
-        } else if predicate(&self.queen) {
-            Role::Queen
-        } else {
-            Role::King
         }
     }
 }
@@ -1108,7 +970,7 @@ impl Kind {
 // Since `move` is a keyword, can use `play: Move` as a synonym.
 // At least this is the most useful suggestion by Google AI Overview ;)
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-/// Move by a player
+/// Move that a player can make.
 pub struct Move {
     pub kind: Kind,
     /// redundant when given the board
@@ -1136,13 +998,16 @@ pub type Moves = Vec<Move>;
 // the move notation still reflects it.
 //
 // Also Side is a bit misleading, could also mean what we call Player
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(SerializeDisplay))]
-pub enum Side {
-    King = 0,
-    Queen = 1,
-}
+crate::finite_set!(
+    /// A side of the board to castle toward.
+    Side,
+    Sides,
+    SideTable,
+    Sides {
+        King = 0 as king,
+        Queen = 1 as queen,
+    }
+);
 
 impl fmt::Display for Side {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1154,8 +1019,6 @@ impl fmt::Display for Side {
 }
 
 impl Side {
-    pub const ALL: [Side; 2] = [Side::King, Side::Queen];
-
     pub const fn king_side(king_side: bool) -> Self {
         use Side::*;
         if king_side { King } else { Queen }
@@ -1167,16 +1030,6 @@ impl Side {
         match self {
             King => File::G,
             Queen => File::C,
-        }
-    }
-}
-
-impl All<2> for Side {
-    const ALL: [Side; 2] = Side::ALL;
-    fn index(self) -> usize {
-        match self {
-            Side::King => 0,
-            Side::Queen => 1,
         }
     }
 }
@@ -1325,6 +1178,38 @@ impl Move {
     pub const fn is_capture_role(self, role: Role) -> bool {
         if let Some(this) = self.capture { this as u8 == role as u8 } else { false }
     }
+}
+
+/// Compact encoding
+impl Move {
+    #[inline]
+    pub const fn code(self) -> u16 {
+        (self.to as u16)
+            | ((self.from as u16) << 6)
+            | (self.promotion_code() << 12)
+            | (self.kind_code() << 14)
+    }
+
+    #[inline]
+    const fn promotion_code(self) -> u16 {
+        match self.promotes() {
+            Some(Role::Knight) => 0,
+            Some(Role::Bishop) => 1,
+            Some(Role::Rook) => 2,
+            Some(Role::Queen) => 3,
+            _ => 0,
+        }
+    }
+
+    #[inline]
+    const fn kind_code(self) -> u16 {
+        match self.specials() {
+            Some(Special::Promote(_)) => 1,
+            Some(Special::EnPassant) => 2,
+            Some(Special::Castle(_)) => 3,
+            None => 0,
+        }
+    }
 
     fn long_algebraic(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use fmt::Write as _;
@@ -1346,18 +1231,6 @@ impl Move {
             Ok(())
         }
     }
-
-    // In standard chess, castling is respresented as a move of the king to its new position
-    // In freestyle, it would be a move to the corresponding rook square
-    fn universal_chess_interface(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use fmt::Write as _;
-
-        write!(f, "{}{}", self.from, self.to)?;
-        if let Some(promoted) = self.promotes() {
-            f.write_char(promoted.lower())?;
-        }
-        Ok(())
-    }
 }
 
 impl fmt::Display for Move {
@@ -1366,36 +1239,28 @@ impl fmt::Display for Move {
     }
 }
 
-pub struct Uci(pub Move);
-
-impl fmt::Display for Uci {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.universal_chess_interface(f)
-    }
-}
-
 #[test]
 fn display_move() {
     let mut play = Move::promote(Square::A2, Square::H7, Role::Queen);
 
     assert_eq!(play.to_string(), "a2-h7=Q");
-    assert_eq!(Uci(play).to_string(), "a2h7q");
+    assert_eq!(play.uci().to_string(), "a2h7q");
 
     play.role = Role::King;
     assert_eq!(play.to_string(), "Ka2-h7=Q");
-    assert_eq!(Uci(play).to_string(), "a2h7q");
+    assert_eq!(play.uci().to_string(), "a2h7q");
 
     play = play.capturing(Role::Bishop);
     assert_eq!(play.to_string(), "Ka2xh7=Q");
-    assert_eq!(Uci(play).to_string(), "a2h7q");
+    assert_eq!(play.uci().to_string(), "a2h7q");
 
     let play = Move::castle(Player::White, Side::King);
     assert_eq!(play.to_string(), ALGEBRAIC_SHORT_CASTLE);
-    assert_eq!(Uci(play).to_string(), "e1g1");
+    assert_eq!(play.uci().to_string(), "e1g1");
 
     let play = Move::castle(Player::Black, Side::Queen);
     assert_eq!(play.to_string(), ALGEBRAIC_LONG_CASTLE);
-    assert_eq!(Uci(play).to_string(), "e8c8");
+    assert_eq!(play.uci().to_string(), "e8c8");
 }
 
 pub struct Meta;
@@ -1472,24 +1337,4 @@ fn all_random() {
         println!("{}", position.iter().collect::<String>());
     }
     assert_eq!(960, positions.len());
-}
-
-pub trait All<const N: usize>: Copy + Sized {
-    const ALL: [Self; N];
-
-    fn index(self) -> usize;
-
-    fn all() -> impl Iterator<Item = Self> {
-        Self::ALL.into_iter()
-    }
-}
-
-impl All<2> for Player {
-    const ALL: [Player; 2] = Player::ALL;
-    fn index(self) -> usize {
-        match self {
-            Player::Black => 0,
-            Player::White => 1,
-        }
-    }
 }

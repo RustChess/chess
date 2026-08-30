@@ -255,6 +255,34 @@ impl<V: Variant> Position<V> {
 
         self.board.attacks_on(king, self.turn.other(), occupied).is_empty()
     }
+
+    pub const fn effective_en_passant(self) -> Option<crate::position::en_passant::Square> {
+        let Some(en_passant) = self.en_passant else {
+            return None;
+        };
+
+        let to = en_passant.square();
+
+        // If say d6 is the en passant square, check that d5 actually contains a pawn
+        // This can go away if we do more validation on e.p in `validate`
+        let Some(captured) = to.checked_add_const(self.turn.other().pawn_push()) else {
+            return None;
+        };
+        let Some(piece) = self.board.piece_at(captured) else {
+            return None;
+        };
+        if !piece.eq(Role::Pawn.of(self.turn.other())) {
+            return None;
+        }
+
+        // Is there a pawn that can capture the en passant square?
+        let pawns = self.board.pawns().intersection_const(self.board.player(self.turn));
+        if pawns.intersection_const(to.pawn_attack_moves(self.turn.other())).is_empty() {
+            None
+        } else {
+            Some(en_passant)
+        }
+    }
 }
 
 // king-safety moves
@@ -695,14 +723,23 @@ impl SliderBlockers {
     }
 }
 
+impl Player {
+    const fn pawn_push(self) -> Direction {
+        use {Direction::*, Player::*};
+
+        match self {
+            White => North,
+            Black => South,
+        }
+    }
+}
+
 const fn pawn_directions(player: Player) -> (Direction, Direction, Direction, Direction, Bitboard) {
-    use Direction::*;
+    use {Direction::*, Player::*};
 
     match player {
-        Player::White => {
-            (North, NorthNorth, NorthWest, NorthEast, Bitboard::from_rank(Rank::Three))
-        }
-        Player::Black => (South, SouthSouth, SouthWest, SouthEast, Bitboard::from_rank(Rank::Six)),
+        White => (North, NorthNorth, NorthWest, NorthEast, Bitboard::from_rank(Rank::Three)),
+        Black => (South, SouthSouth, SouthWest, SouthEast, Bitboard::from_rank(Rank::Six)),
     }
 }
 

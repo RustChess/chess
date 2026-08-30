@@ -9,7 +9,7 @@ use std::{
 use encoding_rs::WINDOWS_1252;
 
 use crate::Position;
-use crate::game::{self, Command, Id, Nag, Outcome, Tag, TagPair, Text};
+use crate::game::{self, Command, Nag, Node, Outcome, Slot, Tag, TagPair, Text};
 
 use super::{StrInput as Input, fen, prelude::*, san};
 
@@ -25,7 +25,7 @@ use super::{StrInput as Input, fen, prelude::*, san};
 // https://chesstempo.com/manual/en/manual.html#pgnviewercommentannotations
 //
 
-pub fn parse_game(input: &mut Input<'_>) -> ModalResult<Game> {
+pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
     delimited(
         multispace0,
         seq! {Game {
@@ -41,13 +41,15 @@ pub fn parse_game(input: &mut Input<'_>) -> ModalResult<Game> {
 }
 
 pub fn games(input: &mut Input<'_>) -> ModalResult<Games> {
-    repeat(0.., parse_game).map(|games| Games { games }).parse_next(input)
+    repeat(0.., game).map(|games| Games { games }).parse_next(input)
 }
 
-pub fn read_games<R: Read>(reader: R) -> impl Iterator<Item = io::Result<ModalResult<Game>>> {
+pub fn read_games<R: Read>(
+    reader: R,
+) -> impl Iterator<Item = io::Result<Result<Game, ParseError>>> {
     GameShaped::new(reader).map(|chunk| {
         chunk.map(|chunk| {
-            parse_game.parse(chunk.as_str()).map_err(|error| ErrMode::Backtrack(error.into_inner()))
+            game.parse(chunk.text.as_str()).map_err(|error| ParseError::from_winnow(&chunk, error))
         })
     })
 }
@@ -101,6 +103,43 @@ pub enum Error {
     EmptyVariation { ply: usize, san: san::San },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("parse error at line {line}, column {column}: {message}")]
+pub struct ParseError {
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
+impl ParseError {
+    fn from_winnow(
+        input: &Chunk,
+        error: winnow::error::ParseError<Input<'_>, ContextError>,
+    ) -> Self {
+        let (line, column) = line_column(&input.text, input.line, error.offset());
+        Self { line, column, message: format!("{:?}", error.inner()) }
+    }
+}
+
+fn line_column(input: &str, first_line: usize, offset: usize) -> (usize, usize) {
+    let mut line = first_line;
+    let mut column = 1;
+
+    for (index, char) in input.char_indices() {
+        if index >= offset {
+            break;
+        }
+        if char == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    (line, column)
+}
+
 impl TryFrom<Game> for game::Game {
     type Error = Error;
 
@@ -111,7 +150,7 @@ impl TryFrom<Game> for game::Game {
         game.intro = pgn.intro.map(Into::into);
         game.outcome = pgn.outcome;
 
-        convert_moves(&mut game, None, 0, pgn.moves)?;
+        convert_moves(&mut game, Node::Start, 0, pgn.moves)?;
 
         Ok(game)
     }
@@ -120,7 +159,7 @@ impl TryFrom<Game> for game::Game {
 impl From<game::Game> for Game {
     fn from(game: game::Game) -> Self {
         let start = game.start();
-        let moves = game_moves(&game, game.lines());
+        let moves = game_moves(&game, game.options());
         let mut tag_pairs = game.tags;
 
         if start != Position::standard() {
@@ -140,29 +179,34 @@ fn set_tag(tag_pairs: &mut Vec<TagPair>, name: Tag, value: impl Into<String>) {
     }
 }
 
-fn game_moves<'a>(game: &'a game::Game, mut lines: game::LinesRef<'a>) -> Vec<Move> {
+fn game_moves<'a>(game: &'a game::Game, mut options: game::OptionsRef<'a>) -> Vec<Move> {
     let mut moves = Vec::new();
 
-    while let Some(id) = lines.lines().first() {
-        let play = game.play(id.clone()).expect("line must reference an existing play");
-        moves.push(game_move(game, &play, lines));
-        lines = play.lines();
+    while let Some(slot) = options.options().first() {
+        let play = game.play(*slot).expect("option must reference an existing play");
+        moves.push(game_move(game, &play, options));
+        options = play.options();
     }
 
     moves
 }
 
-fn game_move(game: &game::Game, play: &game::Play, lines: game::LinesRef<'_>) -> Move {
+fn game_move(game: &game::Game, play: &game::Play, options: game::OptionsRef<'_>) -> Move {
     Move {
         san: san::San::from((play.play(), play.short(), play.check())),
         comment: play.meta.comment.clone().map(Comment),
         annotations: annotations(&play.meta),
-        variations: lines.lines().iter().skip(1).map(|id| game_variation(game, id)).collect(),
+        variations: options
+            .options()
+            .iter()
+            .skip(1)
+            .map(|slot| game_variation(game, *slot))
+            .collect(),
     }
 }
 
-fn game_variation(game: &game::Game, id: &Id) -> Variation {
-    let play = game.play(id.clone()).expect("line must reference an existing play");
+fn game_variation(game: &game::Game, slot: Slot) -> Variation {
+    let play = game.play(slot).expect("option must reference an existing play");
     Variation {
         intro: play.meta.intro.clone().map(Comment),
         moves: game_moves_from(game, &play),
@@ -172,7 +216,7 @@ fn game_variation(game: &game::Game, id: &Id) -> Variation {
 
 fn game_moves_from<'a>(game: &'a game::Game, play: &game::PlayRef<'a>) -> Vec<Move> {
     let mut moves = vec![game_move_without_variations(play)];
-    moves.extend(game_moves(game, play.lines()));
+    moves.extend(game_moves(game, play.options()));
     moves
 }
 
@@ -236,17 +280,17 @@ fn position(tag_pairs: &[TagPair]) -> Result<Position, Error> {
 
 fn convert_moves(
     game: &mut game::Game,
-    mut previous: Option<Id>,
+    mut previous: Node,
     mut ply: usize,
     moves: Vec<Move>,
 ) -> Result<(), Error> {
     for pgn_move in moves {
-        let mut lines = game.lines_mut_at(previous.clone()).expect("previous play exists");
-        let play = pgn_move.san.resolve(lines.state())?;
-        let id = lines.push(play)?;
+        let mut options = game.options_mut_at(previous).expect("previous play exists");
+        let play = pgn_move.san.resolve(options.cache())?;
+        let slot = options.push(play)?;
 
         {
-            let mut play = game.play_mut(id.clone()).expect("inserted play exists");
+            let mut play = game.play_mut(slot).expect("inserted play exists");
             play.meta.comment = pgn_move.comment.map(Into::into);
             for annotation in pgn_move.annotations {
                 match annotation {
@@ -257,10 +301,10 @@ fn convert_moves(
         }
 
         for variation in pgn_move.variations {
-            convert_variation(game, previous.clone(), ply, pgn_move.san, variation)?;
+            convert_variation(game, previous, ply, pgn_move.san, variation)?;
         }
 
-        previous = Some(id);
+        previous = Node::Play(slot);
         ply += 1;
     }
 
@@ -269,7 +313,7 @@ fn convert_moves(
 
 fn convert_variation(
     game: &mut game::Game,
-    previous: Option<Id>,
+    previous: Node,
     ply: usize,
     after: san::San,
     variation: Variation,
@@ -278,12 +322,12 @@ fn convert_variation(
         return Err(Error::EmptyVariation { ply, san: after });
     };
 
-    let mut lines = game.lines_mut_at(previous.clone()).expect("previous play exists");
-    let play = first.san.resolve(lines.state())?;
-    let id = lines.push(play)?;
+    let mut options = game.options_mut_at(previous).expect("previous play exists");
+    let play = first.san.resolve(options.cache())?;
+    let slot = options.push(play)?;
 
     {
-        let mut play = game.play_mut(id.clone()).expect("inserted play exists");
+        let mut play = game.play_mut(slot).expect("inserted play exists");
         play.meta.intro = variation.intro.map(Into::into);
         play.meta.outro = variation.outro.map(Into::into);
         play.meta.comment = first.comment.clone().map(Into::into);
@@ -296,9 +340,9 @@ fn convert_variation(
     }
 
     for variation in &first.variations {
-        convert_variation(game, previous.clone(), ply, first.san, variation.clone())?;
+        convert_variation(game, previous, ply, first.san, variation.clone())?;
     }
-    convert_moves(game, Some(id), ply + 1, rest.to_vec())
+    convert_moves(game, Node::Play(slot), ply + 1, rest.to_vec())
 }
 
 impl fmt::Display for Game {
@@ -342,7 +386,7 @@ impl<R: Read> GameShaped<R> {
 }
 
 impl<R: Read> Iterator for GameShaped<R> {
-    type Item = io::Result<String>;
+    type Item = io::Result<Chunk>;
 
     fn next(&mut self) -> Option<Self::Item> {
         game_shaped(&mut self.lines).transpose()
@@ -352,25 +396,39 @@ impl<R: Read> Iterator for GameShaped<R> {
 struct Lines<R: Read> {
     reader: BufReader<R>,
     bytes: Vec<u8>,
+    line: usize,
 }
 
 impl<R: Read> Lines<R> {
     fn new(reader: R) -> Self {
-        Self { reader: BufReader::new(reader), bytes: Vec::new() }
+        Self { reader: BufReader::new(reader), bytes: Vec::new(), line: 0 }
     }
 }
 
 impl<R: Read> Iterator for Lines<R> {
-    type Item = io::Result<String>;
+    type Item = io::Result<SourceLine>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.bytes.clear();
         match self.reader.read_until(b'\n', &mut self.bytes) {
             Ok(0) => None,
-            Ok(_) => Some(Ok(decode_line(&self.bytes))),
+            Ok(_) => {
+                self.line += 1;
+                Some(Ok(SourceLine { number: self.line, text: decode_line(&self.bytes) }))
+            }
             Err(error) => Some(Err(error)),
         }
     }
+}
+
+struct SourceLine {
+    number: usize,
+    text: String,
+}
+
+struct Chunk {
+    line: usize,
+    text: String,
 }
 
 fn decode_line(bytes: &[u8]) -> String {
@@ -386,28 +444,29 @@ fn decode_line(bytes: &[u8]) -> String {
     }
 }
 
-fn game_shaped<I>(lines: &mut Peekable<I>) -> io::Result<Option<String>>
+fn game_shaped<I>(lines: &mut Peekable<I>) -> io::Result<Option<Chunk>>
 where
-    I: Iterator<Item = io::Result<String>>,
+    I: Iterator<Item = io::Result<SourceLine>>,
 {
     let Some(line) = lines.next().transpose()? else {
         return Ok(None);
     };
-    let mut buffer = Buffer::new(line);
+    let first_line = line.number;
+    let mut buffer = Buffer::new(line.text);
 
     loop {
         let next = match lines.peek() {
-            Some(Ok(next)) => Some(next.as_str()),
+            Some(Ok(next)) => Some(next.text.as_str()),
             Some(Err(_)) | None => None,
         };
         if buffer.is_complete(next) {
-            return Ok(Some(buffer.take()));
+            return Ok(Some(Chunk { line: first_line, text: buffer.take() }));
         }
 
         let Some(line) = lines.next().transpose()? else {
-            return Ok(Some(buffer.take()));
+            return Ok(Some(Chunk { line: first_line, text: buffer.take() }));
         };
-        buffer.push(line);
+        buffer.push(line.text);
     }
 }
 
@@ -766,22 +825,19 @@ fn parse_move(input: &mut Input<'_>) -> ModalResult<Move> {
 }
 
 fn variations(input: &mut Input<'_>) -> ModalResult<Vec<Variation>> {
-    repeat(0.., variation).parse_next(input)
+    repeat(0.., preceded(multispace0, variation)).parse_next(input)
 }
 
 // ({intro} 1... c5 {move comment}) {outro}
 fn variation(input: &mut Input<'_>) -> ModalResult<Variation> {
-    let mut variation = preceded(
-        multispace0,
-        delimited(
-            ('(', multispace0),
-            seq! {Variation {
-                intro: comments,
-                moves: repeat(0.., parse_move),
-                outro: ().value(None),
-            }},
-            (multispace0, ')'),
-        ),
+    let mut variation = delimited(
+        ('(', multispace0),
+        seq! {Variation {
+            intro: comments,
+            moves: repeat(0.., parse_move),
+            outro: ().value(None),
+        }},
+        (multispace0, ')'),
     )
     .context(StrContext::Label("PGN variation"))
     .parse_next(input)?;
@@ -1017,7 +1073,7 @@ mod tests {
             1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 {Italian Game} 1-0
         "#;
 
-        let game = parse_game.parse(pgn).unwrap();
+        let game = game.parse(pgn).unwrap();
         assert_eq!(game.tag_pairs.len(), 7);
         assert_eq!(game.tag_pairs[0].name, Tag::Event);
         assert_eq!(game.tag_pairs[0].value, "Casual Game");
@@ -1033,7 +1089,7 @@ mod tests {
 1. e4! e5 $1 (1... c5 {Sicilian}) 2. Nf3 *
 "#;
 
-        let game = parse_game.parse(pgn).unwrap();
+        let game = game.parse(pgn).unwrap();
         let e4 = &game.moves[0];
         assert_eq!(
             e4.san.play,
@@ -1057,7 +1113,7 @@ mod tests {
 
     #[test]
     fn converts_to_game() {
-        let pgn = parse_game
+        let pgn = game
             .parse(
                 r#"[Event "x"]
 
@@ -1068,13 +1124,13 @@ mod tests {
         let game = game::Game::try_from(pgn).unwrap();
 
         assert_eq!(game.tags.len(), 1);
-        assert_eq!(game.lines().len(), 1);
+        assert_eq!(game.options().len(), 1);
 
-        let e4_id = game.lines().lines()[0].clone();
+        let e4_id = game.options().options()[0];
         let e4 = game.play(e4_id).unwrap();
         assert_eq!(e4.play().to, Square::E4);
         assert_eq!(e4.meta.nags, vec![Nag::Symbol("!".to_string())]);
-        let e4_lines = e4.lines();
+        let e4_lines = e4.options();
         assert_eq!(e4_lines.len(), 2);
 
         let e5 = e4_lines.get(0).unwrap();
@@ -1088,7 +1144,7 @@ mod tests {
 
     #[test]
     fn converts_fen_game() {
-        let pgn = parse_game
+        let pgn = game
             .parse(
                 r#"[FEN "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1"]
 
@@ -1098,7 +1154,7 @@ mod tests {
             .unwrap();
         let game = game::Game::try_from(pgn).unwrap();
 
-        let lines = game.lines();
+        let lines = game.options();
         let e4 = lines.get(0).unwrap();
         assert_eq!(e4.play().from, Square::E2);
         assert_eq!(e4.play().to, Square::E4);
@@ -1109,7 +1165,7 @@ mod tests {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
         let position = Position::new(fen::position_fen.parse(fen).unwrap()).unwrap();
         let mut game = game::Game::new(position);
-        game.lines_mut().push(crate::Move::normal(Role::King, Square::E8, Square::D8)).unwrap();
+        game.options_mut().push(crate::Move::normal(Role::King, Square::E8, Square::D8)).unwrap();
 
         let pgn = Game::from(game);
         assert!(pgn.to_string().contains("\n17... Kd8 *"), "{}", pgn);
@@ -1119,11 +1175,13 @@ mod tests {
     #[test]
     fn displays_figurine_movetext() {
         let mut game = game::Game::new(Position::standard());
-        let e4 =
-            game.lines_mut().push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
+        let e4 = game
+            .options_mut()
+            .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
+            .unwrap();
         game.play_mut(e4)
             .unwrap()
-            .lines_mut()
+            .options_mut()
             .push(crate::Move::normal(Role::Knight, Square::G8, Square::F6))
             .unwrap();
 
@@ -1137,16 +1195,18 @@ mod tests {
         let mut game = game::Game::new(Position::standard());
         game.tags.push(TagPair { name: Tag::Event, value: "x".to_string() });
 
-        let e4 =
-            game.lines_mut().push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
-        game.lines_mut().push(crate::Move::normal(Role::Pawn, Square::D2, Square::D4)).unwrap();
+        let e4 = game
+            .options_mut()
+            .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
+            .unwrap();
+        game.options_mut().push(crate::Move::normal(Role::Pawn, Square::D2, Square::D4)).unwrap();
 
         {
             let mut e4 = game.play_mut(e4).unwrap();
             e4.meta.nags.push(Nag::Symbol("!".to_string()));
-            e4.lines_mut().push(crate::Move::normal(Role::Pawn, Square::E7, Square::E5)).unwrap();
+            e4.options_mut().push(crate::Move::normal(Role::Pawn, Square::E7, Square::E5)).unwrap();
             let c5 = e4
-                .lines_mut()
+                .options_mut()
                 .push(crate::Move::normal(Role::Pawn, Square::C7, Square::C5))
                 .unwrap();
             game.play_mut(c5).unwrap().meta.comment = Some(text("Sicilian"));
@@ -1168,11 +1228,11 @@ mod tests {
         let mut game = game::Game::new(position);
 
         for play in position.legal_moves() {
-            let id = game.lines_mut().push(play).unwrap();
-            let replies = game.play(id.clone()).unwrap().legal().to_vec();
+            let id = game.options_mut().push(play).unwrap();
+            let replies = game.play(id).unwrap().legal().to_vec();
             let mut play = game.play_mut(id).unwrap();
             for reply in replies {
-                play.lines_mut().push(reply).unwrap();
+                play.options_mut().push(reply).unwrap();
             }
         }
 
@@ -1189,7 +1249,7 @@ mod tests {
 1. e4 e5 {A} (1... c5) {B} (1... e6) {C} 2. Nf3 *
 "#;
 
-        let game = parse_game.parse(pgn).unwrap();
+        let game = game.parse(pgn).unwrap();
         let e5 = &game.moves[1];
         assert_eq!(e5.comment, Some(comment("A")));
         assert_eq!(e5.variations.len(), 2);
@@ -1205,9 +1265,8 @@ mod tests {
 
     #[test]
     fn extracts_commands_from_move_comments() {
-        let game = parse_game
-            .parse(r#"[Event "x"] 1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#)
-            .unwrap();
+        let game =
+            game.parse(r#"[Event "x"] 1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#).unwrap();
         let e4 = &game.moves[0];
         assert_eq!(
             e4.annotations,
@@ -1233,7 +1292,7 @@ mod tests {
 
     #[test]
     fn extracts_multi_parameter_commands() {
-        let game = parse_game
+        let game = game
             .parse(r#"[Event "x"] 1. e4 {[%tqu "En","find the move","","","e2e4","",10]} *"#)
             .unwrap();
         let e4 = &game.moves[0];
@@ -1262,7 +1321,7 @@ mod tests {
 
     #[test]
     fn extracts_commands_with_trailing_whitespace() {
-        let game = parse_game.parse(r#"[Event "x"] 1. e4 {[%foo ]} *"#).unwrap();
+        let game = game.parse(r#"[Event "x"] 1. e4 {[%foo ]} *"#).unwrap();
         assert_eq!(
             game.moves[0].annotations,
             vec![Annotation::Command(Command { command: "foo".to_string(), parameters: vec![] })]
@@ -1277,14 +1336,14 @@ mod tests {
 
     #[test]
     fn ignores_empty_comments() {
-        let game = parse_game.parse(r#"[Event "x"] 1. e4 {} {   } e5 *"#).unwrap();
+        let game = game.parse(r#"[Event "x"] 1. e4 {} {   } e5 *"#).unwrap();
         assert_eq!(game.moves[0].comment, None);
         assert_eq!(game.moves[1].comment, None);
     }
 
     #[test]
     fn parses_san_in_moves() {
-        let game = parse_game.parse(r#"[Event "x"] 1. exd8=Q# *"#).unwrap();
+        let game = game.parse(r#"[Event "x"] 1. exd8=Q# *"#).unwrap();
         assert_eq!(
             game.moves[0].san,
             san::San {
@@ -1303,8 +1362,7 @@ mod tests {
 
     #[test]
     fn displays_game() {
-        let game =
-            parse_game.parse(r#"[Event "x"] 1. e4! e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"#).unwrap();
+        let game = game.parse(r#"[Event "x"] 1. e4! e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"#).unwrap();
         assert_eq!(
             game.to_string(),
             "[Event \"x\"]\n\n1. e4! 1... e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"
@@ -1349,5 +1407,10 @@ mod tests {
         assert_eq!(games.len(), 2);
         assert_eq!(games[0].tag_pairs[0].value, "a");
         assert_eq!(games[1].tag_pairs[0].value, "b");
+    }
+
+    #[test]
+    fn parses_line_wrapped_black_move_without_number() {
+        game.parse("[Event \"x\"]\n\n14. f3 b6\n15. Be2 *").unwrap();
     }
 }

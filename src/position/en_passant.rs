@@ -1,11 +1,13 @@
 use core::ops;
 
-use super::All;
+use crate::finite::{FiniteSet, Table};
 
 /// Restricted square, can only be on third or sixth rank
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Square(super::Square);
+
+pub type SquareTable<T = bool> = Table<Square, T, 16>;
 
 impl TryFrom<super::Square> for Square {
     type Error = ();
@@ -31,9 +33,12 @@ impl From<Square> for super::Square {
     }
 }
 
-impl All<16> for Square {
+impl FiniteSet<16> for Square {
     const ALL: [Square; 16] = Square::ALL;
-    fn index(self) -> usize {
+}
+
+impl Square {
+    pub const fn index(self) -> usize {
         match self {
             Square(super::Square::A3) => 0,
             Square(super::Square::B3) => 1,
@@ -54,9 +59,7 @@ impl All<16> for Square {
             _ => unreachable!(),
         }
     }
-}
 
-impl Square {
     pub const ALL: [Square; 16] = [
         Square(super::Square::A3),
         Square(super::Square::B3),
@@ -79,6 +82,36 @@ impl Square {
     #[inline]
     pub const fn square(self) -> super::Square {
         self.0
+    }
+}
+
+impl<T> Table<Square, T, 16> {
+    pub const fn get_ref(&self, key: Square) -> &T {
+        &self.all[key.index()]
+    }
+
+    pub const fn get_mut(&mut self, key: Square) -> &mut T {
+        &mut self.all[key.index()]
+    }
+}
+
+impl<T: Copy> Table<Square, T, 16> {
+    pub const fn get(&self, key: Square) -> T {
+        self.all[key.index()]
+    }
+}
+
+impl<T> ops::Index<Square> for Table<Square, T, 16> {
+    type Output = T;
+
+    fn index(&self, key: Square) -> &T {
+        &self.all[key.index()]
+    }
+}
+
+impl<T> ops::IndexMut<Square> for Table<Square, T, 16> {
+    fn index_mut(&mut self, key: Square) -> &mut T {
+        &mut self.all[key.index()]
     }
 }
 
