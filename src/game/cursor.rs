@@ -41,13 +41,13 @@ impl Cursor {
         self.node
     }
 
-    pub fn cache(&self) -> &Cache {
-        self.game.previous_cache(self.node)
+    pub fn state(&self) -> &State {
+        self.game.state(self.node)
     }
 
     #[must_use]
     pub fn set(&mut self, node: Node) -> bool {
-        if !self.game.contains_node(node) {
+        if !self.game.contains(node) {
             return false;
         }
 
@@ -63,7 +63,7 @@ impl Cursor {
     }
 
     pub fn position(&self) -> Position {
-        self.game.previous_position(self.node)
+        self.game.position(self.node)
     }
 
     pub fn options(&self) -> OptionsRef<'_> {
@@ -83,7 +83,7 @@ impl Cursor {
     }
 
     pub fn next(&self) -> Option<Node> {
-        self.game.options_slice(self.node).first().copied().map(Node::Play)
+        self.game.tree.options(self.node).first().copied().map(Node::Play)
     }
 
     #[must_use]
@@ -122,8 +122,7 @@ impl Cursor {
         let previous = self.previous();
         let play = self.game.play(slot).expect("cursor slot must exist").play();
 
-        let _ =
-            self.game.options_mut_at(previous).expect("previous options must exist").remove(play);
+        let _ = self.game.options_mut(previous).expect("previous options must exist").remove(play);
         self.node = previous;
         true
     }
@@ -133,7 +132,7 @@ impl Cursor {
             return Err(Error::Nonlinear(next));
         }
 
-        let slot = self.game.push_option(self.node, play)?;
+        let slot = self.game.options_mut(self.node).expect("cursor node must exist").push(play)?;
         self.node = Node::Play(slot);
         Ok(slot)
     }
@@ -149,7 +148,7 @@ impl<'a> Iterator for Mainline<'a> {
     type Item = &'a Play;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let slot = self.game.options_slice(self.node).first().copied()?;
+        let slot = self.game.tree.options(self.node).first().copied()?;
         self.node = Node::Play(slot);
         Some(self.game.tree.play(slot).expect("mainline slot must exist"))
     }

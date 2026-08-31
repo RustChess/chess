@@ -61,7 +61,7 @@ impl From<&game::Game> for Game {
             tags: game.tags.clone(),
             intro: game.intro.clone(),
             outcome: game.outcome,
-            start: game.start.fen(),
+            start: game.start().fen(),
             options: game.tree.start().to_vec(),
         }
     }

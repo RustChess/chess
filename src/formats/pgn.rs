@@ -159,7 +159,7 @@ impl TryFrom<Game> for game::Game {
 impl From<game::Game> for Game {
     fn from(game: game::Game) -> Self {
         let start = game.start();
-        let moves = game_moves(&game, game.options());
+        let moves = game_moves(&game, game.start_options());
         let mut tag_pairs = game.tags;
 
         if start != Position::standard() {
@@ -179,29 +179,24 @@ fn set_tag(tag_pairs: &mut Vec<TagPair>, name: Tag, value: impl Into<String>) {
     }
 }
 
-fn game_moves<'a>(game: &'a game::Game, mut options: game::OptionsRef<'a>) -> Vec<Move> {
+fn game_moves<'a>(game: &'a game::Game, options: game::OptionsRef<'a>) -> Vec<Move> {
     let mut moves = Vec::new();
+    let mut options = options;
 
-    while let Some(slot) = options.options().first() {
-        let play = game.play(*slot).expect("option must reference an existing play");
-        moves.push(game_move(game, &play, options));
+    while let Some((play, variations)) = options.split_first() {
+        moves.push(game_move(game, &play, variations));
         options = play.options();
     }
 
     moves
 }
 
-fn game_move(game: &game::Game, play: &game::Play, options: game::OptionsRef<'_>) -> Move {
+fn game_move(game: &game::Game, play: &game::Play, variations: game::OptionsRef<'_>) -> Move {
     Move {
         san: san::San::from((play.play(), play.short(), play.check())),
         comment: play.meta.comment.clone().map(Comment),
         annotations: annotations(&play.meta),
-        variations: options
-            .options()
-            .iter()
-            .skip(1)
-            .map(|slot| game_variation(game, *slot))
-            .collect(),
+        variations: variations.iter().map(|play| game_variation(game, play.slot())).collect(),
     }
 }
 
@@ -285,8 +280,8 @@ fn convert_moves(
     moves: Vec<Move>,
 ) -> Result<(), Error> {
     for pgn_move in moves {
-        let mut options = game.options_mut_at(previous).expect("previous play exists");
-        let play = pgn_move.san.resolve(options.cache())?;
+        let mut options = game.options_mut(previous).expect("previous play exists");
+        let play = pgn_move.san.resolve(options.as_ref().legal())?;
         let slot = options.push(play)?;
 
         {
@@ -322,8 +317,8 @@ fn convert_variation(
         return Err(Error::EmptyVariation { ply, san: after });
     };
 
-    let mut options = game.options_mut_at(previous).expect("previous play exists");
-    let play = first.san.resolve(options.cache())?;
+    let mut options = game.options_mut(previous).expect("previous play exists");
+    let play = first.san.resolve(options.as_ref().legal())?;
     let slot = options.push(play)?;
 
     {
@@ -1124,20 +1119,20 @@ mod tests {
         let game = game::Game::try_from(pgn).unwrap();
 
         assert_eq!(game.tags.len(), 1);
-        assert_eq!(game.options().len(), 1);
+        assert_eq!(game.start_options().len(), 1);
 
-        let e4_id = game.options().options()[0];
+        let e4_id = game.start_options().first().unwrap().slot();
         let e4 = game.play(e4_id).unwrap();
         assert_eq!(e4.play().to, Square::E4);
         assert_eq!(e4.meta.nags, vec![Nag::Symbol("!".to_string())]);
-        let e4_lines = e4.options();
-        assert_eq!(e4_lines.len(), 2);
+        let e4_options = e4.options();
+        assert_eq!(e4_options.len(), 2);
 
-        let e5 = e4_lines.get(0).unwrap();
+        let (e5, variations) = e4_options.split_first().unwrap();
         assert_eq!(e5.play().to, Square::E5);
         assert_eq!(e5.meta.nags, vec![Nag::Numeric(1)]);
 
-        let c5 = e4_lines.get(1).unwrap();
+        let c5 = variations.first().unwrap();
         assert_eq!(c5.play().to, Square::C5);
         assert_eq!(c5.meta.comment, Some(text("Sicilian")));
     }
@@ -1154,8 +1149,8 @@ mod tests {
             .unwrap();
         let game = game::Game::try_from(pgn).unwrap();
 
-        let lines = game.options();
-        let e4 = lines.get(0).unwrap();
+        let options = game.start_options();
+        let e4 = options.first().unwrap();
         assert_eq!(e4.play().from, Square::E2);
         assert_eq!(e4.play().to, Square::E4);
     }
@@ -1165,7 +1160,9 @@ mod tests {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
         let position = Position::new(fen::position_fen.parse(fen).unwrap()).unwrap();
         let mut game = game::Game::new(position);
-        game.options_mut().push(crate::Move::normal(Role::King, Square::E8, Square::D8)).unwrap();
+        game.start_options_mut()
+            .push(crate::Move::normal(Role::King, Square::E8, Square::D8))
+            .unwrap();
 
         let pgn = Game::from(game);
         assert!(pgn.to_string().contains("\n17... Kd8 *"), "{}", pgn);
@@ -1176,7 +1173,7 @@ mod tests {
     fn displays_figurine_movetext() {
         let mut game = game::Game::new(Position::standard());
         let e4 = game
-            .options_mut()
+            .start_options_mut()
             .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
             .unwrap();
         game.play_mut(e4)
@@ -1196,10 +1193,12 @@ mod tests {
         game.tags.push(TagPair { name: Tag::Event, value: "x".to_string() });
 
         let e4 = game
-            .options_mut()
+            .start_options_mut()
             .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
             .unwrap();
-        game.options_mut().push(crate::Move::normal(Role::Pawn, Square::D2, Square::D4)).unwrap();
+        game.start_options_mut()
+            .push(crate::Move::normal(Role::Pawn, Square::D2, Square::D4))
+            .unwrap();
 
         {
             let mut e4 = game.play_mut(e4).unwrap();
@@ -1228,7 +1227,7 @@ mod tests {
         let mut game = game::Game::new(position);
 
         for play in position.legal_moves() {
-            let id = game.options_mut().push(play).unwrap();
+            let id = game.start_options_mut().push(play).unwrap();
             let replies = game.play(id).unwrap().legal().to_vec();
             let mut play = game.play_mut(id).unwrap();
             for reply in replies {

@@ -156,16 +156,16 @@ impl From<(crate::Move, game::Short, Option<Check>)> for San {
 }
 
 impl San {
-    pub fn resolve(&self, cache: &game::Cache) -> Result<crate::Move, Error> {
+    pub fn resolve(&self, legal: &[crate::Move]) -> Result<crate::Move, Error> {
         // We ignore incorrect check(mate) annotations.
         // crate::Move is converted to SAN, and compared against the input move.
         let resolves_to_self = |play: &crate::Move| {
             // Check/checkmate markers are notation adornments. The concrete move
             // is resolved from the SAN move body and the legal moves in this state.
-            San::from((*play, game::Short::new(&cache.legal, *play), None)).play == self.play
+            San::from((*play, game::Short::new(legal, *play), None)).play == self.play
         };
         // legal crate moves that would match the input SAN move
-        let mut matches = cache.legal.iter().copied().filter(resolves_to_self);
+        let mut matches = legal.iter().copied().filter(resolves_to_self);
 
         let Some(play) = matches.next() else {
             return Err(Error::Illegal);
