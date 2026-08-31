@@ -1,5 +1,5 @@
 use crate::Position;
-use crate::game::{self, Key, Node, Tag};
+use crate::game::{self, Node, Roster};
 
 use super::*;
 
@@ -17,28 +17,24 @@ pub enum Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-impl Game {
-    pub fn start(&self) -> Option<Position> {
-        game_position(&self.tags).ok()
-    }
-
-    pub fn first_ply(&self) -> usize {
-        self.start().map(|position| position.first_ply()).unwrap_or(0)
-    }
-}
-
 impl From<crate::Game> for Game {
     fn from(game: crate::Game) -> Self {
         let start = game.start();
         let moves = pgn_moves(&game, game.start_options());
-        let mut tags = game.tags;
+        let mut tags = pgn_roster(&game.roster, game.outcome);
+        tags.extend(game.tags.into_iter().map(Tag::Other));
 
         if start != Position::standard() {
-            pgn_set_tag(&mut tags, Key::SetUp, "1");
-            pgn_set_tag(&mut tags, Key::Fen, start.fen());
+            pgn_set_start(&mut tags, start.unvalidated());
         }
 
-        Self { tags, intro: game.intro.map(Comment), moves, outcome: game.outcome }
+        Self {
+            tags,
+            start: start.unvalidated(),
+            intro: game.intro.map(Comment),
+            moves,
+            outcome: game.outcome,
+        }
     }
 }
 
@@ -46,32 +42,16 @@ impl TryFrom<Game> for crate::Game {
     type Error = Error;
 
     fn try_from(pgn: Game) -> Result<Self> {
-        let position = game_position(&pgn.tags)?;
+        let position = Position::new(pgn.start).map_err(|_| Error::Fen(pgn.start.fen()))?;
         let mut game = crate::Game::new(position);
-        game.tags = pgn.tags;
+        game.roster = game_roster(&pgn.tags);
+        game.tags = game_tags(&pgn.tags);
         game.intro = pgn.intro.map(Into::into);
         game.outcome = pgn.outcome;
 
         game_moves(&mut game, Node::Start, 0, pgn.moves)?;
 
         Ok(game)
-    }
-}
-
-//
-// Helper functions for TryFrom<pgn::Game> for crate::Game
-//
-// The prefix `game_` means crate::Game
-//
-
-fn game_position(tags: &[Tag]) -> Result<Position> {
-    if let Some(fen) = tags.iter().find(|tag| tag.key == Key::Fen) {
-        let unvalidated = fen::position_unvalidated
-            .parse(fen.value.as_str())
-            .map_err(|_| Error::Fen(fen.value.clone()))?;
-        Position::new(unvalidated).map_err(|_| Error::Fen(fen.value.clone()))
-    } else {
-        Ok(Position::standard())
     }
 }
 
@@ -148,12 +128,65 @@ fn game_variation(
 // The prefix `pgn_` means pgn::Game
 //
 
-fn pgn_set_tag(tags: &mut Vec<Tag>, key: Key, value: impl Into<String>) {
-    if let Some(tag) = tags.iter_mut().find(|tag| tag.key == key) {
-        tag.value = value.into();
-    } else {
-        tags.push(Tag { key, value: value.into() });
+fn game_roster(tags: &[Tag]) -> Roster {
+    let mut roster = Roster::default();
+
+    for tag in tags {
+        match tag {
+            Tag::Event(value) => roster.event = roster_text(value, "?"),
+            Tag::Site(value) => roster.site = roster_text(value, "?"),
+            Tag::Date(value) => roster.date = roster_text(value, "????.??.??"),
+            Tag::Round(value) => roster.round = roster_text(value, "?"),
+            Tag::White(value) => roster.white = roster_text(value, "?"),
+            Tag::Black(value) => roster.black = roster_text(value, "?"),
+            Tag::Outcome(_) | Tag::Fen(_) | Tag::SetUp(_) | Tag::Other(_) => {}
+        }
     }
+
+    roster
+}
+
+fn roster_text(value: &str, default: &str) -> Option<game::Text> {
+    let value = game::Text::new(value)?;
+    (value.as_ref() != default).then_some(value)
+}
+
+fn game_tags(tags: &[Tag]) -> Vec<game::Tag> {
+    tags.iter()
+        .filter_map(|tag| match tag {
+            Tag::Other(tag) => Some(tag.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn pgn_roster(roster: &Roster, outcome: game::Outcome) -> Vec<Tag> {
+    let mut tags = Vec::new();
+    if let Some(value) = &roster.event {
+        tags.push(Tag::Event(value.to_string()));
+    }
+    if let Some(value) = &roster.site {
+        tags.push(Tag::Site(value.to_string()));
+    }
+    if let Some(value) = &roster.date {
+        tags.push(Tag::Date(value.to_string()));
+    }
+    if let Some(value) = &roster.round {
+        tags.push(Tag::Round(value.to_string()));
+    }
+    if let Some(value) = &roster.white {
+        tags.push(Tag::White(value.to_string()));
+    }
+    if let Some(value) = &roster.black {
+        tags.push(Tag::Black(value.to_string()));
+    }
+    tags.push(Tag::Outcome(outcome));
+    tags
+}
+
+fn pgn_set_start(tags: &mut Vec<Tag>, position: crate::position::Unvalidated) {
+    tags.push(Tag::SetUp(true));
+    tags.push(Tag::Fen(position));
 }
 
 fn pgn_moves<'a>(game: &'a crate::Game, options: game::OptionsRef<'a>) -> Vec<Move> {

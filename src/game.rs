@@ -32,6 +32,7 @@ pub enum Error {
 /// A game of chess, including variations and annotations.
 #[derive(Clone, PartialEq)]
 pub struct Game {
+    pub roster: Roster,
     pub tags: Vec<Tag>,
     pub intro: Option<Text>,
     pub outcome: Outcome,
@@ -65,6 +66,7 @@ impl Game {
     pub fn new(position: Position) -> Self {
         let legal = position.legal_moves();
         Self {
+            roster: Default::default(),
             tags: Default::default(),
             intro: None,
             outcome: Default::default(),
@@ -310,26 +312,28 @@ impl Ambiguity {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Tag {
-    pub key: Key,
-    pub value: String,
+pub struct Roster {
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub event: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub site: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub date: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub round: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub white: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub black: Option<Text>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum Key {
-    Event,
-    Site,
-    Date,
-    Round,
-    White,
-    Black,
-    Result,
-    Fen,
-    SetUp,
-    Other(String),
+pub struct Tag {
+    pub key: Text,
+    pub value: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -382,7 +386,7 @@ impl Deref for Text {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Command {
-    pub command: String,
+    pub command: Text,
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
     pub parameters: Vec<String>,
 }

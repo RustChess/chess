@@ -2,7 +2,10 @@
 
 use std::{fmt, str};
 
-use crate::game::{Command, Key, Nag, Outcome, Slot, Tag, Text};
+use crate::{
+    game::{Command, Nag, Outcome, Slot, Tag as OtherTag, Text},
+    position::Unvalidated,
+};
 
 use super::{StrInput as Input, fen, prelude::*, san};
 
@@ -24,9 +27,24 @@ pub mod stream;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     pub tags: Vec<Tag>,
+    pub start: Unvalidated,
     pub intro: Option<Comment>,
     pub moves: Vec<Move>,
     pub outcome: Outcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Tag {
+    Event(String),
+    Site(String),
+    Date(String),
+    Round(String),
+    White(String),
+    Black(String),
+    Outcome(Outcome),
+    Fen(Unvalidated),
+    SetUp(bool),
+    Other(OtherTag),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -40,18 +58,16 @@ pub struct Error {
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
-    delimited(
-        multispace0,
-        seq! {Game {
-        tags: tags,
-        intro: comments,
-        moves: repeat(0.., parse_move),
-        outcome: outcome,
-        }},
-        multispace0,
-    )
-    .context(StrContext::Label("PGN game"))
-    .parse_next(input)
+    delimited(multispace0, (tags, comments, repeat(0.., parse_move), outcome), multispace0)
+        .map(|(tags, intro, moves, outcome)| Game {
+            start: start_position(&tags),
+            tags,
+            intro,
+            moves,
+            outcome,
+        })
+        .context(StrContext::Label("PGN game"))
+        .parse_next(input)
 }
 
 impl fmt::Display for Game {
@@ -66,7 +82,7 @@ impl fmt::Display for Game {
         if let Some(intro) = &self.intro {
             wrap.token(intro)?;
         }
-        write_moves(&self.moves, &mut wrap, self.first_ply(), Notation::San)?;
+        write_moves(&self.moves, &mut wrap, self.start.first_ply(), Notation::San)?;
         wrap.token(self.outcome)
     }
 }
@@ -148,7 +164,7 @@ impl Game {
         if let Some(intro) = &self.intro {
             wrap.token(intro).expect("writing PGN movetext to string");
         }
-        write_moves(&self.moves, &mut wrap, self.first_ply(), notation)
+        write_moves(&self.moves, &mut wrap, self.start.first_ply(), notation)
             .expect("writing PGN movetext to string");
         movetext
     }
@@ -169,25 +185,37 @@ fn tag_start_ok(mut input: &str) -> bool {
 
 impl fmt::Display for Tag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{} \"{}\"]", self.key, escape_tag_value(&self.value))
+        match self {
+            Tag::Event(value) => write_tag(f, "Event", value),
+            Tag::Site(value) => write_tag(f, "Site", value),
+            Tag::Date(value) => write_tag(f, "Date", value),
+            Tag::Round(value) => write_tag(f, "Round", value),
+            Tag::White(value) => write_tag(f, "White", value),
+            Tag::Black(value) => write_tag(f, "Black", value),
+            Tag::Outcome(outcome) => write_tag(f, "Result", &outcome.to_string()),
+            Tag::Fen(position) => write_tag(f, "FEN", &position.fen()),
+            Tag::SetUp(setup) => write_tag(f, "SetUp", if *setup { "1" } else { "0" }),
+            Tag::Other(tag) => write_tag(f, tag.key.as_ref(), &tag.value),
+        }
     }
 }
 
-impl fmt::Display for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Key::Event => write!(f, "Event"),
-            Key::Site => write!(f, "Site"),
-            Key::Date => write!(f, "Date"),
-            Key::Round => write!(f, "Round"),
-            Key::White => write!(f, "White"),
-            Key::Black => write!(f, "Black"),
-            Key::Result => write!(f, "Result"),
-            Key::Fen => write!(f, "FEN"),
-            Key::SetUp => write!(f, "SetUp"),
-            Key::Other(tag) => write!(f, "{tag}"),
-        }
+fn write_tag(f: &mut fmt::Formatter<'_>, key: &str, value: &str) -> fmt::Result {
+    fn escape_tag_value(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
     }
+
+    write!(f, "[{} \"{}\"]", key, escape_tag_value(value))
+}
+
+fn start_position(tags: &[Tag]) -> Unvalidated {
+    tags.iter()
+        .rev()
+        .find_map(|tag| match tag {
+            Tag::Fen(position) => Some(*position),
+            _ => None,
+        })
+        .unwrap_or_else(Unvalidated::start)
 }
 
 impl fmt::Display for Annotation {
@@ -417,10 +445,6 @@ impl Move {
     }
 }
 
-fn escape_tag_value(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
 pub fn tags(input: &mut Input<'_>) -> ModalResult<Vec<Tag>> {
     repeat(0.., tag).parse_next(input)
 }
@@ -430,12 +454,12 @@ pub fn tag(input: &mut Input<'_>) -> ModalResult<Tag> {
         multispace0,
         delimited(
             ('[', multispace0),
-            separated_pair(key, multispace1, tag_value),
+            separated_pair(name, multispace1, tag_value),
             (multispace0, ']'),
         ),
         multispace0,
     )
-    .map(|(key, value)| Tag { key, value })
+    .verify_map(|(key, value)| tag_from_pair(key, value))
     .context(StrContext::Label("PGN tag pair"))
     .parse_next(input)
 }
@@ -529,22 +553,23 @@ fn skip_move_number(input: &mut Input<'_>) -> ModalResult<()> {
     (dec_uint::<_, u32, _>, alt(("...", "."))).value(()).parse_next(input)
 }
 
-fn key(input: &mut Input<'_>) -> ModalResult<Key> {
-    use Key::*;
-
-    name.map(|name: &str| match name {
-        "Event" => Event,
-        "Site" => Site,
-        "Date" => Date,
-        "Round" => Round,
-        "White" => White,
-        "Black" => Black,
-        "Result" => Result,
-        "FEN" => Fen,
-        "SetUp" => SetUp,
-        _ => Other(name.to_string()),
+fn tag_from_pair(key: Text, value: String) -> Option<Tag> {
+    Some(match key.as_ref() {
+        "Event" => Tag::Event(value),
+        "Site" => Tag::Site(value),
+        "Date" => Tag::Date(value),
+        "Round" => Tag::Round(value),
+        "White" => Tag::White(value),
+        "Black" => Tag::Black(value),
+        "Result" => Tag::Outcome(outcome.parse(value.as_str()).ok()?),
+        "FEN" => Tag::Fen(fen::position_unvalidated.parse(value.as_str()).ok()?),
+        "SetUp" => Tag::SetUp(match value.as_str() {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        }),
+        _ => Tag::Other(OtherTag { key, value }),
     })
-    .parse_next(input)
 }
 
 fn tag_value(input: &mut Input<'_>) -> ModalResult<String> {
@@ -563,8 +588,10 @@ fn tag_value_char(input: &mut Input<'_>) -> ModalResult<char> {
     alt((preceded('\\', any), none_of(['"', '\\']))).parse_next(input)
 }
 
-fn name<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
-    take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_').parse_next(input)
+fn name(input: &mut Input<'_>) -> ModalResult<Text> {
+    take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
+        .verify_map(Text::new)
+        .parse_next(input)
 }
 
 fn numeric_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
@@ -630,8 +657,8 @@ fn split_comment(raw: String) -> MoveComment {
 
 fn command(input: &mut Input<'_>) -> ModalResult<Command> {
     delimited("[%", (name, opt(preceded(space1, parameters))), (space0, ']'))
-        .map(|(command, parameters): (&str, Option<Vec<String>>)| Command {
-            command: command.to_string(),
+        .map(|(command, parameters): (Text, Option<Vec<String>>)| Command {
+            command,
             parameters: parameters.unwrap_or_default(),
         })
         .parse_next(input)
@@ -707,8 +734,7 @@ mod tests {
 
         let game = game.parse(pgn).unwrap();
         assert_eq!(game.tags.len(), 7);
-        assert_eq!(game.tags[0].key, Key::Event);
-        assert_eq!(game.tags[0].value, "Casual Game");
+        assert_eq!(game.tags[0], Tag::Event("Casual Game".to_string()));
         assert_eq!(game.moves.len(), 6);
         assert_eq!(game.outcome, Outcome::White);
         assert_eq!(game.moves[5].comment, Some(comment("Italian Game")));
@@ -755,7 +781,8 @@ mod tests {
             .unwrap();
         let game = crate::Game::try_from(pgn).unwrap();
 
-        assert_eq!(game.tags.len(), 1);
+        assert_eq!(game.roster.event, Some(text("x")));
+        assert_eq!(game.tags.len(), 0);
         assert_eq!(game.start_options().len(), 1);
 
         let e4_id = game.start_options().first().unwrap().slot();
@@ -793,6 +820,21 @@ mod tests {
     }
 
     #[test]
+    fn start_uses_last_fen_tag() {
+        let pgn = game
+            .parse(
+                r#"[FEN "4k3/8/8/8/8/8/8/4K3 w - - 0 1"]
+[FEN "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1"]
+
+1. e4 *
+"#,
+            )
+            .unwrap();
+
+        assert_eq!(pgn.start.fen(), "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1");
+    }
+
+    #[test]
     fn displays_fen_game_from_its_start_ply() {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
         let position = Position::new(fen::position_unvalidated.parse(fen).unwrap()).unwrap();
@@ -802,6 +844,8 @@ mod tests {
             .unwrap();
 
         let pgn = Game::from(game);
+        assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
+        assert!(pgn.to_string().contains(&format!("[FEN \"{fen}\"]")), "{}", pgn);
         assert!(pgn.to_string().contains("\n17... Kd8 *"), "{}", pgn);
         assert_eq!(pgn.movetext(), "17... Kd8");
     }
@@ -827,7 +871,7 @@ mod tests {
     #[test]
     fn converts_from_game() {
         let mut game = crate::Game::new(Position::standard());
-        game.tags.push(Tag { key: Key::Event, value: "x".to_string() });
+        game.roster.event = Some(text("x"));
 
         let e4 = game
             .start_options_mut()
@@ -852,6 +896,7 @@ mod tests {
         assert_eq!(
             pgn.to_string(),
             r#"[Event "x"]
+[Result "*"]
 
 1. e4! (1. d4) 1... e5 (1... c5 {Sicilian}) *"#
         );
@@ -908,11 +953,11 @@ mod tests {
             e4.annotations,
             vec![
                 Annotation::Command(Command {
-                    command: "cal".to_string(),
+                    command: text("cal"),
                     parameters: vec!["Ge2e4".to_string()],
                 }),
                 Annotation::Command(Command {
-                    command: "clk".to_string(),
+                    command: text("clk"),
                     parameters: vec!["0:14:49".to_string()],
                 }),
             ]
@@ -935,7 +980,7 @@ mod tests {
         assert_eq!(
             e4.annotations,
             vec![Annotation::Command(Command {
-                command: "tqu".to_string(),
+                command: text("tqu"),
                 parameters: vec![
                     r#""En""#.to_string(),
                     r#""find the move""#.to_string(),
@@ -960,7 +1005,7 @@ mod tests {
         let game = game.parse(r#"[Event "x"] 1. e4 {[%foo ]} *"#).unwrap();
         assert_eq!(
             game.moves[0].annotations,
-            vec![Annotation::Command(Command { command: "foo".to_string(), parameters: vec![] })]
+            vec![Annotation::Command(Command { command: text("foo"), parameters: vec![] })]
         );
         assert_eq!(
             game.to_string(),
@@ -1011,8 +1056,8 @@ mod tests {
         let games =
             stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
-        assert_eq!(games[0].tags[0].value, "a");
-        assert_eq!(games[1].tags[0].value, "b");
+        assert_eq!(games[0].tags[0], Tag::Event("a".to_string()));
+        assert_eq!(games[1].tags[0], Tag::Event("b".to_string()));
     }
 
     #[test]
@@ -1030,8 +1075,8 @@ mod tests {
         let games =
             stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
-        assert_eq!(games[0].tags[0].value, "a");
-        assert_eq!(games[1].tags[0].value, "b");
+        assert_eq!(games[0].tags[0], Tag::Event("a".to_string()));
+        assert_eq!(games[1].tags[0], Tag::Event("b".to_string()));
     }
 
     #[test]
