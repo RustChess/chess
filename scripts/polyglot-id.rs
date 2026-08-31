@@ -11,19 +11,22 @@ use std::{
 
 use chess::{
     id::{
-        Id,
         basis::{Basis, EnPassant, Variant},
+        Id,
     },
     position::{
-        Player, PlayerTable, Role, RoleTable, Side, SideTable, Square, en_passant,
-        square::SquareTable,
+        en_passant, square::SquareTable, Player, PlayerTable, Role, RoleTable, Side, SideTable,
+        Square,
     },
 };
 
-const SOURCE: &str = "https://archive.debian.org/debian/pool/main/p/polyglot/polyglot_2.0.4.orig.tar.gz";
+const SOURCE: &str =
+    "https://archive.debian.org/debian/pool/main/p/polyglot/polyglot_2.0.4.orig.tar.gz";
 
-// Copied verbatim from `random.c` in `SOURCE`.
-// `hash.c` defines the meaning of the array elements and their indexing.
+// Copied verbatim from `random.c` in `SOURCE`:
+// <https://sources.debian.org/src/polyglot/2.0.4-2/random.c#L12-L207>
+// `hash.c` defines the meaning of the array elements and their indexing:
+// <https://sources.debian.org/src/polyglot/2.0.4-2/hash.c#L34>
 const RANDOM64: &str = r#"
    U64(0x9D39247E33776D41), U64(0x2AF7398005AAA5C7), U64(0x44DB015024623547), U64(0x9C15F73E62A76AE2),
    U64(0x75834465489C0C89), U64(0x3290AC3A203001BF), U64(0x0FBBAD1F61042279), U64(0xE83A908FF2FB60CA),
@@ -339,7 +342,11 @@ fn write_en_passant<W: Write>(writer: &mut Writer<W>, en_passant: EnPassant) -> 
     writer.field_id("none", "en-passant:none", en_passant.none)?;
     writer.field_table("square", "en_passant::SquareTable", |writer| {
         writer.table_values(en_passant::Square::ALL, |writer, square| {
-            write_id(writer, &format!("en-passant:{}", square.square()), en_passant.square.get(square))
+            write_id(
+                writer,
+                &format!("en-passant:{}", square.square()),
+                en_passant.square.get(square),
+            )
         })
     })
 }

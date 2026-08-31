@@ -2,6 +2,10 @@ set shell := ["bash", "-c"]
 
 fmt:
     cargo fmt --all
+    rustfmt scripts/polyglot-id.rs
+    rustfmt src/id/polyglot.rs
+    rustfmt scripts/standard-id.rs
+    rustfmt src/id/standard.rs
     just --fmt --unstable
 
 lint:

@@ -443,6 +443,7 @@ impl PlayMut<'_> {
     }
 }
 
+/// Read-only iterator over the options of a `Node`.
 #[derive(Clone, Copy)]
 pub struct OptionsRef<'a> {
     game: &'a Game,

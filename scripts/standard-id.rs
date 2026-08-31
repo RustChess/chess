@@ -11,12 +11,12 @@ use std::{
 
 use chess::{
     id::{
-        Id,
         basis::{Basis, EnPassant, Variant},
+        Id,
     },
     position::{
-        Player, PlayerTable, Role, RoleTable, Side, SideTable, Square, en_passant,
-        square::SquareTable,
+        en_passant, square::SquareTable, Player, PlayerTable, Role, RoleTable, Side, SideTable,
+        Square,
     },
 };
 
@@ -75,7 +75,11 @@ fn write_en_passant<W: Write>(writer: &mut Writer<W>, en_passant: EnPassant) -> 
     writer.field_id("none", "en-passant:none", en_passant.none)?;
     writer.field_table("square", "en_passant::SquareTable", |writer| {
         writer.table_values(en_passant::Square::ALL, |writer, square| {
-            write_id(writer, &format!("en-passant:{}", square.square()), en_passant.square.get(square))
+            write_id(
+                writer,
+                &format!("en-passant:{}", square.square()),
+                en_passant.square.get(square),
+            )
         })
     })
 }
