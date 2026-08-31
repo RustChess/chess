@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap as Map,
     fmt,
     ops::{Deref, DerefMut},
 };
@@ -14,11 +13,11 @@ pub mod cursor;
 pub use cursor::Cursor;
 #[cfg(feature = "serde")]
 pub mod storage;
+pub mod tree;
+pub use tree::{Node, Slot, Tree};
 
 pub type Duplicate = usize;
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-/// A local index into the game's slot map, which actually stores the moves of the game.
-pub type Slot = u32;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -39,10 +38,7 @@ pub struct Game {
     /// Position before any options are played.
     start: Position,
     cache: Cache,
-    /// Options to play from the start position.
-    options: Vec<Slot>,
-    slots: Map<Slot, Play>,
-    next_slot: Slot,
+    tree: Tree,
 }
 
 #[derive(Clone, PartialEq)]
@@ -57,46 +53,6 @@ pub struct Play {
     short: Short,
     /// Options to play after this position.
     options: Vec<Slot>,
-}
-
-/// A handle to a node in the tree of variations of a game of chess.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
-pub enum Node {
-    #[default]
-    Start,
-    Play(Slot),
-}
-
-impl Node {
-    pub fn is_start(&self) -> bool {
-        matches!(self, Self::Start)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for Node {
-    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::Start => Option::<Slot>::None.serialize(serializer),
-            Self::Play(slot) => Some(*slot).serialize(serializer),
-        }
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Node {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(match Option::<Slot>::deserialize(deserializer)? {
-            Some(slot) => Self::Play(slot),
-            None => Self::Start,
-        })
-    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -114,9 +70,7 @@ impl Game {
             outcome: Default::default(),
             start: position,
             cache: Cache { legal, check: None },
-            options: Default::default(),
-            slots: Default::default(),
-            next_slot: 0,
+            tree: Default::default(),
         }
     }
 
@@ -125,11 +79,11 @@ impl Game {
     }
 
     pub fn play(&self, slot: Slot) -> Option<PlayRef<'_>> {
-        self.slots.contains_key(&slot).then_some(PlayRef { game: self, slot })
+        self.tree.contains(slot).then_some(PlayRef { game: self, slot })
     }
 
     pub fn play_mut(&mut self, slot: Slot) -> Option<PlayMut<'_>> {
-        self.slots.contains_key(&slot).then_some(PlayMut { game: self, slot })
+        self.tree.contains(slot).then_some(PlayMut { game: self, slot })
     }
 
     pub fn options(&self) -> OptionsRef<'_> {
@@ -151,7 +105,7 @@ impl Game {
     fn contains_node(&self, node: Node) -> bool {
         match node {
             Node::Start => true,
-            Node::Play(slot) => self.slots.contains_key(&slot),
+            Node::Play(slot) => self.tree.contains(slot),
         }
     }
 
@@ -161,17 +115,11 @@ impl Game {
     }
 
     fn options_slice(&self, node: Node) -> &[Slot] {
-        match node {
-            Node::Start => &self.options,
-            Node::Play(slot) => &self.slots.get(&slot).expect("slot exists").options,
-        }
+        self.tree.options(node)
     }
 
     fn options_mut_raw(&mut self, node: Node) -> &mut Vec<Slot> {
-        match node {
-            Node::Start => &mut self.options,
-            Node::Play(slot) => &mut self.slots.get_mut(&slot).expect("slot exists").options,
-        }
+        self.tree.options_mut(node)
     }
 
     // push a new Move option in last position to the game's specified node.
@@ -230,9 +178,8 @@ impl Game {
         };
         let short = Short::new(&previous_cache.legal, play);
 
-        // create the detached play
-        let play = Play {
-            slot: self.next_slot,
+        let play = self.tree.insert(|slot| Play {
+            slot,
             previous: node,
             meta: Default::default(),
             position,
@@ -240,9 +187,7 @@ impl Game {
             play,
             short,
             options: Default::default(),
-        };
-        self.next_slot += 1;
-        self.slots.insert(play.slot, play.clone());
+        });
 
         Ok(play)
     }
@@ -250,22 +195,19 @@ impl Game {
     fn previous_position(&self, node: Node) -> Position {
         match node {
             Node::Start => self.start,
-            Node::Play(slot) => self.slots.get(&slot).expect("slot exists").position,
+            Node::Play(slot) => self.tree.play(slot).expect("slot exists").position,
         }
     }
 
     fn previous_cache(&self, node: Node) -> &Cache {
         match node {
             Node::Start => &self.cache,
-            Node::Play(slot) => &self.slots.get(&slot).expect("slot exists").cache,
+            Node::Play(slot) => &self.tree.play(slot).expect("slot exists").cache,
         }
     }
 
     fn delete_slot(&mut self, slot: Slot) {
-        let play = self.slots.remove(&slot).expect("play exists");
-        for option in &play.options {
-            self.delete_slot(*option);
-        }
+        self.tree.remove(slot);
     }
 }
 
@@ -478,7 +420,7 @@ impl Deref for PlayRef<'_> {
     type Target = Play;
 
     fn deref(&self) -> &Play {
-        self.game.slots.get(&self.slot).expect("valid play")
+        self.game.tree.play(self.slot).expect("valid play")
     }
 }
 
@@ -497,13 +439,13 @@ impl Deref for PlayMut<'_> {
     type Target = Play;
 
     fn deref(&self) -> &Play {
-        self.game.slots.get(&self.slot).expect("valid play")
+        self.game.tree.play(self.slot).expect("valid play")
     }
 }
 
 impl DerefMut for PlayMut<'_> {
     fn deref_mut(&mut self) -> &mut Play {
-        self.game.slots.get_mut(&self.slot).expect("valid play")
+        self.game.tree.play_mut(self.slot).expect("valid play")
     }
 }
 
@@ -556,7 +498,7 @@ impl OptionsRef<'_> {
 
     pub fn get(&self, index: usize) -> Option<&Play> {
         let slot = self.options.get(index)?;
-        Some(self.game.slots.get(slot).expect("option must reference an existing play"))
+        Some(self.game.tree.play(*slot).expect("option must reference an existing play"))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &Slot> {
@@ -593,7 +535,7 @@ impl<'a> Iterator for OptionsIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let slot = self.options.get(self.index)?;
         self.index += 1;
-        Some((slot, self.game.slots.get(slot).expect("option must reference an existing play")))
+        Some((slot, self.game.tree.play(*slot).expect("option must reference an existing play")))
     }
 }
 

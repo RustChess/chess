@@ -75,8 +75,8 @@ impl Cursor {
             Node::Start => Node::Start,
             Node::Play(slot) => self
                 .game
-                .slots
-                .get(&slot)
+                .tree
+                .play(slot)
                 .expect("cursor slot must reference an existing play")
                 .previous(),
         }
@@ -151,7 +151,7 @@ impl<'a> Iterator for Mainline<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let slot = self.game.options_slice(self.node).first().copied()?;
         self.node = Node::Play(slot);
-        Some(self.game.slots.get(&slot).expect("mainline slot must exist"))
+        Some(self.game.tree.play(slot).expect("mainline slot must exist"))
     }
 }
 

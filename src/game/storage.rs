@@ -46,7 +46,7 @@ impl game::Game {
     pub fn store(&self) -> Archive {
         Archive {
             games: vec![Game::from(self)],
-            plays: self.slots.values().map(Play::from).collect(),
+            plays: self.tree.plays().map(Play::from).collect(),
         }
     }
 
@@ -62,7 +62,7 @@ impl From<&game::Game> for Game {
             intro: game.intro.clone(),
             outcome: game.outcome,
             start: game.start.fen(),
-            options: game.options.clone(),
+            options: game.tree.start().to_vec(),
         }
     }
 }
