@@ -135,13 +135,13 @@ const fn standard_rook(player: Player, side: Side) -> Square {
 #[cfg(test)]
 mod tests {
     use crate::{
-        formats::{Parser as _, fen::position_fen},
+        formats::{Parser as _, fen::position_unvalidated},
         position::{Error, Position},
         variant::Chess,
     };
 
     fn validate(fen: &str) -> Result<Position<Chess>, Error> {
-        Position::new(position_fen.parse(fen).unwrap())
+        Position::new(position_unvalidated.parse(fen).unwrap())
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::{
-    formats::{Parser as _, fen::position_fen},
+    formats::{Parser as _, fen::position_unvalidated},
     position::Position,
     variant::Unvalidated,
 };
@@ -17,7 +17,7 @@ pub(crate) fn perft(position: Position<Unvalidated>, depth: u32) -> u64 {
 }
 
 fn position(fen: &str) -> Position<Unvalidated> {
-    position_fen.parse(fen).unwrap()
+    position_unvalidated.parse(fen).unwrap()
 }
 
 fn assert_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {

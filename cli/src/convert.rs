@@ -14,7 +14,7 @@ use clap::ValueEnum;
 
 use crate::{Args, Result};
 
-type PgnInput = Box<dyn Iterator<Item = io::Result<Result<pgn::Game, pgn::ParseError>>>>;
+type PgnInput = Box<dyn Iterator<Item = io::Result<Result<pgn::Game, pgn::Error>>>>;
 
 #[derive(Args, Clone, Debug)]
 pub struct Command {
@@ -243,11 +243,11 @@ impl Command {
 
     fn pgn_input(&self) -> Result<PgnInput> {
         if self.input == Path::new("-") {
-            Ok(Box::new(pgn::read_games(io::stdin())))
+            Ok(Box::new(pgn::stream::games(io::stdin())))
         } else {
             let file = fs::File::open(&self.input)
                 .with_context(|| format!("reading input {}", self.input.display()))?;
-            Ok(Box::new(pgn::read_games(file)))
+            Ok(Box::new(pgn::stream::games(file)))
         }
     }
 

@@ -14,7 +14,7 @@ pub struct Archive {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Game {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<game::TagPair>,
+    pub tags: Vec<game::Tag>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intro: Option<game::Text>,
     #[serde(default, skip_serializing_if = "game::Outcome::is_unknown")]

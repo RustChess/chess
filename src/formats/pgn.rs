@@ -1,17 +1,13 @@
 //! PGN format
 
-use std::{
-    fmt,
-    io::{self, BufRead, BufReader, Read},
-    iter::Peekable,
-};
+use std::{fmt, str};
 
-use encoding_rs::WINDOWS_1252;
-
-use crate::Position;
-use crate::game::{self, Command, Nag, Node, Outcome, Slot, Tag, TagPair, Text};
+use crate::game::{Command, Key, Nag, Outcome, Slot, Tag, Text};
 
 use super::{StrInput as Input, fen, prelude::*, san};
+
+pub mod convert;
+pub mod stream;
 
 // https://www.chessprogramming.org/Portable_Game_Notation
 // https://www.saremba.de/chessgml/standards/pgn/pgn-complete.htm
@@ -25,11 +21,29 @@ use super::{StrInput as Input, fen, prelude::*, san};
 // https://chesstempo.com/manual/en/manual.html#pgnviewercommentannotations
 //
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Game {
+    pub tags: Vec<Tag>,
+    pub intro: Option<Comment>,
+    pub moves: Vec<Move>,
+    pub outcome: Outcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("PGN error at line {line}, column {column}: {message}")]
+pub struct Error {
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
+pub type Result<T, E = Error> = core::result::Result<T, E>;
+
 pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
     delimited(
         multispace0,
         seq! {Game {
-        tag_pairs: tag_pairs,
+        tags: tags,
         intro: comments,
         moves: repeat(0.., parse_move),
         outcome: outcome,
@@ -40,31 +54,29 @@ pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
     .parse_next(input)
 }
 
-pub fn games(input: &mut Input<'_>) -> ModalResult<Games> {
-    repeat(0.., game).map(|games| Games { games }).parse_next(input)
+impl fmt::Display for Game {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for tag in &self.tags {
+            writeln!(f, "{tag}")?;
+        }
+        if !self.tags.is_empty() {
+            writeln!(f)?;
+        }
+        let mut wrap = Wrap::<_, 80>::new(f);
+        if let Some(intro) = &self.intro {
+            wrap.token(intro)?;
+        }
+        write_moves(&self.moves, &mut wrap, self.first_ply(), Notation::San)?;
+        wrap.token(self.outcome)
+    }
 }
 
-pub fn read_games<R: Read>(
-    reader: R,
-) -> impl Iterator<Item = io::Result<Result<Game, ParseError>>> {
-    GameShaped::new(reader).map(|chunk| {
-        chunk.map(|chunk| {
-            game.parse(chunk.text.as_str()).map_err(|error| ParseError::from_winnow(&chunk, error))
-        })
-    })
-}
+impl str::FromStr for Game {
+    type Err = Error;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Games {
-    pub games: Vec<Game>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Game {
-    pub tag_pairs: Vec<TagPair>,
-    pub intro: Option<Comment>,
-    pub moves: Vec<Move>,
-    pub outcome: Outcome,
+    fn from_str(text: &str) -> Result<Self> {
+        game.parse(text).map_err(|error| Error::from(text, 1, error))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,32 +103,13 @@ pub enum Annotation {
     Command(Command),
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("SAN error: {0}")]
-    San(#[from] san::Error),
-    #[error("game error: {0}")]
-    Game(#[from] game::Error),
-    #[error("invalid FEN: {0}")]
-    Fen(String),
-    #[error("empty PGN variation of {} {san}", MoveNumber(*ply))]
-    EmptyVariation { ply: usize, san: san::San },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("parse error at line {line}, column {column}: {message}")]
-pub struct ParseError {
-    pub line: usize,
-    pub column: usize,
-    pub message: String,
-}
-
-impl ParseError {
-    fn from_winnow(
-        input: &Chunk,
+impl Error {
+    fn from(
+        text: &str,
+        first_line: usize,
         error: winnow::error::ParseError<Input<'_>, ContextError>,
     ) -> Self {
-        let (line, column) = line_column(&input.text, input.line, error.offset());
+        let (line, column) = line_column(text, first_line, error.offset());
         Self { line, column, message: format!("{:?}", error.inner()) }
     }
 }
@@ -140,108 +133,7 @@ fn line_column(input: &str, first_line: usize, offset: usize) -> (usize, usize) 
     (line, column)
 }
 
-impl TryFrom<Game> for game::Game {
-    type Error = Error;
-
-    fn try_from(pgn: Game) -> Result<Self, Self::Error> {
-        let position = position(&pgn.tag_pairs)?;
-        let mut game = game::Game::new(position);
-        game.tags = pgn.tag_pairs;
-        game.intro = pgn.intro.map(Into::into);
-        game.outcome = pgn.outcome;
-
-        convert_moves(&mut game, Node::Start, 0, pgn.moves)?;
-
-        Ok(game)
-    }
-}
-
-impl From<game::Game> for Game {
-    fn from(game: game::Game) -> Self {
-        let start = game.start();
-        let moves = game_moves(&game, game.start_options());
-        let mut tag_pairs = game.tags;
-
-        if start != Position::standard() {
-            set_tag(&mut tag_pairs, Tag::SetUp, "1");
-            set_tag(&mut tag_pairs, Tag::Fen, start.fen());
-        }
-
-        Self { tag_pairs, intro: game.intro.map(Comment), moves, outcome: game.outcome }
-    }
-}
-
-fn set_tag(tag_pairs: &mut Vec<TagPair>, name: Tag, value: impl Into<String>) {
-    if let Some(tag_pair) = tag_pairs.iter_mut().find(|tag_pair| tag_pair.name == name) {
-        tag_pair.value = value.into();
-    } else {
-        tag_pairs.push(TagPair { name, value: value.into() });
-    }
-}
-
-fn game_moves<'a>(game: &'a game::Game, options: game::OptionsRef<'a>) -> Vec<Move> {
-    let mut moves = Vec::new();
-    let mut options = options;
-
-    while let Some((play, variations)) = options.split_first() {
-        moves.push(game_move(game, &play, variations));
-        options = play.options();
-    }
-
-    moves
-}
-
-fn game_move(game: &game::Game, play: &game::Play, variations: game::OptionsRef<'_>) -> Move {
-    Move {
-        san: san::San::from((play.play(), play.short(), play.check())),
-        comment: play.meta.comment.clone().map(Comment),
-        annotations: annotations(&play.meta),
-        variations: variations.iter().map(|play| game_variation(game, play.slot())).collect(),
-    }
-}
-
-fn game_variation(game: &game::Game, slot: Slot) -> Variation {
-    let play = game.play(slot).expect("option must reference an existing play");
-    Variation {
-        intro: play.meta.intro.clone().map(Comment),
-        moves: game_moves_from(game, &play),
-        outro: play.meta.outro.clone().map(Comment),
-    }
-}
-
-fn game_moves_from<'a>(game: &'a game::Game, play: &game::PlayRef<'a>) -> Vec<Move> {
-    let mut moves = vec![game_move_without_variations(play)];
-    moves.extend(game_moves(game, play.options()));
-    moves
-}
-
-fn game_move_without_variations(play: &game::Play) -> Move {
-    Move {
-        san: san::San::from((play.play(), play.short(), play.check())),
-        comment: play.meta.comment.clone().map(Comment),
-        annotations: annotations(&play.meta),
-        variations: Vec::new(),
-    }
-}
-
-fn annotations(meta: &game::Meta) -> Vec<Annotation> {
-    meta.nags
-        .iter()
-        .cloned()
-        .map(Annotation::Nag)
-        .chain(meta.commands.iter().cloned().map(Annotation::Command))
-        .collect()
-}
-
 impl Game {
-    pub fn start(&self) -> Option<Position> {
-        position(&self.tag_pairs).ok()
-    }
-
-    pub fn first_ply(&self) -> usize {
-        self.start().map(|position| position.first_ply()).unwrap_or(0)
-    }
-
     pub fn movetext(&self) -> String {
         self.write_movetext(Notation::San)
     }
@@ -262,294 +154,38 @@ impl Game {
     }
 }
 
-fn position(tag_pairs: &[TagPair]) -> Result<Position, Error> {
-    if let Some(fen) = tag_pairs.iter().find(|tag_pair| tag_pair.name == Tag::Fen) {
-        let unvalidated = fen::position_fen
-            .parse(fen.value.as_str())
-            .map_err(|_| Error::Fen(fen.value.clone()))?;
-        Position::new(unvalidated).map_err(|_| Error::Fen(fen.value.clone()))
-    } else {
-        Ok(Position::standard())
-    }
-}
-
-fn convert_moves(
-    game: &mut game::Game,
-    mut previous: Node,
-    mut ply: usize,
-    moves: Vec<Move>,
-) -> Result<(), Error> {
-    for pgn_move in moves {
-        let mut options = game.options_mut(previous).expect("previous play exists");
-        let play = pgn_move.san.resolve(options.as_ref().legal())?;
-        let slot = options.push(play)?;
-
-        {
-            let mut play = game.play_mut(slot).expect("inserted play exists");
-            play.meta.comment = pgn_move.comment.map(Into::into);
-            for annotation in pgn_move.annotations {
-                match annotation {
-                    Annotation::Nag(nag) => play.meta.nags.push(nag),
-                    Annotation::Command(command) => play.meta.commands.push(command),
-                }
-            }
-        }
-
-        for variation in pgn_move.variations {
-            convert_variation(game, previous, ply, pgn_move.san, variation)?;
-        }
-
-        previous = Node::Play(slot);
-        ply += 1;
-    }
-
-    Ok(())
-}
-
-fn convert_variation(
-    game: &mut game::Game,
-    previous: Node,
-    ply: usize,
-    after: san::San,
-    variation: Variation,
-) -> Result<(), Error> {
-    let Some((first, rest)) = variation.moves.split_first() else {
-        return Err(Error::EmptyVariation { ply, san: after });
-    };
-
-    let mut options = game.options_mut(previous).expect("previous play exists");
-    let play = first.san.resolve(options.as_ref().legal())?;
-    let slot = options.push(play)?;
-
-    {
-        let mut play = game.play_mut(slot).expect("inserted play exists");
-        play.meta.intro = variation.intro.map(Into::into);
-        play.meta.outro = variation.outro.map(Into::into);
-        play.meta.comment = first.comment.clone().map(Into::into);
-        for annotation in &first.annotations {
-            match annotation {
-                Annotation::Nag(nag) => play.meta.nags.push(nag.clone()),
-                Annotation::Command(command) => play.meta.commands.push(command.clone()),
-            }
-        }
-    }
-
-    for variation in &first.variations {
-        convert_variation(game, previous, ply, first.san, variation.clone())?;
-    }
-    convert_moves(game, Node::Play(slot), ply + 1, rest.to_vec())
-}
-
-impl fmt::Display for Game {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for tag_pair in &self.tag_pairs {
-            writeln!(f, "{tag_pair}")?;
-        }
-        if !self.tag_pairs.is_empty() {
-            writeln!(f)?;
-        }
-        let mut wrap = Wrap::<_, 80>::new(f);
-        if let Some(intro) = &self.intro {
-            wrap.token(intro)?;
-        }
-        write_moves(&self.moves, &mut wrap, self.first_ply(), Notation::San)?;
-        wrap.token(self.outcome)
-    }
-}
-
-impl fmt::Display for Games {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, game) in self.games.iter().enumerate() {
-            if index > 0 {
-                writeln!(f)?;
-                writeln!(f)?;
-            }
-            game.fmt(f)?;
-        }
-        Ok(())
-    }
-}
-
-struct GameShaped<R: Read> {
-    lines: Peekable<Lines<R>>,
-}
-
-impl<R: Read> GameShaped<R> {
-    fn new(reader: R) -> Self {
-        Self { lines: Lines::new(reader).peekable() }
-    }
-}
-
-impl<R: Read> Iterator for GameShaped<R> {
-    type Item = io::Result<Chunk>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        game_shaped(&mut self.lines).transpose()
-    }
-}
-
-struct Lines<R: Read> {
-    reader: BufReader<R>,
-    bytes: Vec<u8>,
-    line: usize,
-}
-
-impl<R: Read> Lines<R> {
-    fn new(reader: R) -> Self {
-        Self { reader: BufReader::new(reader), bytes: Vec::new(), line: 0 }
-    }
-}
-
-impl<R: Read> Iterator for Lines<R> {
-    type Item = io::Result<SourceLine>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.bytes.clear();
-        match self.reader.read_until(b'\n', &mut self.bytes) {
-            Ok(0) => None,
-            Ok(_) => {
-                self.line += 1;
-                Some(Ok(SourceLine { number: self.line, text: decode_line(&self.bytes) }))
-            }
-            Err(error) => Some(Err(error)),
-        }
-    }
-}
-
-struct SourceLine {
-    number: usize,
-    text: String,
-}
-
-struct Chunk {
-    line: usize,
-    text: String,
-}
-
-fn decode_line(bytes: &[u8]) -> String {
-    let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
-    let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
-
-    match std::str::from_utf8(bytes) {
-        Ok(text) => text.to_string(),
-        Err(_) => {
-            let (text, _, _) = WINDOWS_1252.decode(bytes);
-            text.into_owned()
-        }
-    }
-}
-
-fn game_shaped<I>(lines: &mut Peekable<I>) -> io::Result<Option<Chunk>>
-where
-    I: Iterator<Item = io::Result<SourceLine>>,
-{
-    let Some(line) = lines.next().transpose()? else {
-        return Ok(None);
-    };
-    let first_line = line.number;
-    let mut buffer = Buffer::new(line.text);
-
-    loop {
-        let next = match lines.peek() {
-            Some(Ok(next)) => Some(next.text.as_str()),
-            Some(Err(_)) | None => None,
-        };
-        if buffer.is_complete(next) {
-            return Ok(Some(Chunk { line: first_line, text: buffer.take() }));
-        }
-
-        let Some(line) = lines.next().transpose()? else {
-            return Ok(Some(Chunk { line: first_line, text: buffer.take() }));
-        };
-        buffer.push(line.text);
-    }
-}
-
-struct Buffer {
-    text: String,
-    in_comment: bool,
-    movetext: bool,
-}
-
-impl Buffer {
-    fn new(line: String) -> Self {
-        let mut buffer = Self { text: String::new(), in_comment: false, movetext: false };
-        buffer.push(line);
-        buffer
-    }
-
-    fn push(&mut self, line: String) {
-        self.text.push_str(&line);
-        self.text.push('\n');
-
-        let line = if self.in_comment { line.as_str() } else { strip_tag_pairs(&line) };
-        for c in line.chars() {
-            if self.in_comment {
-                if c == '}' {
-                    self.in_comment = false;
-                }
-            } else {
-                match c {
-                    '{' => {
-                        self.movetext = true;
-                        self.in_comment = true;
-                    }
-                    ';' => {
-                        self.movetext = true;
-                        break;
-                    }
-                    c if c.is_whitespace() => {}
-                    _ => self.movetext = true,
-                }
-            }
-        }
-    }
-
-    fn is_game_shaped(&self) -> bool {
-        self.movetext && !self.in_comment
-    }
-
-    fn is_complete(&self, next: Option<&str>) -> bool {
-        self.is_game_shaped() && next.is_none_or(tag_pair_start_ok)
-    }
-
-    fn take(self) -> String {
-        self.text
-    }
-}
-
-fn strip_tag_pairs(mut input: &str) -> &str {
+fn strip_tags(mut input: &str) -> &str {
     loop {
         let before = input;
-        if tag_pair.parse_next(&mut input).is_err() {
+        if tag.parse_next(&mut input).is_err() {
             return before;
         }
     }
 }
 
-fn tag_pair_start_ok(mut input: &str) -> bool {
-    tag_pair.parse_next(&mut input).is_ok()
-}
-
-impl fmt::Display for TagPair {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{} \"{}\"]", self.name, escape_tag_value(&self.value))
-    }
+fn tag_start_ok(mut input: &str) -> bool {
+    tag.parse_next(&mut input).is_ok()
 }
 
 impl fmt::Display for Tag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} \"{}\"]", self.key, escape_tag_value(&self.value))
+    }
+}
+
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Tag::Event => write!(f, "Event"),
-            Tag::Site => write!(f, "Site"),
-            Tag::Date => write!(f, "Date"),
-            Tag::Round => write!(f, "Round"),
-            Tag::White => write!(f, "White"),
-            Tag::Black => write!(f, "Black"),
-            Tag::Result => write!(f, "Result"),
-            Tag::Fen => write!(f, "FEN"),
-            Tag::SetUp => write!(f, "SetUp"),
-            Tag::Other(tag) => write!(f, "{tag}"),
+            Key::Event => write!(f, "Event"),
+            Key::Site => write!(f, "Site"),
+            Key::Date => write!(f, "Date"),
+            Key::Round => write!(f, "Round"),
+            Key::White => write!(f, "White"),
+            Key::Black => write!(f, "Black"),
+            Key::Result => write!(f, "Result"),
+            Key::Fen => write!(f, "FEN"),
+            Key::SetUp => write!(f, "SetUp"),
+            Key::Other(tag) => write!(f, "{tag}"),
         }
     }
 }
@@ -785,21 +421,21 @@ fn escape_tag_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub fn tag_pairs(input: &mut Input<'_>) -> ModalResult<Vec<TagPair>> {
-    repeat(0.., tag_pair).parse_next(input)
+pub fn tags(input: &mut Input<'_>) -> ModalResult<Vec<Tag>> {
+    repeat(0.., tag).parse_next(input)
 }
 
-pub fn tag_pair(input: &mut Input<'_>) -> ModalResult<TagPair> {
+pub fn tag(input: &mut Input<'_>) -> ModalResult<Tag> {
     delimited(
         multispace0,
         delimited(
             ('[', multispace0),
-            separated_pair(tag_name, multispace1, tag_value),
+            separated_pair(key, multispace1, tag_value),
             (multispace0, ']'),
         ),
         multispace0,
     )
-    .map(|(name, value)| TagPair { name, value })
+    .map(|(key, value)| Tag { key, value })
     .context(StrContext::Label("PGN tag pair"))
     .parse_next(input)
 }
@@ -893,8 +529,8 @@ fn skip_move_number(input: &mut Input<'_>) -> ModalResult<()> {
     (dec_uint::<_, u32, _>, alt(("...", "."))).value(()).parse_next(input)
 }
 
-fn tag_name(input: &mut Input<'_>) -> ModalResult<Tag> {
-    use Tag::*;
+fn key(input: &mut Input<'_>) -> ModalResult<Key> {
+    use Key::*;
 
     name.map(|name: &str| match name {
         "Event" => Event,
@@ -1040,6 +676,7 @@ fn outcome(input: &mut Input<'_>) -> ModalResult<Outcome> {
 #[cfg(test)]
 mod tests {
     use crate::{
+        Position,
         formats::san,
         position::{File, Role, Square},
     };
@@ -1069,9 +706,9 @@ mod tests {
         "#;
 
         let game = game.parse(pgn).unwrap();
-        assert_eq!(game.tag_pairs.len(), 7);
-        assert_eq!(game.tag_pairs[0].name, Tag::Event);
-        assert_eq!(game.tag_pairs[0].value, "Casual Game");
+        assert_eq!(game.tags.len(), 7);
+        assert_eq!(game.tags[0].key, Key::Event);
+        assert_eq!(game.tags[0].value, "Casual Game");
         assert_eq!(game.moves.len(), 6);
         assert_eq!(game.outcome, Outcome::White);
         assert_eq!(game.moves[5].comment, Some(comment("Italian Game")));
@@ -1116,7 +753,7 @@ mod tests {
 "#,
             )
             .unwrap();
-        let game = game::Game::try_from(pgn).unwrap();
+        let game = crate::Game::try_from(pgn).unwrap();
 
         assert_eq!(game.tags.len(), 1);
         assert_eq!(game.start_options().len(), 1);
@@ -1147,7 +784,7 @@ mod tests {
 "#,
             )
             .unwrap();
-        let game = game::Game::try_from(pgn).unwrap();
+        let game = crate::Game::try_from(pgn).unwrap();
 
         let options = game.start_options();
         let e4 = options.first().unwrap();
@@ -1158,8 +795,8 @@ mod tests {
     #[test]
     fn displays_fen_game_from_its_start_ply() {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
-        let position = Position::new(fen::position_fen.parse(fen).unwrap()).unwrap();
-        let mut game = game::Game::new(position);
+        let position = Position::new(fen::position_unvalidated.parse(fen).unwrap()).unwrap();
+        let mut game = crate::Game::new(position);
         game.start_options_mut()
             .push(crate::Move::normal(Role::King, Square::E8, Square::D8))
             .unwrap();
@@ -1171,7 +808,7 @@ mod tests {
 
     #[test]
     fn displays_figurine_movetext() {
-        let mut game = game::Game::new(Position::standard());
+        let mut game = crate::Game::new(Position::standard());
         let e4 = game
             .start_options_mut()
             .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
@@ -1189,8 +826,8 @@ mod tests {
 
     #[test]
     fn converts_from_game() {
-        let mut game = game::Game::new(Position::standard());
-        game.tags.push(TagPair { name: Tag::Event, value: "x".to_string() });
+        let mut game = crate::Game::new(Position::standard());
+        game.tags.push(Tag { key: Key::Event, value: "x".to_string() });
 
         let e4 = game
             .start_options_mut()
@@ -1223,8 +860,8 @@ mod tests {
     #[test]
     fn roundtrips_kiwipete_game_tree() {
         let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
-        let position = Position::new(fen::position_fen.parse(fen).unwrap()).unwrap();
-        let mut game = game::Game::new(position);
+        let position = Position::new(fen::position_unvalidated.parse(fen).unwrap()).unwrap();
+        let mut game = crate::Game::new(position);
 
         for play in position.legal_moves() {
             let id = game.start_options_mut().push(play).unwrap();
@@ -1236,7 +873,7 @@ mod tests {
         }
 
         let pgn = Game::from(game);
-        let roundtrip = Game::from(game::Game::try_from(pgn.clone()).unwrap());
+        let roundtrip = Game::from(crate::Game::try_from(pgn.clone()).unwrap());
 
         assert_eq!(roundtrip, pgn);
     }
@@ -1369,32 +1006,20 @@ mod tests {
     }
 
     #[test]
-    fn parses_and_displays_games() {
-        let parsed = games
-            .parse(
-                r#"[Event "a"] 1. e4 *
-
-[Event "b"] 1. d4 *
-"#,
-            )
-            .unwrap();
-        assert_eq!(parsed.games.len(), 2);
-        assert_eq!(parsed.to_string(), "[Event \"a\"]\n\n1. e4 *\n\n[Event \"b\"]\n\n1. d4 *");
-    }
-
-    #[test]
     fn reads_games_one_at_a_time() {
         let input = b"[Event \"a\"]\n1. e4 *\n\n[Event \"b\"]\n1. d4 *\n";
-        let games = read_games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        let games =
+            stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
-        assert_eq!(games[0].tag_pairs[0].value, "a");
-        assert_eq!(games[1].tag_pairs[0].value, "b");
+        assert_eq!(games[0].tags[0].value, "a");
+        assert_eq!(games[1].tags[0].value, "b");
     }
 
     #[test]
     fn reader_does_not_split_inside_comment() {
         let input = b"[Event \"a\"]\n1. e4 {\n[not a tag]\n} *\n\n[Event \"b\"]\n1. d4 *\n";
-        let games = read_games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        let games =
+            stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
         assert_eq!(games[0].moves[0].comment, Some(comment("[not a tag]")));
     }
@@ -1402,10 +1027,11 @@ mod tests {
     #[test]
     fn reader_handles_movetext_after_tag_on_same_line() {
         let input = b"[Event \"a\"] 1. e4 *\n\n[Event \"b\"] 1. d4 *\n";
-        let games = read_games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        let games =
+            stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
-        assert_eq!(games[0].tag_pairs[0].value, "a");
-        assert_eq!(games[1].tag_pairs[0].value, "b");
+        assert_eq!(games[0].tags[0].value, "a");
+        assert_eq!(games[1].tags[0].value, "b");
     }
 
     #[test]

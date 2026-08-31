@@ -32,7 +32,7 @@ pub enum Error {
 /// A game of chess, including variations and annotations.
 #[derive(Clone, PartialEq)]
 pub struct Game {
-    pub tags: Vec<TagPair>,
+    pub tags: Vec<Tag>,
     pub intro: Option<Text>,
     pub outcome: Outcome,
     /// State before any options are played.
@@ -312,14 +312,14 @@ impl Ambiguity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct TagPair {
-    pub name: Tag,
+pub struct Tag {
+    pub key: Key,
     pub value: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum Tag {
+pub enum Key {
     Event,
     Site,
     Date,

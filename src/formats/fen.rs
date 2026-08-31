@@ -27,9 +27,17 @@ pub enum Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
+// Lenient - fills up with default values.
+pub fn position_unvalidated(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
+    let board = board_fen.parse_next(input)?;
+    let Fields { turn, castle, en_passant, reversible, round } = fields_fen.parse_next(input)?;
+    Ok(Position { board, turn, castle, en_passant, reversible, round, variant: Unvalidated })
+}
+
 impl<V: Variant> Position<V> {
     pub fn from_fen(fen: &str) -> Result<Self> {
-        let position = position_fen.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))?;
+        let position =
+            position_unvalidated.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))?;
         Position::new(position).map_err(|_| Error::Invalid(fen.to_string()))
     }
 }
@@ -219,44 +227,54 @@ fn en_passant(input: &mut Input<'_>) -> ModalResult<Option<en_passant::Square>> 
     .parse_next(input)
 }
 
-fn rights_fen(
-    input: &mut Input<'_>,
-) -> ModalResult<(Player, Players<Sides>, Option<en_passant::Square>)> {
-    (player, preceded(space0, castle), preceded(space0, en_passant)).parse_next(input)
+fn reversible(input: &mut Input<'_>) -> ModalResult<u32> {
+    dec_uint.parse_next(input)
 }
 
-fn counters_fen(input: &mut Input<'_>) -> ModalResult<(u32, NonZeroU32)> {
-    (dec_uint, preceded(space1, dec_uint.verify_map(NonZeroU32::new))).parse_next(input)
+fn round(input: &mut Input<'_>) -> ModalResult<NonZeroU32> {
+    dec_uint.verify_map(NonZeroU32::new).parse_next(input)
 }
 
-pub fn position_fen(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
-    let board = board_fen.parse_next(input)?;
-    let (turn, castle, en_passant) = preceded(space0, rights_fen).parse_next(input)?;
-    let (reversible, round) = preceded(space0, counters_fen).parse_next(input)?;
-    Ok(Position { board, turn, castle, en_passant, reversible, round, variant: Unvalidated })
+struct Fields {
+    turn: Player,
+    castle: Players<Sides>,
+    en_passant: Option<en_passant::Square>,
+    reversible: u32,
+    round: NonZeroU32,
 }
 
-const fn missing_counters() -> (u32, NonZeroU32) {
-    (0, NonZeroU32::MIN)
+fn fields_fen(input: &mut Input<'_>) -> ModalResult<Fields> {
+    let Some(turn) = opt(preceded(space0, player)).parse_next(input)? else {
+        return Ok(default_fields());
+    };
+
+    let Some(castle) = opt(preceded(space0, castle)).parse_next(input)? else {
+        return Ok(Fields { turn, ..default_fields() });
+    };
+
+    let Some(en_passant) = opt(preceded(space0, en_passant)).parse_next(input)? else {
+        return Ok(Fields { turn, castle, ..default_fields() });
+    };
+
+    let Some(reversible) = opt(preceded(space0, reversible)).parse_next(input)? else {
+        return Ok(Fields { turn, castle, en_passant, ..default_fields() });
+    };
+
+    let Some(round) = opt(preceded(space0, round)).parse_next(input)? else {
+        return Ok(Fields { turn, castle, en_passant, reversible, ..default_fields() });
+    };
+
+    Ok(Fields { turn, castle, en_passant, reversible, round })
 }
 
-#[allow(clippy::type_complexity)]
-fn missing_non_board() -> ((Player, Players<Sides>, Option<en_passant::Square>), (u32, NonZeroU32))
-{
-    ((Player::White, Default::default(), None), missing_counters())
-}
-
-/// Parse a position, allowing missing trailing counters, or only position
-pub fn position_partial_fen(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
-    let board = board_fen.parse_next(input)?;
-    let ((turn, castle, en_passant), (reversible, round)) = opt((
-        preceded(space0, rights_fen),
-        opt(preceded(space0, counters_fen))
-            .map(|counters| counters.unwrap_or_else(missing_counters)),
-    ))
-    .map(|rest| rest.unwrap_or_else(missing_non_board))
-    .parse_next(input)?;
-    Ok(Position { board, turn, castle, en_passant, reversible, round, variant: Unvalidated })
+fn default_fields() -> Fields {
+    Fields {
+        turn: Player::White,
+        castle: Players::default(),
+        en_passant: None,
+        reversible: 0,
+        round: NonZeroU32::MIN,
+    }
 }
 
 #[test]
@@ -271,7 +289,7 @@ fn board_fen_example() {
     );
 
     let fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 1 3";
-    let position = position_fen.parse(fen).unwrap();
+    let position = position_unvalidated.parse(fen).unwrap();
     assert_eq!(position.turn, Black);
     assert!(position.castle[Black][King]);
     assert!(position.castle[Black][Queen]);
@@ -284,7 +302,7 @@ fn board_fen_example() {
     assert_eq!(Position::<Chess>::from_fen(fen).unwrap().fen(), fen);
 
     let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
-    let position = position_partial_fen.parse(partial_fen).unwrap();
+    let position = position_unvalidated.parse(partial_fen).unwrap();
     assert_eq!(position.turn, Black);
     assert!(position.castle[Black][King]);
     assert!(position.castle[Black][Queen]);
@@ -297,9 +315,13 @@ fn board_fen_example() {
         Position::<Chess>::new(position).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
     );
+    assert_eq!(
+        Position::<Chess>::from_fen(partial_fen).unwrap().fen(),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+    );
 
-    let position =
-        position_partial_fen.parse("rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR").unwrap();
+    let board_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR";
+    let position = position_unvalidated.parse(board_fen).unwrap();
     assert_eq!(position.turn, White);
     assert!(!position.castle[Black][King]);
     assert!(!position.castle[Black][Queen]);
@@ -310,6 +332,10 @@ fn board_fen_example() {
     assert_eq!(u32::from(position.round), 1);
     assert_eq!(
         Position::<Chess>::new(position).unwrap().fen(),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
+    );
+    assert_eq!(
+        Position::<Chess>::from_fen(board_fen).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
     );
 }
