@@ -2,10 +2,8 @@ use core::ops;
 
 use crate::{
     bitboard::{Bitboard, Direction},
-    position::{
-        Board, Move, Moves, Piece, Player, Players, Position, Rank, Role, Side, Sides, Square,
-    },
-    variant::{CanCastle, Chess, Variant},
+    position::{Board, Move, Moves, Piece, Player, Position, Rank, Role, Side, Square},
+    variant::Variant,
 };
 
 // This would work here too, but it warns about long_running_const_eval
@@ -15,7 +13,7 @@ use crate::{
 include!("slider_sights.rs");
 
 // move generation
-impl<V: CanCastle> Position<V> {
+impl<V: Variant> Position<V> {
     pub fn legal_moves(&self) -> Moves {
         if self.is_check() {
             return self.evasion_moves();
@@ -35,8 +33,8 @@ impl<V: CanCastle> Position<V> {
         let mut moves = Moves::new();
 
         for side in Side::ALL {
-            if V::can_castle(self, side) {
-                moves.push(Move::chess_castle(self.turn, side));
+            if let Some(play) = self.can_castle(side) {
+                moves.push(play);
             }
         }
 
@@ -244,20 +242,25 @@ impl<V: Variant> Position<V> {
     }
 }
 
-impl Position<Chess> {
-    pub fn can_castle(&self, side: Side) -> bool {
-        if !self.castles.has(self.turn, side) {
-            return false;
-        }
-
-        let empty_path = STANDARD_CASTLE_EMPTY_PATHS[self.turn][side];
+impl<V: Variant> Position<V> {
+    pub fn can_castle(&self, side: Side) -> Option<Move> {
+        let rook_file = self.castles.get(self.turn, side)?;
+        let king_from = self.board.king_of(self.turn)?;
+        let empty_path = self.turn.castle_empty_path(king_from, rook_file);
         if !self.board.occupied().intersection_const(empty_path).is_empty() {
-            return false;
+            return None;
         }
 
-        STANDARD_CASTLE_KING_PATHS[self.turn][side]
+        if self
+            .turn
+            .castle_king_path(king_from, side)
             .iter()
-            .all(|square| self.king_square_is_safe(square))
+            .any(|square| !self.king_square_is_safe(square))
+        {
+            return None;
+        }
+
+        Some(Move::castle(self.turn, king_from, rook_file))
     }
 }
 
@@ -277,7 +280,7 @@ impl<V: Variant> Position<V> {
         let Some(piece) = self.board.piece_at(captured) else {
             return None;
         };
-        if !piece.eq(Role::Pawn.of(self.turn.other())) {
+        if !piece.eq(self.turn.other().pawn()) {
             return None;
         }
 
@@ -749,36 +752,6 @@ const fn pawn_directions(player: Player) -> (Direction, Direction, Direction, Di
     }
 }
 
-pub(crate) const STANDARD_CASTLE_EMPTY_PATHS: Players<Sides<Bitboard>> = {
-    use Square::*;
-
-    Players {
-        white: Sides {
-            queen: Bitboard::from_squares([B1, C1, D1]),
-            king: Bitboard::from_squares([F1, G1]),
-        },
-        black: Sides {
-            queen: Bitboard::from_squares([B8, C8, D8]),
-            king: Bitboard::from_squares([F8, G8]),
-        },
-    }
-};
-
-pub(crate) const STANDARD_CASTLE_KING_PATHS: Players<Sides<Bitboard>> = {
-    use Square::*;
-
-    Players {
-        white: Sides {
-            queen: Bitboard::from_squares([E1, D1, C1]),
-            king: Bitboard::from_squares([E1, F1, G1]),
-        },
-        black: Sides {
-            queen: Bitboard::from_squares([C8, D8, E8]),
-            king: Bitboard::from_squares([E8, F8, G8]),
-        },
-    }
-};
-
 // Fixed shift white magics found by Volker Annuss.
 // From: http://www.talkchess.com/forum/viewtopic.php?p=727500&t=64790
 
@@ -917,3 +890,45 @@ const ROOK_PROJECTOR: [Projector<12>; 64] = [
     Projector::new(0x0003_ffff_bf7d_feec, 66501),
     Projector::new(0x0001_ffff_9dff_a333, 14826),
 ];
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        Player::*,
+        position::{Castles, File::*, Position, Side, Square::*},
+        variant::Freestyle,
+    };
+
+    fn freestyle_position() -> Position<Freestyle> {
+        let mut position = Position::empty();
+        position.set_piece(C1, White.king());
+        position.set_piece(A1, White.rook());
+        position.set_piece(H1, White.rook());
+        position.set_piece(C8, Black.king());
+        position.set_piece(A8, Black.rook());
+        position.set_piece(H8, Black.rook());
+        position.castles = Castles::empty();
+        position.castles.set(White, Side::Queen, A);
+        position.castles.set(White, Side::King, H);
+        position.castles.set(Black, Side::Queen, A);
+        position.castles.set(Black, Side::King, H);
+        position.validate().unwrap()
+    }
+
+    #[test]
+    fn generates_freestyle_castle_moves() {
+        let moves = freestyle_position().legal_castle_moves();
+
+        assert!(moves.contains(&crate::Move::castle(White, C1, A)));
+        assert!(moves.contains(&crate::Move::castle(White, C1, H)));
+    }
+
+    #[test]
+    fn blocks_freestyle_castle_move() {
+        let mut position = freestyle_position().unvalidated();
+        position.set_piece(E1, White.knight());
+        let position: Position<Freestyle> = position.validate().unwrap();
+
+        assert!(!position.legal_castle_moves().contains(&crate::Move::castle(White, C1, H)));
+    }
+}

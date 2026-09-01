@@ -96,6 +96,31 @@ impl Player {
         }
     }
 
+    /// `White.pawn()`. `Role::of` is the inverse spelling for `Pawn.of(White)`.
+    pub const fn pawn(self) -> Piece {
+        Role::Pawn.of(self)
+    }
+
+    pub const fn knight(self) -> Piece {
+        Role::Knight.of(self)
+    }
+
+    pub const fn bishop(self) -> Piece {
+        Role::Bishop.of(self)
+    }
+
+    pub const fn rook(self) -> Piece {
+        Role::Rook.of(self)
+    }
+
+    pub const fn queen(self) -> Piece {
+        Role::Queen.of(self)
+    }
+
+    pub const fn king(self) -> Piece {
+        Role::King.of(self)
+    }
+
     /// The square the king moves to when castling on this side.
     pub const fn castle_king_to(self, side: Side) -> Square {
         Square::new(side.king_to_file(), self.backrank())
@@ -109,6 +134,29 @@ impl Player {
     /// The square the rook moves to when castling on this side.
     pub const fn castle_rook_to(self, side: Side) -> Square {
         Square::new(side.rook_to_file(), self.backrank())
+    }
+
+    /// Squares that must be empty when castling with this king and rook.
+    pub const fn castle_empty_path(self, king_from: Square, rook_file: File) -> Bitboard {
+        let side = Side::of_rook(king_from, rook_file);
+        let king_to = self.castle_king_to(side);
+        let rook_from = self.castle_rook_from(rook_file);
+        let rook_to = self.castle_rook_to(side);
+
+        let king_path = king_from.between(king_to).with(king_to);
+        let rook_path = rook_from.between(rook_to).with(rook_to);
+
+        // interval between king and rook, excluding endpoints
+        king_path
+            .union_const(rook_path)
+            .difference_const(Bitboard::from_square(king_from))
+            .difference_const(Bitboard::from_square(rook_from))
+    }
+
+    /// Squares the king occupies or crosses when castling on this side.
+    pub const fn castle_king_path(self, king_from: Square, side: Side) -> Bitboard {
+        let king_to = self.castle_king_to(side);
+        king_from.between(king_to).with(king_from).with(king_to)
     }
 }
 
@@ -259,7 +307,7 @@ impl Board {
                 let captured = Square::new(play.to.file(), play.from.rank());
                 self.remove(play.from);
                 self.remove(captured);
-                self.add(play.to, Role::Pawn.of(player));
+                self.add(play.to, player.pawn());
             }
             Castle(file) => {
                 let side = Side::of_rook(play.from, file);
@@ -267,8 +315,8 @@ impl Board {
                 let rook_to = player.castle_rook_to(side);
                 self.remove(play.from);
                 self.remove(rook_from);
-                self.add(play.to, Role::King.of(player));
-                self.add(rook_to, Role::Rook.of(player));
+                self.add(play.to, player.king());
+                self.add(rook_to, player.rook());
             }
             Promote(role) => {
                 self.remove(play.from);
@@ -686,7 +734,7 @@ impl<V: Variant> Position<V> {
     }
 }
 
-impl<V: variant::CanCastle> Position<V> {
+impl<V: Variant> Position<V> {
     pub fn capture_moves(&self) -> Moves {
         self.legal_moves().into_iter().filter(|m| m.is_capture()).collect()
     }
@@ -1300,6 +1348,7 @@ impl Move {
     }
 }
 
+/// Uses long algebraic notation.
 impl fmt::Display for Move {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.long_algebraic(f)
@@ -1308,24 +1357,26 @@ impl fmt::Display for Move {
 
 #[test]
 fn display_move() {
-    let mut play = Move::promote(Square::A2, Square::H7, Role::Queen);
+    use {Player::*, Role::*, Square::*};
+
+    let mut play = Move::promote(A2, H7, Queen);
 
     assert_eq!(play.to_string(), "a2-h7=Q");
     assert_eq!(play.uci().to_string(), "a2h7q");
 
-    play.role = Role::King;
+    play.role = King;
     assert_eq!(play.to_string(), "Ka2-h7=Q");
     assert_eq!(play.uci().to_string(), "a2h7q");
 
-    play = play.capturing(Role::Bishop);
+    play = play.capturing(Bishop);
     assert_eq!(play.to_string(), "Ka2xh7=Q");
     assert_eq!(play.uci().to_string(), "a2h7q");
 
-    let play = Move::chess_castle(Player::White, Side::King);
+    let play = Move::chess_castle(White, Side::King);
     assert_eq!(play.to_string(), ALGEBRAIC_SHORT_CASTLE);
     assert_eq!(play.uci().to_string(), "e1g1");
 
-    let play = Move::chess_castle(Player::Black, Side::Queen);
+    let play = Move::chess_castle(Black, Side::Queen);
     assert_eq!(play.to_string(), ALGEBRAIC_LONG_CASTLE);
     assert_eq!(play.uci().to_string(), "e8c8");
 }

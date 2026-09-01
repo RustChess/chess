@@ -156,7 +156,10 @@ impl<'a> Iterator for Mainline<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Position, Role, Square};
+    use crate::{
+        Position,
+        position::{Role::*, Square::*},
+    };
 
     use super::*;
 
@@ -183,8 +186,8 @@ mod tests {
     #[test]
     fn takes_back_current_play() {
         let mut cursor = Game::new(Position::start()).cursor();
-        let e4 = cursor.push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
-        cursor.push(crate::Move::normal(Role::Pawn, Square::E7, Square::E5)).unwrap();
+        let e4 = cursor.push(crate::Move::normal(Pawn, E2, E4)).unwrap();
+        cursor.push(crate::Move::normal(Pawn, E7, E5)).unwrap();
 
         assert!(cursor.take_back());
         assert_eq!(cursor.node(), Node::Play(e4));

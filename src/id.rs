@@ -202,7 +202,12 @@ impl VariantId for Freestyle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Move, Square, game::Cursor, variant::Chess};
+    use crate::{
+        Move,
+        game::Cursor,
+        position::{Role::*, Square::*},
+        variant::Chess,
+    };
 
     const COLLISION_FEN: &str = "2b1kqr1/p2p3p/3p4/p2PpP2/PpP2p2/6P1/8/RRB1KQ1N w - - 21 32";
     const COLLISION_GAME: &str = "
@@ -226,7 +231,7 @@ mod tests {
 
         // 1. e4 on start position
         let mut cursor = Cursor::new(game);
-        cursor.push(Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
+        cursor.push(Move::normal(Pawn, E2, E4)).unwrap();
         let e4 = cursor.into_inner();
         assert_eq!(e4.id().to_string(), "RJBYu6tEFvwRaRZ4au4o6F");
         assert_eq!(e4.id().u128(), 261533259436473337201551646082583728576);

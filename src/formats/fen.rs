@@ -284,7 +284,9 @@ fn default_fields() -> Fields {
 
 #[test]
 fn board_fen_example() {
+    use File::*;
     use Player::*;
+    use Rank::*;
     use Side::*;
 
     println!("{:?}", board_fen.parse("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR").unwrap());
@@ -300,7 +302,7 @@ fn board_fen_example() {
     assert!(position.castles.has(Black, Queen));
     assert!(position.castles.has(White, King));
     assert!(position.castles.has(White, Queen));
-    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(File::E, Rank::Three)));
+    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(E, Three)));
     assert_eq!(position.reversible, 1);
     assert_eq!(u32::from(position.round), 3);
     assert_eq!(position.validate::<Chess>().unwrap().fen(), fen);
@@ -313,7 +315,7 @@ fn board_fen_example() {
     assert!(position.castles.has(Black, Queen));
     assert!(position.castles.has(White, King));
     assert!(position.castles.has(White, Queen));
-    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(File::E, Rank::Three)));
+    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(E, Three)));
     assert_eq!(position.reversible, 0);
     assert_eq!(u32::from(position.round), 1);
     assert_eq!(

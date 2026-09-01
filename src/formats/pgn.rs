@@ -705,7 +705,7 @@ mod tests {
     use crate::{
         Position,
         formats::san,
-        position::{File, Role, Square},
+        position::{File::*, Role::*, Square::*},
     };
 
     use super::*;
@@ -752,11 +752,11 @@ mod tests {
         assert_eq!(
             e4.san.play,
             san::Move::Normal {
-                role: Role::Pawn,
+                role: Pawn,
                 file: None,
                 rank: None,
                 capture: false,
-                to: Square::E4,
+                to: E4,
                 promotion: None,
             }
         );
@@ -787,17 +787,17 @@ mod tests {
 
         let e4_id = game.start_options().first().unwrap().slot();
         let e4 = game.play(e4_id).unwrap();
-        assert_eq!(e4.play().to, Square::E4);
+        assert_eq!(e4.play().to, E4);
         assert_eq!(e4.meta.nags, vec![Nag::Symbol("!".to_string())]);
         let e4_options = e4.options();
         assert_eq!(e4_options.len(), 2);
 
         let (e5, variations) = e4_options.split_first().unwrap();
-        assert_eq!(e5.play().to, Square::E5);
+        assert_eq!(e5.play().to, E5);
         assert_eq!(e5.meta.nags, vec![Nag::Numeric(1)]);
 
         let c5 = variations.first().unwrap();
-        assert_eq!(c5.play().to, Square::C5);
+        assert_eq!(c5.play().to, C5);
         assert_eq!(c5.meta.comment, Some(text("Sicilian")));
     }
 
@@ -815,8 +815,8 @@ mod tests {
 
         let options = game.start_options();
         let e4 = options.first().unwrap();
-        assert_eq!(e4.play().from, Square::E2);
-        assert_eq!(e4.play().to, Square::E4);
+        assert_eq!(e4.play().from, E2);
+        assert_eq!(e4.play().to, E4);
     }
 
     #[test]
@@ -839,9 +839,7 @@ mod tests {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
         let position = fen::position_unvalidated.parse(fen).unwrap().validate().unwrap();
         let mut game = crate::Game::new(position);
-        game.start_options_mut()
-            .push(crate::Move::normal(Role::King, Square::E8, Square::D8))
-            .unwrap();
+        game.start_options_mut().push(crate::Move::normal(King, E8, D8)).unwrap();
 
         let pgn = Game::from(game);
         assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
@@ -853,15 +851,8 @@ mod tests {
     #[test]
     fn displays_figurine_movetext() {
         let mut game = crate::Game::new(Position::start());
-        let e4 = game
-            .start_options_mut()
-            .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
-            .unwrap();
-        game.play_mut(e4)
-            .unwrap()
-            .options_mut()
-            .push(crate::Move::normal(Role::Knight, Square::G8, Square::F6))
-            .unwrap();
+        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap();
+        game.play_mut(e4).unwrap().options_mut().push(crate::Move::normal(Knight, G8, F6)).unwrap();
 
         let pgn = Game::from(game);
         assert_eq!(pgn.movetext(), "1. e4 Nf6");
@@ -873,22 +864,14 @@ mod tests {
         let mut game = crate::Game::new(Position::start());
         game.roster.event = Some(text("x"));
 
-        let e4 = game
-            .start_options_mut()
-            .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
-            .unwrap();
-        game.start_options_mut()
-            .push(crate::Move::normal(Role::Pawn, Square::D2, Square::D4))
-            .unwrap();
+        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap();
+        game.start_options_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap();
 
         {
             let mut e4 = game.play_mut(e4).unwrap();
             e4.meta.nags.push(Nag::Symbol("!".to_string()));
-            e4.options_mut().push(crate::Move::normal(Role::Pawn, Square::E7, Square::E5)).unwrap();
-            let c5 = e4
-                .options_mut()
-                .push(crate::Move::normal(Role::Pawn, Square::C7, Square::C5))
-                .unwrap();
+            e4.options_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
+            let c5 = e4.options_mut().push(crate::Move::normal(Pawn, C7, C5)).unwrap();
             game.play_mut(c5).unwrap().meta.comment = Some(text("Sicilian"));
         }
 
@@ -1029,12 +1012,12 @@ mod tests {
             game.moves[0].san,
             san::San {
                 play: san::Move::Normal {
-                    role: Role::Pawn,
-                    file: Some(File::E),
+                    role: Pawn,
+                    file: Some(E),
                     rank: None,
                     capture: true,
-                    to: Square::D8,
-                    promotion: Some(Role::Queen),
+                    to: D8,
+                    promotion: Some(Queen),
                 },
                 check: Some(san::Check::Checkmate),
             }

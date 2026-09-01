@@ -92,8 +92,8 @@ impl Position<variant::Chess> {
                     continue;
                 }
 
-                let king = Piece { player, role: Role::King };
-                let rook = Piece { player, role: Role::Rook };
+                let king = player.king();
+                let rook = player.rook();
                 if position.board.piece_at(Square::new(File::E, player.backrank())) != Some(king)
                     || position.board.piece_at(player.castle_rook_from(side.chess_rook()))
                         != Some(rook)
@@ -132,7 +132,7 @@ impl Position<variant::Freestyle> {
                     Side::Queen => rook_file < king.file(),
                     Side::King => king.file() < rook_file,
                 };
-                let rook = Piece { player, role: Role::Rook };
+                let rook = player.rook();
                 if !valid_side
                     || position.board.piece_at(player.castle_rook_from(rook_file)) != Some(rook)
                 {
@@ -149,9 +149,7 @@ impl Position<variant::Freestyle> {
 mod tests {
     use crate::{
         formats::{Parser as _, fen::position_unvalidated},
-        position::{
-            Castles, Error, File, Piece, Player, Position, Role, Side, Square, Unvalidated,
-        },
+        position::{Castles, Error, File, Player, Position, Side, Square, Square::*, Unvalidated},
         variant::{Chess, Freestyle},
     };
 
@@ -189,30 +187,12 @@ mod tests {
         use Player::*;
 
         let mut position = Position::empty();
-        position.set_piece(
-            Square::new(king_file, White.backrank()),
-            Piece { player: White, role: Role::King },
-        );
-        position.set_piece(
-            Square::new(queen_rook, White.backrank()),
-            Piece { player: White, role: Role::Rook },
-        );
-        position.set_piece(
-            Square::new(king_rook, White.backrank()),
-            Piece { player: White, role: Role::Rook },
-        );
-        position.set_piece(
-            Square::new(king_file, Black.backrank()),
-            Piece { player: Black, role: Role::King },
-        );
-        position.set_piece(
-            Square::new(queen_rook, Black.backrank()),
-            Piece { player: Black, role: Role::Rook },
-        );
-        position.set_piece(
-            Square::new(king_rook, Black.backrank()),
-            Piece { player: Black, role: Role::Rook },
-        );
+        position.set_piece(Square::new(king_file, White.backrank()), White.king());
+        position.set_piece(Square::new(queen_rook, White.backrank()), White.rook());
+        position.set_piece(Square::new(king_rook, White.backrank()), White.rook());
+        position.set_piece(Square::new(king_file, Black.backrank()), Black.king());
+        position.set_piece(Square::new(queen_rook, Black.backrank()), Black.rook());
+        position.set_piece(Square::new(king_rook, Black.backrank()), Black.rook());
         position.castles = Castles::empty();
         position.castles.set(White, Side::Queen, queen_rook);
         position.castles.set(White, Side::King, king_rook);
@@ -229,7 +209,7 @@ mod tests {
     #[test]
     fn rejects_freestyle_castling_without_backrank_king() {
         let mut position = freestyle_position(File::C, File::A, File::H);
-        position.move_piece(Square::C1, Square::C2).unwrap();
+        position.move_piece(C1, C2).unwrap();
 
         assert_eq!(
             position.validate::<Freestyle>().unwrap_err(),

@@ -331,6 +331,7 @@ fn err<T>() -> ModalResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::position::{File::*, Role::*, Square::*};
 
     #[test]
     fn parses_pawn_move() {
@@ -338,11 +339,11 @@ mod tests {
         assert_eq!(
             parsed.play,
             Move::Normal {
-                role: Role::Pawn,
+                role: Pawn,
                 file: None,
                 rank: None,
                 capture: false,
-                to: Square::E4,
+                to: E4,
                 promotion: None,
             }
         );
@@ -354,11 +355,11 @@ mod tests {
         assert_eq!(
             parsed.play,
             Move::Normal {
-                role: Role::Pawn,
+                role: Pawn,
                 file: None,
                 rank: None,
                 capture: false,
-                to: Square::B6,
+                to: B6,
                 promotion: None,
             }
         );
@@ -382,11 +383,11 @@ mod tests {
         assert_eq!(
             parsed.play,
             Move::Normal {
-                role: Role::Knight,
-                file: Some(File::B),
+                role: Knight,
+                file: Some(B),
                 rank: None,
                 capture: false,
-                to: Square::D2,
+                to: D2,
                 promotion: None,
             }
         );
@@ -412,12 +413,12 @@ mod tests {
         assert_eq!(
             parsed.play,
             Move::Normal {
-                role: Role::Pawn,
-                file: Some(File::E),
+                role: Pawn,
+                file: Some(E),
                 rank: None,
                 capture: true,
-                to: Square::D8,
-                promotion: Some(Role::Queen),
+                to: D8,
+                promotion: Some(Queen),
             }
         );
         assert_eq!(parsed.check, Some(Check::Checkmate));

@@ -231,7 +231,11 @@ fn promotion(input: &mut Input<'_>) -> ModalResult<Role> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Position, Role, Square, variant::Chess};
+    use crate::{
+        Position,
+        position::{Role::*, Square::*},
+        variant::Chess,
+    };
 
     use super::*;
 
@@ -239,7 +243,7 @@ mod tests {
     fn parses_normal_move() {
         let legal = Position::start().legal_moves();
 
-        assert_eq!(parse_move("e2e4", &legal).unwrap().to, Square::E4);
+        assert_eq!(parse_move("e2e4", &legal).unwrap().to, E4);
         assert!(parse_move("e2e5", &legal).is_none());
     }
 
@@ -248,8 +252,8 @@ mod tests {
         let position: Position<Chess> = Position::from_fen("8/P7/8/8/8/8/8/k6K w - - 0 1").unwrap();
         let legal = position.legal_moves();
 
-        assert_eq!(parse_move("a7a8q", &legal).unwrap().promotes(), Some(Role::Queen));
-        assert_eq!(parse_move("a7a8Q", &legal).unwrap().promotes(), Some(Role::Queen));
+        assert_eq!(parse_move("a7a8q", &legal).unwrap().promotes(), Some(Queen));
+        assert_eq!(parse_move("a7a8Q", &legal).unwrap().promotes(), Some(Queen));
         assert!(parse_move("a7a8", &legal).is_none());
     }
 
@@ -284,8 +288,8 @@ mod tests {
             parsed.pv,
             Some(Pv {
                 moves: vec![
-                    Move { from: Square::D2, to: Square::D4, promotion: None },
-                    Move { from: Square::G8, to: Square::F6, promotion: None },
+                    Move { from: D2, to: D4, promotion: None },
+                    Move { from: G8, to: F6, promotion: None },
                 ],
             })
         );

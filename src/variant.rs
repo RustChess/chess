@@ -1,4 +1,4 @@
-use crate::position::{Position, Result, Side};
+use crate::position::{Position, Result};
 
 pub trait Variant: Copy + Sized {}
 
@@ -12,22 +12,12 @@ impl Variant for Chess {}
 
 impl Variant for Freestyle {}
 
-pub trait Supported: CanCastle + Validate {}
+pub trait Supported: Validate {}
 
-impl<T: CanCastle + Validate> Supported for T {}
-
-pub trait CanCastle: Variant {
-    fn can_castle(position: &Position<Self>, side: Side) -> bool;
-}
+impl<T: Validate> Supported for T {}
 
 pub trait Validate: Variant {
     fn validate_castling(position: Position<Unvalidated>) -> Result<()>;
-}
-
-impl CanCastle for Chess {
-    fn can_castle(position: &Position<Self>, side: Side) -> bool {
-        position.can_castle(side)
-    }
 }
 
 impl Validate for Chess {
