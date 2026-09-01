@@ -43,6 +43,15 @@ pub const ALGEBRAIC_LONG_CASTLE: &str = PGN_LONG_CASTLE;
 pub const ALGEBRAIC_MOVE: char = '-';
 pub const ALGEBRAIC_CAPTURE: char = 'x';
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Scharnagl(u16);
+
+impl Scharnagl {
+    pub const fn new(i: u16) -> Option<Self> {
+        if i < 960 { Some(Self(i)) } else { None }
+    }
+}
+
 crate::finite_set!(
     /// Black and white
     Player,
@@ -206,6 +215,24 @@ impl Board {
         }
     }
 
+    pub const fn freestyle(i: Scharnagl) -> Board {
+        let backrank = scharnagl(i);
+        let mut board = Board::empty();
+
+        let mut index = 0;
+        while index < File::LEN as u8 {
+            let file = File::panicky_from_index(index);
+            let role = backrank[file.index()];
+            board.add(Square::new(file, Rank::One), role.of(Player::White));
+            board.add(Square::new(file, Rank::Two), Player::White.pawn());
+            board.add(Square::new(file, Rank::Seven), Player::Black.pawn());
+            board.add(Square::new(file, Rank::Eight), role.of(Player::Black));
+            index += 1;
+        }
+
+        board
+    }
+
     pub const fn empty() -> Board {
         Board {
             players: Players { black: Bitboard::EMPTY, white: Bitboard::EMPTY },
@@ -280,17 +307,19 @@ impl Board {
         self.roles.get(role)
     }
 
-    pub fn add(&mut self, square: Square, piece: Piece) {
+    pub const fn add(&mut self, square: Square, piece: Piece) {
         self.occupied.insert(square);
-        self.players[piece.player].insert(square);
-        self.roles[piece.role].insert(square);
+        self.players.get_mut(piece.player).insert(square);
+        self.roles.get_mut(piece.role).insert(square);
     }
 
-    pub fn remove(&mut self, square: Square) -> Option<Piece> {
-        let piece = self.piece_at(square)?;
+    pub const fn remove(&mut self, square: Square) -> Option<Piece> {
+        let Some(piece) = self.piece_at(square) else {
+            return None;
+        };
         self.occupied.remove(square);
-        self.players[piece.player].remove(square);
-        self.roles[piece.role].remove(square);
+        self.players.get_mut(piece.player).remove(square);
+        self.roles.get_mut(piece.role).remove(square);
         Some(piece)
     }
 
@@ -625,8 +654,8 @@ impl Castles {
         self.get(player, side).is_some()
     }
 
-    pub fn set(&mut self, player: Player, side: Side, file: File) {
-        self.0[player][side] = Some(file);
+    pub const fn set(&mut self, player: Player, side: Side, file: File) {
+        *self.0.get_mut(player).get_mut(side) = Some(file);
     }
 
     pub fn clear(&mut self, player: Player, side: Side) {
@@ -658,6 +687,38 @@ impl Position<variant::Chess> {
             board: Board::standard(),
             turn: Player::White,
             castles: Castles::chess(),
+            en_passant: None,
+            reversible: 0,
+            round: NonZeroU32::MIN,
+            variant: PhantomData,
+        }
+    }
+}
+
+impl Position<variant::Freestyle> {
+    pub const fn freestyle(i: Scharnagl) -> Position<variant::Freestyle> {
+        use Player::*;
+        use Side::*;
+
+        // Construct board
+        let board = Board::freestyle(i);
+
+        // Extract castle rights
+        let king = board.king_of(White).unwrap();
+        let mut rooks = board.rooks();
+        let queen_rook = rooks.pop_first().unwrap().file();
+        let king_rook = rooks.first().unwrap().file();
+
+        let mut castles = Castles::empty();
+        castles.set(White, Side::of_rook(king, queen_rook), queen_rook);
+        castles.set(White, Side::of_rook(king, king_rook), king_rook);
+        castles.set(Black, Queen, queen_rook);
+        castles.set(Black, King, king_rook);
+
+        Position {
+            board,
+            turn: White,
+            castles,
             en_passant: None,
             reversible: 0,
             round: NonZeroU32::MIN,
@@ -1381,36 +1442,6 @@ fn display_move() {
     assert_eq!(play.uci().to_string(), "e8c8");
 }
 
-pub struct Meta;
-
-pub struct Game<V = variant::Chess> {
-    pub meta: Meta,
-    pub initial: Position<V>,
-    pub current: Position<V>,
-    pub moves: Moves,
-}
-
-pub struct Analysis<V = variant::Chess> {
-    pub meta: Meta,
-    pub initial: Position<V>,
-    pub current: Position<V>,
-    pub moves: Vec<MoveWithVariations>,
-}
-
-pub struct MoveWithVariations {
-    pub play: Move,
-    pub variations: Vec<MoveWithVariations>,
-}
-
-// pub struct Moves = Vec<Move>;
-
-// pub struct Game<V = variant::Chess> {
-//     pub meta: Meta,
-//     pub initial: Position<V>,
-//     pub current: Position<V>,
-//     pub moves: Vec<Move>,
-// }
-
 #[test]
 fn all_random() {
     use std::collections::BTreeSet as Set;
@@ -1455,4 +1486,89 @@ fn all_random() {
         println!("{}", position.iter().collect::<String>());
     }
     assert_eq!(960, positions.len());
+}
+
+pub const fn scharnagl(Scharnagl(mut i): Scharnagl) -> [Role; 8] {
+    const KNIGHTS: [(u8, u8); 10] =
+        [(0, 0), (0, 1), (0, 2), (0, 3), (1, 1), (1, 2), (1, 3), (2, 2), (2, 3), (3, 3)];
+
+    const fn nth_free(roles: &[Role; 8], n: u8) -> File {
+        let mut seen = 0;
+        let mut file = 0;
+        while file < File::LEN as u8 {
+            if Role::Pawn.eq(roles[file as usize]) {
+                if seen == n {
+                    return File::panicky_from_index(file);
+                }
+                seen += 1;
+            }
+            file += 1;
+        }
+        unreachable!()
+    }
+
+    let mut roles = [Role::Pawn; 8];
+
+    // Place light bishop on b/d/f/h according to i % 4
+    // IOW, last two bits
+    let light_bishop = i % 4;
+    i /= 4;
+    roles[(light_bishop * 2 + 1) as usize] = Role::Bishop;
+
+    // Place dark bishop on a/c/e/g according to i % 4
+    // IOW, next two bits
+    let dark_bishop = i % 4;
+    i /= 4;
+    roles[(dark_bishop * 2) as usize] = Role::Bishop;
+
+    // Place queen on remaining files according to i % 6
+    // IOW, next six numbers
+    let queen = i % 6;
+    i /= 6;
+    let queen = nth_free(&roles, queen as u8);
+    roles[queen.index()] = Role::Queen;
+
+    // There are 960/4/4/6=10 cases left.
+    // Place the knights in any two remaining files, using the lookup table
+    // of all 2-of-4 subsets with replacement
+    let (left_knight, right_knight) = KNIGHTS[i as usize];
+    let left_knight = nth_free(&roles, left_knight);
+    roles[left_knight.index()] = Role::Knight;
+    let right_knight = nth_free(&roles, right_knight);
+    roles[right_knight.index()] = Role::Knight;
+
+    // Now fill in the remaining files with rooks and king,
+    // ensuring the king is between the rooks
+    let rook = nth_free(&roles, 0);
+    roles[rook.index()] = Role::Rook;
+    let king = nth_free(&roles, 0);
+    roles[king.index()] = Role::King;
+    let rook = nth_free(&roles, 0);
+    roles[rook.index()] = Role::Rook;
+
+    roles
+}
+
+#[test]
+fn freestyle_positions() {
+    use variant::{Chess, Freestyle};
+
+    assert_eq!(Scharnagl::new(960), None);
+    assert_eq!(Board::freestyle(Scharnagl(0)).fen(), "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR");
+    assert_eq!(
+        Board::freestyle(Scharnagl(631)).fen(),
+        "rnbkqrnb/pppppppp/8/8/8/8/PPPPPPPP/RNBKQRNB"
+    );
+    assert_eq!(Board::freestyle(Scharnagl(518)), Board::standard());
+    assert_eq!(
+        Board::freestyle(Scharnagl(959)).fen(),
+        "rkrnnqbb/pppppppp/8/8/8/8/PPPPPPPP/RKRNNQBB"
+    );
+
+    let position = Position::<Freestyle>::freestyle(Scharnagl(518));
+    assert_eq!(position.board, Position::<Chess>::start().board);
+    assert_eq!(position.castles.get(White, Side::Queen), Some(File::A));
+    assert_eq!(position.castles.get(White, Side::King), Some(File::H));
+    assert_eq!(position.castles.get(Black, Side::Queen), Some(File::A));
+    assert_eq!(position.castles.get(Black, Side::King), Some(File::H));
 }
