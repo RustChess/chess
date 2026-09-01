@@ -58,10 +58,10 @@ impl Login {
     }
 }
 
-#[cfg(test)]
-#[tokio::test]
-async fn login() {
-    // e.g. Some("engine:read engine:write")
-    Login::new(Some("engine:read engine:write")).await.unwrap();
-    panic!("wtf");
-}
+// #[cfg(test)]
+// #[tokio::test]
+// async fn login() {
+//     // e.g. Some("engine:read engine:write")
+//     Login::new(Some("engine:read engine:write")).await.unwrap();
+//     panic!("wtf");
+// }

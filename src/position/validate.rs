@@ -14,7 +14,7 @@ impl Unvalidated {
         Ok(Position {
             board: self.board,
             turn: self.turn,
-            castle: self.castle,
+            castles: self.castles,
             en_passant: self.en_passant,
             reversible: self.reversible,
             round: self.round,
@@ -88,14 +88,14 @@ impl Position<variant::Chess> {
     pub fn validate_castling(position: Unvalidated) -> Result<()> {
         for player in Player::ALL {
             for side in Side::ALL {
-                if !position.castle[player][side] {
+                if !position.castles.has(player, side) {
                     continue;
                 }
 
                 let king = Piece { player, role: Role::King };
                 let rook = Piece { player, role: Role::Rook };
                 if position.board.piece_at(Square::new(File::E, player.backrank())) != Some(king)
-                    || position.board.piece_at(standard_rook(player, side)) != Some(rook)
+                    || position.board.piece_at(Square::chess_rook(player, side)) != Some(rook)
                 {
                     return Err(Error::Castling(player, side));
                 }
@@ -104,14 +104,6 @@ impl Position<variant::Chess> {
 
         Ok(())
     }
-}
-
-const fn standard_rook(player: Player, side: Side) -> Square {
-    let file = match side {
-        Side::King => File::H,
-        Side::Queen => File::A,
-    };
-    Square::new(file, player.backrank())
 }
 
 #[cfg(test)]

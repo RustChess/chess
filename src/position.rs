@@ -530,7 +530,7 @@ pub struct Position<Variant = variant::Chess> {
     /// player to move
     pub turn: Player,
     /// possible castle sides
-    pub castle: Players<Sides>,
+    pub castles: Castles,
     /// possible en passant square
     pub en_passant: Option<en_passant::Square>,
     /// ply counter since last capture or pawn move (reversible moves)
@@ -541,16 +541,68 @@ pub struct Position<Variant = variant::Chess> {
     pub(crate) variant: PhantomData<Variant>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Castles(pub Players<Sides<Option<File>>>);
+
+impl Side {
+    pub const fn chess_rook(self) -> File {
+        match self {
+            Side::King => File::H,
+            Side::Queen => File::A,
+        }
+    }
+}
+
+impl Square {
+    pub const fn chess_rook(player: super::Player, side: super::Side) -> Self {
+        Self::new(side.chess_rook(), player.backrank())
+    }
+}
+
+impl<T> Sides<Option<T>> {
+    pub const fn empty() -> Self {
+        Sides { queen: None, king: None }
+    }
+}
+impl Castles {
+    pub const fn empty() -> Self {
+        Self(Players { black: Sides::empty(), white: Sides::empty() })
+    }
+
+    pub const fn chess() -> Self {
+        use Side::*;
+        let rooks = Sides { queen: Some(Queen.chess_rook()), king: Some(King.chess_rook()) };
+        Self(Players { black: rooks, white: rooks })
+    }
+
+    pub const fn get(self, player: Player, side: Side) -> Option<File> {
+        self.0.get(player).get(side)
+    }
+
+    pub const fn has(self, player: Player, side: Side) -> bool {
+        self.get(player, side).is_some()
+    }
+
+    pub fn set(&mut self, player: Player, side: Side, file: File) {
+        self.0[player][side] = Some(file);
+    }
+
+    pub fn clear(&mut self, player: Player, side: Side) {
+        self.0[player][side] = None;
+    }
+
+    pub fn clear_player(&mut self, player: Player) {
+        self.0[player] = Sides::empty();
+    }
+}
+
 pub type Unvalidated = Position<variant::Unvalidated>;
 
 pub const fn unvalidated(board: Board, turn: Player) -> Unvalidated {
     Unvalidated {
         board,
         turn,
-        castle: Players {
-            black: Sides { queen: false, king: false },
-            white: Sides { queen: false, king: false },
-        },
+        castles: Castles::empty(),
         en_passant: None,
         reversible: 0,
         round: NonZeroU32::MIN,
@@ -563,10 +615,7 @@ impl Position<variant::Chess> {
         Position {
             board: Board::standard(),
             turn: Player::White,
-            castle: Players {
-                black: Sides { queen: true, king: true },
-                white: Sides { queen: true, king: true },
-            },
+            castles: Castles::chess(),
             en_passant: None,
             reversible: 0,
             round: NonZeroU32::MIN,
@@ -580,10 +629,7 @@ impl Position<variant::Unvalidated> {
         Position {
             board: Board::standard(),
             turn: Player::White,
-            castle: Players {
-                black: Sides { queen: true, king: true },
-                white: Sides { queen: true, king: true },
-            },
+            castles: Castles::chess(),
             en_passant: None,
             reversible: 0,
             round: NonZeroU32::MIN,
@@ -670,7 +716,7 @@ impl<V> Position<V> {
         Position {
             board: self.board,
             turn: self.turn,
-            castle: self.castle,
+            castles: self.castles,
             en_passant: self.en_passant,
             reversible: self.reversible,
             round: self.round,
@@ -689,7 +735,7 @@ impl<V> Position<V> {
         };
 
         if play.role == Role::King {
-            self.castle[player] = Sides { queen: false, king: false };
+            self.castles.clear_player(player);
         }
 
         if play.role == Role::Rook {
@@ -729,9 +775,9 @@ impl<V> Position<V> {
     fn clear_standard_castle_rook(&mut self, player: Player, square: Square) {
         let rank = player.backrank();
         if square == Square::new(File::A, rank) {
-            self.castle[player][Side::Queen] = false;
+            self.castles.clear(player, Side::Queen);
         } else if square == Square::new(File::H, rank) {
-            self.castle[player][Side::King] = false;
+            self.castles.clear(player, Side::King);
         }
     }
 }

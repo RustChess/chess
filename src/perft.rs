@@ -94,7 +94,9 @@ fn tricky_positions() {
     );
     assert_perft(
         "two knight checkers",
-        "2b5/1nbn4/n3n3/1kn5/n3n3/1n1n4/5RQ1/2KQ1R2 w K - 0 1",
+        // This FEN is actually incorrect - the K castling right is not valid
+        // "2b5/1nbn4/n3n3/1kn5/n3n3/1n1n4/5RQ1/2KQ1R2 w K - 0 1",
+        "2b5/1nbn4/n3n3/1kn5/n3n3/1n1n4/5RQ1/2KQ1R2 w - - 0 1",
         &[(1, 2), (2, 104), (3, 3382)],
     );
     assert_perft(

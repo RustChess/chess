@@ -246,7 +246,7 @@ impl<V: Variant> Position<V> {
 
 impl Position<Chess> {
     pub fn can_castle(&self, side: Side) -> bool {
-        if !self.castle[self.turn][side] {
+        if !self.castles.has(self.turn, side) {
             return false;
         }
 

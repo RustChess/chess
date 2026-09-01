@@ -5,7 +5,8 @@ use crate::variant::Chess;
 use crate::{
     bitboard::Bitboard,
     position::{
-        Board, File, Player, Players, Position, Rank, Role, Roles, Side, Sides, Square, en_passant,
+        Board, Castles, File, Player, Players, Position, Rank, Role, Roles, Side, Square,
+        en_passant,
     },
     variant::{Unvalidated, Validate, Variant},
 };
@@ -29,8 +30,8 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 // Lenient - fills up with default values.
 pub fn position_unvalidated(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
     let board = board_fen.parse_next(input)?;
-    let Fields { turn, castle, en_passant, reversible, round } = fields_fen.parse_next(input)?;
-    Ok(Position { board, turn, castle, en_passant, reversible, round, variant: PhantomData })
+    let Fields { turn, castles, en_passant, reversible, round } = fields_fen.parse_next(input)?;
+    Ok(Position { board, turn, castles, en_passant, reversible, round, variant: PhantomData })
 }
 
 impl Unvalidated {
@@ -56,7 +57,7 @@ impl<V> Position<V> {
             "{} {} {} {} {} {}",
             self.board.fen(),
             self.turn.fen(),
-            self.castle.fen(),
+            self.castles.fen(),
             en_passant_square(self.en_passant),
             self.reversible,
             self.round
@@ -70,7 +71,7 @@ impl<V: Variant> Position<V> {
             "{} {} {} {}",
             self.board.fen(),
             self.turn.fen(),
-            self.castle.fen(),
+            self.castles.fen(),
             en_passant_square(self.effective_en_passant()),
         )
     }
@@ -116,22 +117,22 @@ impl Player {
     }
 }
 
-impl Players<Sides> {
-    pub fn fen(self) -> String {
+impl Castles {
+    fn fen(self) -> String {
         use Player::*;
         use Side::*;
 
         let mut fen = String::new();
-        if self[White][King] {
+        if self.has(White, King) {
             fen.push('K');
         }
-        if self[White][Queen] {
+        if self.has(White, Queen) {
             fen.push('Q');
         }
-        if self[Black][King] {
+        if self.has(Black, King) {
             fen.push('k');
         }
-        if self[Black][Queen] {
+        if self.has(Black, Queen) {
             fen.push('q');
         }
         if fen.is_empty() {
@@ -195,24 +196,24 @@ fn player(input: &mut Input<'_>) -> ModalResult<Player> {
         .parse_next(input)
 }
 
-fn castle(input: &mut Input<'_>) -> ModalResult<Players<Sides>> {
+fn castle(input: &mut Input<'_>) -> ModalResult<Castles> {
     use Player::*;
     use Side::*;
 
     alt((
-        '-'.value(Default::default()),
+        '-'.value(Castles::empty()),
         repeat(1..=4, one_of(|c| "KQkq".contains(c))).map(|letters: Vec<char>| {
-            let mut castle: Players<Sides> = Default::default();
+            let mut castles = Castles::empty();
             for letter in letters {
                 match letter {
-                    'K' => castle[White][King] = true,
-                    'Q' => castle[White][Queen] = true,
-                    'k' => castle[Black][King] = true,
-                    'q' => castle[Black][Queen] = true,
+                    'K' => castles.set(White, King, King.chess_rook()),
+                    'Q' => castles.set(White, Queen, Queen.chess_rook()),
+                    'k' => castles.set(Black, King, King.chess_rook()),
+                    'q' => castles.set(Black, Queen, Queen.chess_rook()),
                     _ => unreachable!(),
                 }
             }
-            castle
+            castles
         }),
     ))
     .parse_next(input)
@@ -241,7 +242,7 @@ fn round(input: &mut Input<'_>) -> ModalResult<NonZeroU32> {
 
 struct Fields {
     turn: Player,
-    castle: Players<Sides>,
+    castles: Castles,
     en_passant: Option<en_passant::Square>,
     reversible: u32,
     round: NonZeroU32,
@@ -252,29 +253,29 @@ fn fields_fen(input: &mut Input<'_>) -> ModalResult<Fields> {
         return Ok(default_fields());
     };
 
-    let Some(castle) = opt(preceded(space0, castle)).parse_next(input)? else {
+    let Some(castles) = opt(preceded(space0, castle)).parse_next(input)? else {
         return Ok(Fields { turn, ..default_fields() });
     };
 
     let Some(en_passant) = opt(preceded(space0, en_passant)).parse_next(input)? else {
-        return Ok(Fields { turn, castle, ..default_fields() });
+        return Ok(Fields { turn, castles, ..default_fields() });
     };
 
     let Some(reversible) = opt(preceded(space0, reversible)).parse_next(input)? else {
-        return Ok(Fields { turn, castle, en_passant, ..default_fields() });
+        return Ok(Fields { turn, castles, en_passant, ..default_fields() });
     };
 
     let Some(round) = opt(preceded(space0, round)).parse_next(input)? else {
-        return Ok(Fields { turn, castle, en_passant, reversible, ..default_fields() });
+        return Ok(Fields { turn, castles, en_passant, reversible, ..default_fields() });
     };
 
-    Ok(Fields { turn, castle, en_passant, reversible, round })
+    Ok(Fields { turn, castles, en_passant, reversible, round })
 }
 
 fn default_fields() -> Fields {
     Fields {
         turn: Player::White,
-        castle: Players::default(),
+        castles: Castles::empty(),
         en_passant: None,
         reversible: 0,
         round: NonZeroU32::MIN,
@@ -295,10 +296,10 @@ fn board_fen_example() {
     let fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 1 3";
     let position = position_unvalidated.parse(fen).unwrap();
     assert_eq!(position.turn, Black);
-    assert!(position.castle[Black][King]);
-    assert!(position.castle[Black][Queen]);
-    assert!(position.castle[White][King]);
-    assert!(position.castle[White][Queen]);
+    assert!(position.castles.has(Black, King));
+    assert!(position.castles.has(Black, Queen));
+    assert!(position.castles.has(White, King));
+    assert!(position.castles.has(White, Queen));
     assert_eq!(position.en_passant.map(Into::into), Some(Square::new(File::E, Rank::Three)));
     assert_eq!(position.reversible, 1);
     assert_eq!(u32::from(position.round), 3);
@@ -308,10 +309,10 @@ fn board_fen_example() {
     let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
     let position = position_unvalidated.parse(partial_fen).unwrap();
     assert_eq!(position.turn, Black);
-    assert!(position.castle[Black][King]);
-    assert!(position.castle[Black][Queen]);
-    assert!(position.castle[White][King]);
-    assert!(position.castle[White][Queen]);
+    assert!(position.castles.has(Black, King));
+    assert!(position.castles.has(Black, Queen));
+    assert!(position.castles.has(White, King));
+    assert!(position.castles.has(White, Queen));
     assert_eq!(position.en_passant.map(Into::into), Some(Square::new(File::E, Rank::Three)));
     assert_eq!(position.reversible, 0);
     assert_eq!(u32::from(position.round), 1);
@@ -327,10 +328,10 @@ fn board_fen_example() {
     let board_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR";
     let position = position_unvalidated.parse(board_fen).unwrap();
     assert_eq!(position.turn, White);
-    assert!(!position.castle[Black][King]);
-    assert!(!position.castle[Black][Queen]);
-    assert!(!position.castle[White][King]);
-    assert!(!position.castle[White][Queen]);
+    assert!(!position.castles.has(Black, King));
+    assert!(!position.castles.has(Black, Queen));
+    assert!(!position.castles.has(White, King));
+    assert!(!position.castles.has(White, Queen));
     assert_eq!(position.en_passant, None);
     assert_eq!(position.reversible, 0);
     assert_eq!(u32::from(position.round), 1);

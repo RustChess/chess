@@ -4,7 +4,7 @@ pub use basis::{Basis, POLYGLOT, STANDARD};
 
 use crate::{
     game::Game,
-    position::{Board, Player, Players, Position, Role, Side, Sides, en_passant},
+    position::{Board, Castles, Player, Position, Role, Side, en_passant},
     variant::{Chess, Freestyle, Variant},
 };
 
@@ -141,7 +141,7 @@ impl<V: VariantId> Position<V> {
 
     pub const fn transposition_id(self, basis: &Basis) -> Id {
         self.apparent_id(basis)
-            .xor(castle_id(basis, self.castle))
+            .xor(castle_id(basis, self.castles))
             .xor(en_passant_id(basis, self.effective_en_passant()))
     }
 
@@ -166,7 +166,7 @@ const fn en_passant_id(basis: &Basis, en_passant: Option<en_passant::Square>) ->
     }
 }
 
-const fn castle_id(basis: &Basis, castle: Players<Sides>) -> Id {
+const fn castle_id(basis: &Basis, castles: Castles) -> Id {
     let mut id = Id(0);
 
     let mut p = 0;
@@ -176,7 +176,7 @@ const fn castle_id(basis: &Basis, castle: Players<Sides>) -> Id {
         let mut s = 0;
         while s < Side::LEN as u8 {
             let side = Side::panicky_from_index(s);
-            if castle.get(player).get(side) {
+            if castles.has(player, side) {
                 id = id.xor(basis.castle.get(player).get(side));
             }
             s += 1;
