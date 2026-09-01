@@ -1,10 +1,10 @@
 use crate::{
     formats::{Parser as _, fen::position_unvalidated},
-    position::Position,
-    variant::Chess,
+    position::{Position, Scharnagl},
+    variant::{Chess, Freestyle, Variant},
 };
 
-pub(crate) fn perft(position: Position<Chess>, depth: u32) -> u64 {
+pub(crate) fn perft<V: Variant>(position: Position<V>, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
     }
@@ -17,10 +17,101 @@ pub(crate) fn perft(position: Position<Chess>, depth: u32) -> u64 {
 }
 
 fn assert_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = position_unvalidated.parse(fen).unwrap().validate().unwrap();
+    let position = position_unvalidated.parse(fen).unwrap().validate::<Chess>().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
+}
+
+fn assert_freestyle_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
+    let position = position_unvalidated.parse(fen).unwrap().validate::<Freestyle>().unwrap();
+    for &(depth, nodes) in expected {
+        assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
+    }
+}
+
+fn assert_position_perft<V: Variant>(name: &str, position: Position<V>, expected: &[(u32, u64)]) {
+    for &(depth, nodes) in expected {
+        assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
+    }
+}
+
+// This corresponds to a divide reporting mode in e.g. Stockfish,
+// allowing to see the number of moves split count after first move
+fn divide<V: Variant>(position: Position<V>, depth: u32) {
+    for play in position.legal_moves() {
+        println!("{}: {}", play.uci(), perft(position.apply_unchecked(play), depth - 1));
+    }
+}
+
+#[test]
+fn freestyle_positions() {
+    // Selected from Shakmaty's `tests/chess960.perft`:
+    // https://github.com/niklasf/shakmaty/blob/master/shakmaty/tests/chess960.perft
+    assert_position_perft(
+        "chess960 position 518",
+        Position::<Freestyle>::freestyle(Scharnagl::new(518).unwrap()),
+        &[(1, 20), (2, 400), (3, 8902), (4, 197281)],
+    );
+    assert_freestyle_perft(
+        "chess960 position 0",
+        "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+        &[(1, 21), (2, 528), (3, 12189), (4, 326672)],
+    );
+    assert_freestyle_perft(
+        "chess960 position 1",
+        "2nnrbkr/p1qppppp/8/1ppb4/6PP/3PP3/PPP2P2/BQNNRBKR w HEhe - 1 9",
+        &[(1, 21), (2, 807), (3, 18002)],
+    );
+    assert_freestyle_perft(
+        "chess960 position 2",
+        "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9",
+        &[(1, 20), (2, 479), (3, 10471), (4, 273318)],
+    );
+    assert_freestyle_perft(
+        "chess960 position 5",
+        "qnbnr1kr/ppp1b1pp/4p3/3p1p2/8/2NPP3/PPP1BPPP/QNB1R1KR w HEhe - 1 9",
+        &[(1, 29), (2, 899), (3, 26578)],
+    );
+    assert_freestyle_perft(
+        "chess960 position 7",
+        "qbn1brkr/ppp1p1p1/2n4p/3p1p2/P7/6PP/QPPPPP2/1BNNBRKR w HFhf - 0 9",
+        &[(1, 25), (2, 635), (3, 17054)],
+    );
+}
+
+#[test]
+#[ignore]
+fn deep_freestyle_positions() {
+    let position = position_unvalidated
+        .parse("b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9")
+        .unwrap()
+        .validate::<Freestyle>()
+        .unwrap();
+    divide(position, 5);
+
+    assert_freestyle_perft(
+        "chess960 position 0",
+        "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+        &[(5, 8146062), (6, 227689589)],
+    );
+    assert_freestyle_perft(
+        "chess960 position 2",
+        "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9",
+        &[(5, 6417013), (6, 177654692)],
+    );
+    assert_freestyle_perft(
+        "chess960 position 4",
+        "1nbbnrkr/p1p1ppp1/3p4/1p3P1p/3Pq2P/8/PPP1P1P1/QNBBNRKR w HFhf - 0 9",
+        &[(5, 34030312), (6, 1250970898)],
+    );
+    // Passed on 2026-09-02. This is 1.2B leaf nodes and took 128s in release mode.
+    // This is the heaviest case
+    // assert_freestyle_perft(
+    //     "chess960 position 274",
+    //     "bnrk1rqb/2pppp1p/3n4/pp4p1/3Q1P2/2N3P1/PPPPP2P/B1RKNR1B w FCfc - 0 9",
+    //     &[(5, 107234294), (6, 3651608327)],
+    // );
 }
 
 #[test]

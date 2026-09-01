@@ -1,7 +1,7 @@
 use core::{marker::PhantomData, num::NonZeroU32};
 
 #[cfg(test)]
-use crate::variant::Chess;
+use crate::variant::{Chess, Freestyle};
 use crate::{
     bitboard::Bitboard,
     position::{
@@ -27,10 +27,19 @@ pub enum Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
+fn backtrack() -> ErrMode<ContextError> {
+    ErrMode::Backtrack(ContextError::new())
+}
+
 // Lenient - fills up with default values.
+// TODO: Currently, malformed "tails" after board are filled with the default values.
+// Also, missing castling in chess is not distinguished from a valid "-" value,
+// in particular, it does not grant the KQkq castling rights.
 pub fn position_unvalidated(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
     let board = board_fen.parse_next(input)?;
-    let Fields { turn, castles, en_passant, reversible, round } = fields_fen.parse_next(input)?;
+    let Fields { turn, castle_files, en_passant, reversible, round } =
+        fields_fen.parse_next(input)?;
+    let castles = castle_files.castles(board).ok_or_else(backtrack)?;
     Ok(Position { board, turn, castles, en_passant, reversible, round, variant: PhantomData })
 }
 
@@ -196,26 +205,71 @@ fn player(input: &mut Input<'_>) -> ModalResult<Player> {
         .parse_next(input)
 }
 
-fn castle(input: &mut Input<'_>) -> ModalResult<Castles> {
+#[derive(Clone, Copy, Default)]
+struct CastleFiles(Players<[Option<File>; 2]>);
+
+impl CastleFiles {
+    fn empty() -> Self {
+        Default::default()
+    }
+
+    fn castles(self, board: Board) -> Option<Castles> {
+        let mut castles = Castles::empty();
+
+        for player in Player::ALL {
+            if self.0[player].iter().all(Option::is_none) {
+                continue;
+            }
+
+            let king = board.king_of(player)?;
+            for file in self.0[player].into_iter().flatten() {
+                let side = Side::of_rook(king, file);
+                if castles.has(player, side) {
+                    return None;
+                }
+                castles.set(player, side, file);
+            }
+        }
+
+        Some(castles)
+    }
+
+    /// Pushes a file for the given player, returning `None` if the file is already present.
+    fn push(&mut self, player: Player, file: File) -> Option<()> {
+        let files = &mut self.0[player];
+        if files.contains(&Some(file)) {
+            return None;
+        }
+
+        let slot = files.iter_mut().find(|file| file.is_none())?;
+        *slot = Some(file);
+        Some(())
+    }
+}
+
+fn castle(input: &mut Input<'_>) -> ModalResult<CastleFiles> {
     use Player::*;
     use Side::*;
 
     alt((
-        '-'.value(Castles::empty()),
-        repeat(1..=4, one_of(|c| "KQkq".contains(c))).map(|letters: Vec<char>| {
-            let mut castles = Castles::empty();
+        '-'.value(Some(CastleFiles::empty())),
+        repeat(1..=4, one_of(|c| "ABCDEFGHKQabcdefghkq".contains(c))).map(|letters: Vec<char>| {
+            let mut files = CastleFiles::empty();
             for letter in letters {
                 match letter {
-                    'K' => castles.set(White, King, King.chess_rook()),
-                    'Q' => castles.set(White, Queen, Queen.chess_rook()),
-                    'k' => castles.set(Black, King, King.chess_rook()),
-                    'q' => castles.set(Black, Queen, Queen.chess_rook()),
+                    'K' => files.push(White, King.chess_rook())?,
+                    'Q' => files.push(White, Queen.chess_rook())?,
+                    'k' => files.push(Black, King.chess_rook())?,
+                    'q' => files.push(Black, Queen.chess_rook())?,
+                    'A'..='H' => files.push(White, File::panicky_from_char(letter))?,
+                    'a'..='h' => files.push(Black, File::panicky_from_char(letter))?,
                     _ => unreachable!(),
                 }
             }
-            castles
+            Some(files)
         }),
     ))
+    .verify_map(|files| files)
     .parse_next(input)
 }
 
@@ -242,7 +296,7 @@ fn round(input: &mut Input<'_>) -> ModalResult<NonZeroU32> {
 
 struct Fields {
     turn: Player,
-    castles: Castles,
+    castle_files: CastleFiles,
     en_passant: Option<en_passant::Square>,
     reversible: u32,
     round: NonZeroU32,
@@ -253,29 +307,29 @@ fn fields_fen(input: &mut Input<'_>) -> ModalResult<Fields> {
         return Ok(default_fields());
     };
 
-    let Some(castles) = opt(preceded(space0, castle)).parse_next(input)? else {
+    let Some(castle_files) = opt(preceded(space0, castle)).parse_next(input)? else {
         return Ok(Fields { turn, ..default_fields() });
     };
 
     let Some(en_passant) = opt(preceded(space0, en_passant)).parse_next(input)? else {
-        return Ok(Fields { turn, castles, ..default_fields() });
+        return Ok(Fields { turn, castle_files, ..default_fields() });
     };
 
     let Some(reversible) = opt(preceded(space0, reversible)).parse_next(input)? else {
-        return Ok(Fields { turn, castles, en_passant, ..default_fields() });
+        return Ok(Fields { turn, castle_files, en_passant, ..default_fields() });
     };
 
     let Some(round) = opt(preceded(space0, round)).parse_next(input)? else {
-        return Ok(Fields { turn, castles, en_passant, reversible, ..default_fields() });
+        return Ok(Fields { turn, castle_files, en_passant, reversible, ..default_fields() });
     };
 
-    Ok(Fields { turn, castles, en_passant, reversible, round })
+    Ok(Fields { turn, castle_files, en_passant, reversible, round })
 }
 
 fn default_fields() -> Fields {
     Fields {
         turn: Player::White,
-        castles: Castles::empty(),
+        castle_files: CastleFiles::empty(),
         en_passant: None,
         reversible: 0,
         round: NonZeroU32::MIN,
@@ -345,4 +399,30 @@ fn board_fen_example() {
         Position::<Chess>::from_fen(board_fen).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
     );
+}
+
+#[test]
+fn parses_shredder_castling() {
+    use File::*;
+    use Player::*;
+    use Side::*;
+
+    let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9";
+    let position = Position::<Freestyle>::from_fen(fen).unwrap();
+    assert_eq!(position.castles.get(White, King), Some(H));
+    assert_eq!(position.castles.get(White, Queen), Some(F));
+    assert_eq!(position.castles.get(Black, King), Some(H));
+    assert_eq!(position.castles.get(Black, Queen), Some(F));
+}
+
+#[test]
+fn rejects_duplicate_castling_files() {
+    let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HH - 2 9";
+    assert!(Unvalidated::from_fen(fen).is_err());
+}
+
+#[test]
+fn rejects_more_than_two_castling_files_per_player() {
+    let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFAh - 2 9";
+    assert!(Unvalidated::from_fen(fen).is_err());
 }

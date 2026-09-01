@@ -24,13 +24,22 @@ crate::finite_set!(
 
 impl File {
     pub const fn from_char(c: char) -> Option<Self> {
-        if 'a' <= c && c <= 'h' { Some(Self::panicky_from_char(c)) } else { None }
+        if ('a' <= c && c <= 'h') || ('A' <= c && c <= 'H') {
+            Some(Self::panicky_from_char(c))
+        } else {
+            None
+        }
     }
 
     #[track_caller]
     pub(crate) const fn panicky_from_char(c: char) -> Self {
-        assert!('a' <= c && c <= 'h');
-        unsafe { core::mem::transmute(c as u8 - b'a') }
+        let index = if 'a' <= c && c <= 'h' {
+            c as u8 - b'a'
+        } else {
+            assert!('A' <= c && c <= 'H');
+            c as u8 - b'A'
+        };
+        unsafe { core::mem::transmute(index) }
     }
 
     #[inline]

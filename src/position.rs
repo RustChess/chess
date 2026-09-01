@@ -43,6 +43,9 @@ pub const ALGEBRAIC_LONG_CASTLE: &str = PGN_LONG_CASTLE;
 pub const ALGEBRAIC_MOVE: char = '-';
 pub const ALGEBRAIC_CAPTURE: char = 'x';
 
+/// Reinhard Scharnagl's enumeration of all 960 starting positions.
+///
+/// Standard chess is position 518.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Scharnagl(u16);
 
@@ -842,11 +845,11 @@ impl<V> Position<V> {
         }
 
         if play.role == Role::Rook {
-            self.clear_standard_castle_rook(player, play.from);
+            self.clear_castle_rook(player, play.from);
         }
 
         if let Some(captured) = captured {
-            self.clear_standard_castle_rook(player.other(), captured);
+            self.clear_castle_rook(player.other(), captured);
         }
 
         self.board.play_unchecked(player, play);
@@ -875,12 +878,15 @@ impl<V> Position<V> {
         self
     }
 
-    fn clear_standard_castle_rook(&mut self, player: Player, square: Square) {
-        let rank = player.backrank();
-        if square == Square::new(File::A, rank) {
-            self.castles.clear(player, Side::Queen);
-        } else if square == Square::new(File::H, rank) {
-            self.castles.clear(player, Side::King);
+    fn clear_castle_rook(&mut self, player: Player, square: Square) {
+        if square.rank() != player.backrank() {
+            return;
+        }
+
+        for side in Side::ALL {
+            if self.castles.get(player, side) == Some(square.file()) {
+                self.castles.clear(player, side);
+            }
         }
     }
 }
