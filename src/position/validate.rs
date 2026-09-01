@@ -106,12 +106,52 @@ impl Position<variant::Chess> {
     }
 }
 
+impl Position<variant::Freestyle> {
+    pub fn validate_castling(position: Unvalidated) -> Result<()> {
+        for player in Player::ALL {
+            let Some(king) = position.board.king_of(player) else {
+                return Err(Error::KingCount(player));
+            };
+            if king.rank() != player.backrank() {
+                return Err(Error::Castling(player, Side::King));
+            }
+
+            let queen_rook = position.castles.get(player, Side::Queen);
+            let king_rook = position.castles.get(player, Side::King);
+            if queen_rook.is_some() && queen_rook == king_rook {
+                return Err(Error::Castling(player, Side::King));
+            }
+
+            for side in Side::ALL {
+                let Some(rook_file) = position.castles.get(player, side) else {
+                    continue;
+                };
+
+                let valid_side = match side {
+                    Side::Queen => rook_file < king.file(),
+                    Side::King => king.file() < rook_file,
+                };
+                let rook = Piece { player, role: Role::Rook };
+                if !valid_side
+                    || position.board.piece_at(Square::castle_rook(player, rook_file)) != Some(rook)
+                {
+                    return Err(Error::Castling(player, side));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         formats::{Parser as _, fen::position_unvalidated},
-        position::{Error, Player, Position},
-        variant::Chess,
+        position::{
+            Castles, Error, File, Piece, Player, Position, Role, Side, Square, Unvalidated,
+        },
+        variant::{Chess, Freestyle},
     };
 
     fn validate(fen: &str) -> Result<Position<Chess>, Error> {
@@ -141,6 +181,66 @@ mod tests {
         assert_eq!(
             validate("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1").unwrap_err(),
             Error::KingAttacked(Player::Black)
+        );
+    }
+
+    fn freestyle_position(king_file: File, queen_rook: File, king_rook: File) -> Unvalidated {
+        use Player::*;
+
+        let mut position = Position::empty();
+        position.set_piece(
+            Square::new(king_file, White.backrank()),
+            Piece { player: White, role: Role::King },
+        );
+        position.set_piece(
+            Square::new(queen_rook, White.backrank()),
+            Piece { player: White, role: Role::Rook },
+        );
+        position.set_piece(
+            Square::new(king_rook, White.backrank()),
+            Piece { player: White, role: Role::Rook },
+        );
+        position.set_piece(
+            Square::new(king_file, Black.backrank()),
+            Piece { player: Black, role: Role::King },
+        );
+        position.set_piece(
+            Square::new(queen_rook, Black.backrank()),
+            Piece { player: Black, role: Role::Rook },
+        );
+        position.set_piece(
+            Square::new(king_rook, Black.backrank()),
+            Piece { player: Black, role: Role::Rook },
+        );
+        position.castles = Castles::empty();
+        position.castles.set(White, Side::Queen, queen_rook);
+        position.castles.set(White, Side::King, king_rook);
+        position.castles.set(Black, Side::Queen, queen_rook);
+        position.castles.set(Black, Side::King, king_rook);
+        position
+    }
+
+    #[test]
+    fn validates_freestyle_castling() {
+        freestyle_position(File::C, File::A, File::H).validate::<Freestyle>().unwrap();
+    }
+
+    #[test]
+    fn rejects_freestyle_castling_without_backrank_king() {
+        let mut position = freestyle_position(File::C, File::A, File::H);
+        position.move_piece(Square::C1, Square::C2).unwrap();
+
+        assert_eq!(
+            position.validate::<Freestyle>().unwrap_err(),
+            Error::Castling(Player::White, Side::King)
+        );
+    }
+
+    #[test]
+    fn rejects_freestyle_castling_with_rook_on_wrong_side() {
+        assert_eq!(
+            freestyle_position(File::C, File::B, File::A).validate::<Freestyle>().unwrap_err(),
+            Error::Castling(Player::Black, Side::King)
         );
     }
 }

@@ -36,6 +36,12 @@ impl Validate for Chess {
     }
 }
 
+impl Validate for Freestyle {
+    fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
+        Position::<Self>::validate_castling(position)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Unvalidated;
 

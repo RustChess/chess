@@ -555,7 +555,11 @@ impl Side {
 
 impl Square {
     pub const fn chess_rook(player: super::Player, side: super::Side) -> Self {
-        Self::new(side.chess_rook(), player.backrank())
+        Self::castle_rook(player, side.chess_rook())
+    }
+
+    pub const fn castle_rook(player: Player, file: File) -> Self {
+        Self::new(file, player.backrank())
     }
 }
 
