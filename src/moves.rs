@@ -4,8 +4,8 @@ use crate::{
     bitboard::{Bitboard, Direction},
     position::{
         Board, Move, Moves, Piece, Player, Players, Position, Rank, Role, Side, Sides, Square,
-        Variant,
     },
+    variant::{CanCastle, Chess, Variant},
 };
 
 // This would work here too, but it warns about long_running_const_eval
@@ -15,7 +15,7 @@ use crate::{
 include!("slider_sights.rs");
 
 // move generation
-impl<V: Variant> Position<V> {
+impl<V: CanCastle> Position<V> {
     pub fn legal_moves(&self) -> Moves {
         if self.is_check() {
             return self.evasion_moves();
@@ -31,6 +31,20 @@ impl<V: Variant> Position<V> {
         moves
     }
 
+    pub fn legal_castle_moves(&self) -> Moves {
+        let mut moves = Moves::new();
+
+        for side in Side::ALL {
+            if V::can_castle(self, side) {
+                moves.push(Move::castle(self.turn, side));
+            }
+        }
+
+        moves
+    }
+}
+
+impl<V: Variant> Position<V> {
     fn evasion_moves(&self) -> Moves {
         let checkers = self.checkers();
         let Some(king) = self.board.king_of(self.turn) else {
@@ -194,33 +208,6 @@ impl<V: Variant> Position<V> {
         moves
     }
 
-    fn legal_castle_moves(&self) -> Moves {
-        let mut moves = Moves::new();
-
-        for side in Side::ALL {
-            if self.can_castle(side) {
-                moves.push(Move::castle(self.turn, side));
-            }
-        }
-
-        moves
-    }
-
-    fn can_castle(&self, side: Side) -> bool {
-        if !self.castle[self.turn][side] {
-            return false;
-        }
-
-        let empty_path = STANDARD_CASTLE_EMPTY_PATHS[self.turn][side];
-        if !self.board.occupied().intersection_const(empty_path).is_empty() {
-            return false;
-        }
-
-        STANDARD_CASTLE_KING_PATHS[self.turn][side]
-            .iter()
-            .all(|square| self.king_square_is_safe(square))
-    }
-
     fn piece_move_is_safe(&self, play: Move, shields: Bitboard) -> bool {
         // In a legal, not-in-check position, an ordinary piece move can only
         // expose our king by moving a shielding piece off a slider ray.
@@ -255,7 +242,26 @@ impl<V: Variant> Position<V> {
 
         self.board.attacks_on(king, self.turn.other(), occupied).is_empty()
     }
+}
 
+impl Position<Chess> {
+    pub fn can_castle(&self, side: Side) -> bool {
+        if !self.castle[self.turn][side] {
+            return false;
+        }
+
+        let empty_path = STANDARD_CASTLE_EMPTY_PATHS[self.turn][side];
+        if !self.board.occupied().intersection_const(empty_path).is_empty() {
+            return false;
+        }
+
+        STANDARD_CASTLE_KING_PATHS[self.turn][side]
+            .iter()
+            .all(|square| self.king_square_is_safe(square))
+    }
+}
+
+impl<V: Variant> Position<V> {
     pub const fn effective_en_passant(self) -> Option<crate::position::en_passant::Square> {
         let Some(en_passant) = self.en_passant else {
             return None;
@@ -743,7 +749,7 @@ const fn pawn_directions(player: Player) -> (Direction, Direction, Direction, Di
     }
 }
 
-const STANDARD_CASTLE_EMPTY_PATHS: Players<Sides<Bitboard>> = {
+pub(crate) const STANDARD_CASTLE_EMPTY_PATHS: Players<Sides<Bitboard>> = {
     use Square::*;
 
     Players {
@@ -758,7 +764,7 @@ const STANDARD_CASTLE_EMPTY_PATHS: Players<Sides<Bitboard>> = {
     }
 };
 
-const STANDARD_CASTLE_KING_PATHS: Players<Sides<Bitboard>> = {
+pub(crate) const STANDARD_CASTLE_KING_PATHS: Players<Sides<Bitboard>> = {
     use Square::*;
 
     Players {

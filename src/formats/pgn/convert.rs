@@ -24,7 +24,7 @@ impl From<crate::Game> for Game {
         let mut tags = pgn_roster(&game.roster, game.outcome);
         tags.extend(game.tags.into_iter().map(Tag::Other));
 
-        if start != Position::standard() {
+        if start != Position::start() {
             pgn_set_start(&mut tags, start.unvalidated());
         }
 
@@ -42,7 +42,7 @@ impl TryFrom<Game> for crate::Game {
     type Error = Error;
 
     fn try_from(pgn: Game) -> Result<Self> {
-        let position = Position::new(pgn.start).map_err(|_| Error::Fen(pgn.start.fen()))?;
+        let position = pgn.start.validate().map_err(|_| Error::Fen(pgn.start.fen()))?;
         let mut game = crate::Game::new(position);
         game.roster = game_roster(&pgn.tags);
         game.tags = game_tags(&pgn.tags);

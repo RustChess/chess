@@ -4,8 +4,8 @@ pub use basis::{Basis, POLYGLOT, STANDARD};
 
 use crate::{
     game::Game,
-    position::{Board, Player, Players, Position, Role, Side, Sides, Variant, en_passant},
-    variant::{Chess, Freestyle},
+    position::{Board, Player, Players, Position, Role, Side, Sides, en_passant},
+    variant::{Chess, Freestyle, Variant},
 };
 
 /// Type of globally unique identifiers.
@@ -212,7 +212,7 @@ mod tests {
         17. Nb7 Rh8 18. Nd6+ exd6 19. e5 fxe5 20. d5 Qf6 21. a4 Rg8
         22. Nd2 Qf7 23. Rb1 Qf6 24. Ne4 Qf7 25. Rh2 Qf6 26. Nf2 Qf7
         27. Nh1 Qf6 28. Qd3 Qf7 29. Qf1 Qf6 30. Ra2 Qf7 31. Raa1 Qf8 *";
-    const START: Position<Chess> = Position::standard();
+    const START: Position<Chess> = Position::start();
 
     #[test]
     fn documents_game_ids() {
@@ -248,7 +248,7 @@ mod tests {
         // Polyglot collision with the standard start position:
         // https://talkchess.com/viewtopic.php?sid=19ffa9bbce9b0b8c00e176365ba29da6&start=20&t=57255
         // https://talkchess.com/viewtopic.php?start=40&t=57255
-        let start = Position::<Chess>::standard();
+        let start = Position::<Chess>::start();
         let position = Position::<Chess>::from_fen(COLLISION_FEN).unwrap();
 
         assert_eq!(position.polyglot_id(), start.polyglot_id());

@@ -13,12 +13,16 @@
 //! chess variants, and implement for "freestyle" (aka Fisher Random aka Chess960) chess - to exercise our generality mindedness
 //!
 //! Compared to `shakmaty` our position is a concrete `struct`
-use core::{fmt, num::NonZeroU32};
+use core::{fmt, marker::PhantomData, num::NonZeroU32};
 
-use crate::{bitboard::Bitboard, variant};
+use crate::{
+    bitboard::Bitboard,
+    variant::{self, Variant},
+};
 
 pub mod en_passant;
 pub mod square;
+pub mod validate;
 
 pub use square::{File, Rank, Square};
 
@@ -370,11 +374,6 @@ pub enum Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-pub trait Variant: Copy + Sized {
-    /// Validate position as being legal
-    fn validate(position: Unvalidated) -> Result<Position<Self>>;
-}
-
 crate::finite_set!(
     /// A chess piece role, such as pawn, knight, bishop, etc.
     Role,
@@ -539,7 +538,7 @@ pub struct Position<Variant = variant::Chess> {
     /// starts at 1 and increments after every Black move
     pub round: NonZeroU32,
 
-    pub(crate) variant: Variant, //PhantomData<Variant>,
+    pub(crate) variant: PhantomData<Variant>,
 }
 
 pub type Unvalidated = Position<variant::Unvalidated>;
@@ -555,12 +554,12 @@ pub const fn unvalidated(board: Board, turn: Player) -> Unvalidated {
         en_passant: None,
         reversible: 0,
         round: NonZeroU32::MIN,
-        variant: variant::Unvalidated,
+        variant: PhantomData,
     }
 }
 
 impl Position<variant::Chess> {
-    pub const fn standard() -> Position<variant::Chess> {
+    pub const fn start() -> Position<variant::Chess> {
         Position {
             board: Board::standard(),
             turn: Player::White,
@@ -571,17 +570,13 @@ impl Position<variant::Chess> {
             en_passant: None,
             reversible: 0,
             round: NonZeroU32::MIN,
-            variant: variant::Chess,
+            variant: PhantomData,
         }
     }
 }
 
 impl Position<variant::Unvalidated> {
-    pub const fn empty() -> Position<variant::Unvalidated> {
-        unvalidated(Board::empty(), Player::White)
-    }
-
-    pub const fn start() -> Position<variant::Unvalidated> {
+    pub const fn chess() -> Position<variant::Unvalidated> {
         Position {
             board: Board::standard(),
             turn: Player::White,
@@ -592,8 +587,12 @@ impl Position<variant::Unvalidated> {
             en_passant: None,
             reversible: 0,
             round: NonZeroU32::MIN,
-            variant: variant::Unvalidated,
+            variant: PhantomData,
         }
+    }
+
+    pub const fn empty() -> Position<variant::Unvalidated> {
+        unvalidated(Board::empty(), Player::White)
     }
 
     pub fn set_piece(&mut self, square: Square, piece: Piece) -> Option<Piece> {
@@ -616,17 +615,25 @@ impl Position<variant::Unvalidated> {
     }
 }
 
-impl Default for Position<variant::Unvalidated> {
+impl Default for Unvalidated {
     fn default() -> Self {
-        Self::start()
+        Self::empty()
     }
 }
 
-impl<V: Variant> Position<V> {
-    pub fn new(position: Unvalidated) -> Result<Self> {
-        V::validate(position)
+impl From<Position<variant::Chess>> for Unvalidated {
+    fn from(position: Position<variant::Chess>) -> Self {
+        position.unvalidated()
     }
+}
 
+// impl<V: Validate> Position<V> {
+//     pub fn new(position: Unvalidated) -> Result<Self> {
+//         position.validate()
+//     }
+// }
+
+impl<V: Variant> Position<V> {
     pub const fn checkers(&self) -> Bitboard {
         match self.board.king_of(self.turn) {
             Some(king) => self.board.attacks_on(king, self.turn.other(), self.board.occupied()),
@@ -637,7 +644,9 @@ impl<V: Variant> Position<V> {
     pub const fn is_check(&self) -> bool {
         !self.checkers().is_empty()
     }
+}
 
+impl<V: variant::CanCastle> Position<V> {
     pub fn capture_moves(&self) -> Moves {
         self.legal_moves().into_iter().filter(|m| m.is_capture()).collect()
     }
@@ -665,7 +674,7 @@ impl<V> Position<V> {
             en_passant: self.en_passant,
             reversible: self.reversible,
             round: self.round,
-            variant: variant::Unvalidated,
+            variant: PhantomData,
         }
     }
 
@@ -726,11 +735,6 @@ impl<V> Position<V> {
         }
     }
 }
-
-// pub fn initial() -> Position {
-//     let unvalidated = unvalidated();
-//     Position { board: INITIAL, turn: Player::White, en_passant: None, ply_since: 0,
-// }
 
 impl<T> Players<T> {
     #[inline]

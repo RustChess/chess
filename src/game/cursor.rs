@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn walks_main_line() {
-        let mut cursor = Game::new(Position::standard()).cursor();
+        let mut cursor = Game::new(Position::start()).cursor();
         let play = cursor.position().legal_moves()[0];
         let slot = cursor.push(play).unwrap();
 
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn takes_back_current_play() {
-        let mut cursor = Game::new(Position::standard()).cursor();
+        let mut cursor = Game::new(Position::start()).cursor();
         let e4 = cursor.push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4)).unwrap();
         cursor.push(crate::Move::normal(Role::Pawn, Square::E7, Square::E5)).unwrap();
 

@@ -4,7 +4,7 @@ use std::{fmt, str};
 
 use crate::{
     game::{Command, Nag, Outcome, Slot, Tag as OtherTag, Text},
-    position::Unvalidated,
+    position::{Position, Unvalidated},
 };
 
 use super::{StrInput as Input, fen, prelude::*, san};
@@ -215,7 +215,7 @@ fn start_position(tags: &[Tag]) -> Unvalidated {
             Tag::Fen(position) => Some(*position),
             _ => None,
         })
-        .unwrap_or_else(Unvalidated::start)
+        .unwrap_or_else(Position::chess)
 }
 
 impl fmt::Display for Annotation {
@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn displays_fen_game_from_its_start_ply() {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
-        let position = Position::new(fen::position_unvalidated.parse(fen).unwrap()).unwrap();
+        let position = fen::position_unvalidated.parse(fen).unwrap().validate().unwrap();
         let mut game = crate::Game::new(position);
         game.start_options_mut()
             .push(crate::Move::normal(Role::King, Square::E8, Square::D8))
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn displays_figurine_movetext() {
-        let mut game = crate::Game::new(Position::standard());
+        let mut game = crate::Game::new(Position::start());
         let e4 = game
             .start_options_mut()
             .push(crate::Move::normal(Role::Pawn, Square::E2, Square::E4))
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn converts_from_game() {
-        let mut game = crate::Game::new(Position::standard());
+        let mut game = crate::Game::new(Position::start());
         game.roster.event = Some(text("x"));
 
         let e4 = game
@@ -905,7 +905,7 @@ mod tests {
     #[test]
     fn roundtrips_kiwipete_game_tree() {
         let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
-        let position = Position::new(fen::position_unvalidated.parse(fen).unwrap()).unwrap();
+        let position = fen::position_unvalidated.parse(fen).unwrap().validate().unwrap();
         let mut game = crate::Game::new(position);
 
         for play in position.legal_moves() {

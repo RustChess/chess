@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn parses_normal_move() {
-        let legal = Position::standard().legal_moves();
+        let legal = Position::start().legal_moves();
 
         assert_eq!(parse_move("e2e4", &legal).unwrap().to, Square::E4);
         assert!(parse_move("e2e5", &legal).is_none());

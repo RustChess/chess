@@ -1,10 +1,10 @@
 use crate::{
     formats::{Parser as _, fen::position_unvalidated},
     position::Position,
-    variant::Unvalidated,
+    variant::Chess,
 };
 
-pub(crate) fn perft(position: Position<Unvalidated>, depth: u32) -> u64 {
+pub(crate) fn perft(position: Position<Chess>, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
     }
@@ -16,12 +16,8 @@ pub(crate) fn perft(position: Position<Unvalidated>, depth: u32) -> u64 {
         .sum()
 }
 
-fn position(fen: &str) -> Position<Unvalidated> {
-    position_unvalidated.parse(fen).unwrap()
-}
-
 fn assert_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = position(fen);
+    let position = position_unvalidated.parse(fen).unwrap().validate().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
