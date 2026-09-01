@@ -95,6 +95,21 @@ impl Player {
             Player::White => Rank::Eight,
         }
     }
+
+    /// The square the king moves to when castling on this side.
+    pub const fn castle_king_to(self, side: Side) -> Square {
+        Square::new(side.king_to_file(), self.backrank())
+    }
+
+    /// The square the rook moves from when castling from this file.
+    pub const fn castle_rook_from(self, file: File) -> Square {
+        Square::new(file, self.backrank())
+    }
+
+    /// The square the rook moves to when castling on this side.
+    pub const fn castle_rook_to(self, side: Side) -> Square {
+        Square::new(side.rook_to_file(), self.backrank())
+    }
 }
 
 // This has 1 + 2 players + 6 roles, so should be 9 * 8 = 72 bytes
@@ -246,9 +261,10 @@ impl Board {
                 self.remove(captured);
                 self.add(play.to, Role::Pawn.of(player));
             }
-            Castle(side) => {
-                let rook_from = standard_castle_rook(player, side);
-                let rook_to = standard_castle_rook_to(player, side);
+            Castle(file) => {
+                let side = Side::of_rook(play.from, file);
+                let rook_from = player.castle_rook_from(file);
+                let rook_to = player.castle_rook_to(side);
                 self.remove(play.from);
                 self.remove(rook_from);
                 self.add(play.to, Role::King.of(player));
@@ -334,22 +350,6 @@ impl Board {
             _ => None,
         }
     }
-}
-
-const fn standard_castle_rook(player: Player, side: Side) -> Square {
-    let file = match side {
-        Side::King => File::H,
-        Side::Queen => File::A,
-    };
-    Square::new(file, player.backrank())
-}
-
-const fn standard_castle_rook_to(player: Player, side: Side) -> Square {
-    let file = match side {
-        Side::King => File::F,
-        Side::Queen => File::D,
-    };
-    Square::new(file, player.backrank())
 }
 
 // pub const INITIAL: Board = Board;
@@ -550,16 +550,6 @@ impl Side {
             Side::King => File::H,
             Side::Queen => File::A,
         }
-    }
-}
-
-impl Square {
-    pub const fn chess_rook(player: super::Player, side: super::Side) -> Self {
-        Self::castle_rook(player, side.chess_rook())
-    }
-
-    pub const fn castle_rook(player: Player, file: File) -> Self {
-        Self::new(file, player.backrank())
     }
 }
 
@@ -880,7 +870,7 @@ impl<T> Roles<T> {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Special {
     EnPassant,
-    Castle(Side),
+    Castle(File),
     Promote(Role),
 }
 
@@ -891,8 +881,8 @@ impl Special {
     }
 
     #[inline]
-    pub const fn castle(side: Side) -> Self {
-        Castle(side)
+    pub const fn castle(file: File) -> Self {
+        Castle(file)
     }
 
     #[inline]
@@ -910,13 +900,8 @@ impl Special {
     }
 
     #[inline]
-    pub const fn castles(self) -> Option<Side> {
-        if let Special::Castle(side) = self { Some(side) } else { None }
-    }
-
-    #[inline]
-    pub const fn is_castle_side(self, side: Side) -> bool {
-        if let Special::Castle(this) = self { this as u8 == side as u8 } else { false }
+    pub const fn castle_rook_file(self) -> Option<File> {
+        if let Special::Castle(file) = self { Some(file) } else { None }
     }
 
     #[inline]
@@ -961,8 +946,8 @@ impl Kind {
     }
 
     #[inline]
-    pub const fn castle(side: Side) -> Self {
-        Kind::Special(Castle(side))
+    pub const fn castle(file: File) -> Self {
+        Kind::Special(Castle(file))
     }
 
     #[inline]
@@ -996,13 +981,8 @@ impl Kind {
     }
 
     #[inline]
-    pub const fn castles(self) -> Option<Side> {
-        if let Kind::Special(special) = self { special.castles() } else { None }
-    }
-
-    #[inline]
-    pub const fn is_castle_side(self, side: Side) -> bool {
-        if let Kind::Special(special) = self { special.is_castle_side(side) } else { false }
+    pub const fn castle_rook_file(self) -> Option<File> {
+        if let Kind::Special(special) = self { special.castle_rook_file() } else { None }
     }
 
     #[inline]
@@ -1073,9 +1053,17 @@ impl fmt::Display for Side {
 }
 
 impl Side {
+    pub const fn eq(self, other: Side) -> bool {
+        self as u8 == other as u8
+    }
+
     pub const fn king_side(king_side: bool) -> Self {
         use Side::*;
         if king_side { King } else { Queen }
+    }
+
+    pub const fn of_rook(king: Square, rook: File) -> Self {
+        Side::king_side(king.file() as u8 <= rook as u8)
     }
 
     /// The file the king moves to when castling on this side
@@ -1084,6 +1072,15 @@ impl Side {
         match self {
             King => File::G,
             Queen => File::C,
+        }
+    }
+
+    /// The file the rook moves to when castling on this side.
+    pub const fn rook_to_file(self) -> File {
+        use Side::*;
+        match self {
+            King => File::F,
+            Queen => File::D,
         }
     }
 }
@@ -1105,13 +1102,18 @@ impl Move {
     }
 
     #[inline]
-    pub const fn castle(player: Player, side: Side) -> Move {
-        let rank = player.backrank();
+    pub const fn chess_castle(player: Player, side: Side) -> Move {
+        Move::castle(player, Square::new(File::E, player.backrank()), side.chess_rook())
+    }
+
+    #[inline]
+    pub const fn castle(player: Player, from: Square, file: File) -> Move {
+        let side = Side::of_rook(from, file);
         Move {
-            kind: Kind::Special(Castle(side)),
+            kind: Kind::Special(Castle(file)),
             role: Role::King,
-            from: Square::new(File::E, rank),
-            to: Square::new(side.king_to_file(), rank),
+            from,
+            to: player.castle_king_to(side),
             capture: None,
         }
     }
@@ -1191,13 +1193,24 @@ impl Move {
     }
 
     #[inline]
-    pub const fn castles(self) -> Option<Side> {
-        self.kind.castles()
+    pub const fn castle_rook_file(self) -> Option<File> {
+        self.kind.castle_rook_file()
     }
 
     #[inline]
     pub const fn is_castle_side(self, side: Side) -> bool {
-        self.kind.is_castle_side(side)
+        match self.castle_side() {
+            Some(this) => this.eq(side),
+            None => false,
+        }
+    }
+
+    #[inline]
+    pub const fn castle_side(self) -> Option<Side> {
+        match self.castle_rook_file() {
+            Some(file) => Some(Side::of_rook(self.from, file)),
+            None => None,
+        }
     }
 
     #[inline]
@@ -1308,11 +1321,11 @@ fn display_move() {
     assert_eq!(play.to_string(), "Ka2xh7=Q");
     assert_eq!(play.uci().to_string(), "a2h7q");
 
-    let play = Move::castle(Player::White, Side::King);
+    let play = Move::chess_castle(Player::White, Side::King);
     assert_eq!(play.to_string(), ALGEBRAIC_SHORT_CASTLE);
     assert_eq!(play.uci().to_string(), "e1g1");
 
-    let play = Move::castle(Player::Black, Side::Queen);
+    let play = Move::chess_castle(Player::Black, Side::Queen);
     assert_eq!(play.to_string(), ALGEBRAIC_LONG_CASTLE);
     assert_eq!(play.uci().to_string(), "e8c8");
 }

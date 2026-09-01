@@ -36,7 +36,7 @@ impl<V: CanCastle> Position<V> {
 
         for side in Side::ALL {
             if V::can_castle(self, side) {
-                moves.push(Move::castle(self.turn, side));
+                moves.push(Move::chess_castle(self.turn, side));
             }
         }
 

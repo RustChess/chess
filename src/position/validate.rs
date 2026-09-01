@@ -95,7 +95,8 @@ impl Position<variant::Chess> {
                 let king = Piece { player, role: Role::King };
                 let rook = Piece { player, role: Role::Rook };
                 if position.board.piece_at(Square::new(File::E, player.backrank())) != Some(king)
-                    || position.board.piece_at(Square::chess_rook(player, side)) != Some(rook)
+                    || position.board.piece_at(player.castle_rook_from(side.chess_rook()))
+                        != Some(rook)
                 {
                     return Err(Error::Castling(player, side));
                 }
@@ -133,7 +134,7 @@ impl Position<variant::Freestyle> {
                 };
                 let rook = Piece { player, role: Role::Rook };
                 if !valid_side
-                    || position.board.piece_at(Square::castle_rook(player, rook_file)) != Some(rook)
+                    || position.board.piece_at(player.castle_rook_from(rook_file)) != Some(rook)
                 {
                     return Err(Error::Castling(player, side));
                 }

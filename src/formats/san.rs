@@ -133,7 +133,7 @@ impl fmt::Display for Check {
 
 impl From<(crate::Move, game::Short, Option<Check>)> for San {
     fn from((play, short, check): (crate::Move, game::Short, Option<Check>)) -> Self {
-        let play = if let Some(side) = play.castles() {
+        let play = if let Some(side) = play.castle_side() {
             Move::Castle(side)
         } else {
             let capture = play.capture.is_some() || play.is_en_passant();
