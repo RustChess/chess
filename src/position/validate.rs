@@ -1,7 +1,7 @@
 use super::*;
 use variant::Validate;
 
-impl Unvalidated {
+impl Position<Unvalidated> {
     pub fn validate<V: Validate>(self) -> Result<Position<V>> {
         let board = self.board;
         board.validate()?;
@@ -9,7 +9,7 @@ impl Unvalidated {
         board.validate_pawns()?;
         V::validate_castling(self)?;
         // TODO: Validate en-passant plausibility beyond the restricted
-        // en_passant::Square rank type.
+        // EnPassant rank type.
 
         Ok(Position {
             board: self.board,
@@ -84,8 +84,8 @@ impl Board {
     }
 }
 
-impl Position<variant::Chess> {
-    pub fn validate_castling(position: Unvalidated) -> Result<()> {
+impl Position<Chess> {
+    pub fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
         for player in Player::ALL {
             for side in Side::ALL {
                 if !position.castles.has(player, side) {
@@ -108,7 +108,7 @@ impl Position<variant::Chess> {
 }
 
 impl Position<variant::Freestyle> {
-    pub fn validate_castling(position: Unvalidated) -> Result<()> {
+    pub fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
         for player in Player::ALL {
             let Some(king) = position.board.king_of(player) else {
                 return Err(Error::KingCount(player));
@@ -149,8 +149,8 @@ impl Position<variant::Freestyle> {
 mod tests {
     use crate::{
         formats::{Parser as _, fen::position_unvalidated},
-        position::{Castles, Error, File, Player, Position, Side, Square, Square::*, Unvalidated},
-        variant::{Chess, Freestyle},
+        position::{Castles, Error, File, Player, Position, Side, Square, Square::*},
+        variant::{Chess, Freestyle, Unvalidated},
     };
 
     fn validate(fen: &str) -> Result<Position<Chess>, Error> {
@@ -183,7 +183,11 @@ mod tests {
         );
     }
 
-    fn freestyle_position(king_file: File, queen_rook: File, king_rook: File) -> Unvalidated {
+    fn freestyle_position(
+        king_file: File,
+        queen_rook: File,
+        king_rook: File,
+    ) -> Position<Unvalidated> {
         use Player::*;
 
         let mut position = Position::empty();

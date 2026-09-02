@@ -5,8 +5,7 @@ use crate::variant::{Chess, Freestyle};
 use crate::{
     bitboard::Bitboard,
     position::{
-        Board, Castles, File, Player, Players, Position, Rank, Role, Roles, Side, Square,
-        en_passant,
+        Board, Castles, EnPassant, File, Player, Players, Position, Rank, Role, Roles, Side, Square,
     },
     variant::{Unvalidated, Validate, Variant},
 };
@@ -44,7 +43,9 @@ pub fn position_unvalidated(input: &mut Input<'_>) -> ModalResult<Position<Unval
 }
 
 impl Unvalidated {
-    pub fn from_fen(fen: &str) -> Result<Position<Unvalidated>> {
+    // implementing on Unvalidated instead of Position<Unvalidated> on purpose,
+    // to avoid "duplicate from_fen" in natural call sites.
+    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
         position_unvalidated.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))
     }
 }
@@ -151,7 +152,7 @@ impl Castles {
     }
 }
 
-fn en_passant_square(en_passant: Option<en_passant::Square>) -> String {
+fn en_passant_square(en_passant: Option<EnPassant>) -> String {
     en_passant.map_or_else(|| "-".to_string(), |square| Square::from(square).to_string())
 }
 
@@ -277,7 +278,7 @@ fn file(input: &mut Input<'_>) -> ModalResult<File> {
     one_of(|c| "abcdefgh".contains(c)).map(File::panicky_from_char).parse_next(input)
 }
 
-fn en_passant(input: &mut Input<'_>) -> ModalResult<Option<en_passant::Square>> {
+fn en_passant(input: &mut Input<'_>) -> ModalResult<Option<EnPassant>> {
     alt((
         '-'.value(None),
         terminated(file, '3').map(|file| Some(Square::new(file, Rank::Three).try_into().unwrap())),
@@ -297,7 +298,7 @@ fn round(input: &mut Input<'_>) -> ModalResult<NonZeroU32> {
 struct Fields {
     turn: Player,
     castle_files: CastleFiles,
-    en_passant: Option<en_passant::Square>,
+    en_passant: Option<EnPassant>,
     reversible: u32,
     round: NonZeroU32,
 }

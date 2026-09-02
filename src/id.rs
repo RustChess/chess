@@ -2,10 +2,24 @@ pub mod base58;
 pub mod basis;
 pub use basis::{Basis, POLYGLOT, STANDARD};
 
+// Our "standard basis" has 804 "consistent" Ids:
+// - board: 64 * 2 * 6 = 768
+// - turn: 2
+// - castle: 2 * 8 = 16
+// - en-passant: 16 squares
+// - variant: 2
+//
+// Polyglot basis has 781 "random" IDs:
+// - pieces: 12 * 64 = 768
+// - side to move: 1
+// - castling: 4
+// - en-passant files: 8
+// We set zeros/repeat to achieve compatibility.
+
 use crate::{
     game::Game,
-    position::{Board, Castles, Player, Position, Role, Side, en_passant},
-    variant::{Chess, Freestyle, Variant},
+    position::{Board, Castles, EnPassant, Player, Position, Role, Side, VariantEnum},
+    variant::Variant,
 };
 
 /// Type of globally unique identifiers.
@@ -121,17 +135,18 @@ impl Board {
     }
 }
 
-impl<V: VariantId> Position<V> {
-    // standard ID plus counters
+impl<V: Variant> Position<V> {
+    // standard ID plus counters and explicit variant
     pub fn id(self) -> Id {
         self.standard_id()
             .xor(counter_id("reversible", self.reversible))
             .xor(counter_id("round", self.round.get()))
+            .xor(variant_id(&STANDARD, V::VARIANT))
     }
 
     // our 128-bit replacement of the classical Polyglot hash
     pub const fn standard_id(self) -> Id {
-        self.transposition_id(&STANDARD).xor(V::ID)
+        self.transposition_id(&STANDARD)
     }
 
     // the classical Polyglot hash, just embedded into u128
@@ -159,10 +174,14 @@ const fn turn_id(basis: &Basis, turn: Player) -> Id {
     basis.turn.get(turn)
 }
 
-const fn en_passant_id(basis: &Basis, en_passant: Option<en_passant::Square>) -> Id {
+const fn variant_id(basis: &Basis, variant: VariantEnum) -> Id {
+    basis.variant.get(variant)
+}
+
+const fn en_passant_id(basis: &Basis, en_passant: Option<EnPassant>) -> Id {
     match en_passant {
-        Some(square) => basis.en_passant.square.get(square),
-        None => basis.en_passant.none,
+        Some(square) => basis.en_passant.get(square),
+        None => Id(0),
     }
 }
 
@@ -176,8 +195,8 @@ const fn castle_id(basis: &Basis, castles: Castles) -> Id {
         let mut s = 0;
         while s < Side::LEN as u8 {
             let side = Side::panicky_from_index(s);
-            if castles.has(player, side) {
-                id = id.xor(basis.castle.get(player).get(side));
+            if let Some(file) = castles.get(player, side) {
+                id = id.xor(basis.castle.get(player).get(file));
             }
             s += 1;
         }
@@ -185,18 +204,6 @@ const fn castle_id(basis: &Basis, castles: Castles) -> Id {
     }
 
     id
-}
-
-pub trait VariantId: Variant {
-    const ID: Id;
-}
-
-impl VariantId for Chess {
-    const ID: Id = STANDARD.variant.chess;
-}
-
-impl VariantId for Freestyle {
-    const ID: Id = STANDARD.variant.freestyle;
 }
 
 #[cfg(test)]
@@ -226,21 +233,21 @@ mod tests {
         // start position, no moves
         let game = Game::new(START);
         let id = game.id();
-        assert_eq!(id.to_string(), "6e5hnKuS5zmzFcBBsSUzXp");
-        assert_eq!(id.u128(), 60703719936619539482143532120728486023);
+        assert_eq!(id.to_string(), "LJFnWri3B3piKdWLUSBGWo");
+        assert_eq!(id.u128(), 207725053367679635200992249076853996316);
 
         // 1. e4 on start position
         let mut cursor = Cursor::new(game);
         cursor.push(Move::normal(Pawn, E2, E4)).unwrap();
         let e4 = cursor.into_inner();
-        assert_eq!(e4.id().to_string(), "RJBYu6tEFvwRaRZ4au4o6F");
-        assert_eq!(e4.id().u128(), 261533259436473337201551646082583728576);
+        assert_eq!(e4.id().to_string(), "4mU2d1B9K3Not73feSJdFo");
+        assert_eq!(e4.id().u128(), 40545599516303226419867082063332202050);
 
         // The weird game
         let pgn = pgn::game.parse(COLLISION_GAME).unwrap();
         let game: Game = pgn.try_into().unwrap();
-        assert_eq!(game.id().to_string(), "ChJouM3wB4bbzRarRDA3nf");
-        assert_eq!(game.id().u128(), 125888540804255007175134348310965693064);
+        assert_eq!(game.id().to_string(), "Pwh8p1hKRz1HWnZGm444GT");
+        assert_eq!(game.id().u128(), 246966137601676322552589085536778212564);
     }
 
     #[test]

@@ -184,7 +184,7 @@ fn pgn_roster(roster: &Roster, outcome: game::Outcome) -> Vec<Tag> {
     tags
 }
 
-fn pgn_set_start(tags: &mut Vec<Tag>, position: crate::position::Unvalidated) {
+fn pgn_set_start(tags: &mut Vec<Tag>, position: Position<Unvalidated>) {
     tags.push(Tag::SetUp(true));
     tags.push(Tag::Fen(position));
 }

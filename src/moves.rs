@@ -265,7 +265,7 @@ impl<V: Variant> Position<V> {
 }
 
 impl<V: Variant> Position<V> {
-    pub const fn effective_en_passant(self) -> Option<crate::position::en_passant::Square> {
+    pub const fn effective_en_passant(self) -> Option<crate::position::EnPassant> {
         let Some(en_passant) = self.en_passant else {
             return None;
         };

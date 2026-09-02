@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn parses_promotion_move() {
-        let position: Position<Chess> = Position::from_fen("8/P7/8/8/8/8/8/k6K w - - 0 1").unwrap();
+        let position = Position::<Chess>::from_fen("8/P7/8/8/8/8/8/k6K w - - 0 1").unwrap();
         let legal = position.legal_moves();
 
         assert_eq!(parse_move("a7a8q", &legal).unwrap().promotes(), Some(Queen));
@@ -260,11 +260,11 @@ mod tests {
     #[test]
     fn resolves_special_moves_from_legal_moves() {
         let castle: Position<Chess> =
-            Position::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+            Position::<Chess>::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         assert!(parse_move("e1g1", &castle.legal_moves()).is_some_and(crate::Move::is_castle));
 
         let en_passant: Position<Chess> =
-            Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
+            Position::<Chess>::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
         assert!(
             parse_move("e5d6", &en_passant.legal_moves()).is_some_and(crate::Move::is_en_passant)
         );

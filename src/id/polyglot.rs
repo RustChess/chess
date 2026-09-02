@@ -1160,38 +1160,48 @@ pub const POLYGLOT: Basis = Basis {
         Id(0xf8d6_26aa_af27_8509), // turn:white
     ]),
     castle: PlayerTable::new([
-        SideTable::new([
-            Id(0xa57e_6339_dd2c_f3a0), // castle:black:king
-            Id(0x1ef6_e6db_b196_1ec9), // castle:black:queen
+        FileTable::new([
+            Id(0x1ef6_e6db_b196_1ec9), // castle:black:a
+            Id(0x0000_0000_0000_0000), // castle:black:b
+            Id(0x0000_0000_0000_0000), // castle:black:c
+            Id(0x0000_0000_0000_0000), // castle:black:d
+            Id(0x0000_0000_0000_0000), // castle:black:e
+            Id(0x0000_0000_0000_0000), // castle:black:f
+            Id(0x0000_0000_0000_0000), // castle:black:g
+            Id(0xa57e_6339_dd2c_f3a0), // castle:black:h
         ]),
-        SideTable::new([
-            Id(0x31d7_1dce_64b2_c310), // castle:white:king
-            Id(0xf165_b587_df89_8190), // castle:white:queen
+        FileTable::new([
+            Id(0xf165_b587_df89_8190), // castle:white:a
+            Id(0x0000_0000_0000_0000), // castle:white:b
+            Id(0x0000_0000_0000_0000), // castle:white:c
+            Id(0x0000_0000_0000_0000), // castle:white:d
+            Id(0x0000_0000_0000_0000), // castle:white:e
+            Id(0x0000_0000_0000_0000), // castle:white:f
+            Id(0x0000_0000_0000_0000), // castle:white:g
+            Id(0x31d7_1dce_64b2_c310), // castle:white:h
         ]),
     ]),
-    en_passant: EnPassant {
-        none: Id(0x0000_0000_0000_0000), // en-passant:none
-        square: en_passant::SquareTable::new([
-            Id(0x70cc_73d9_0bc2_6e24), // en-passant:a3
-            Id(0xe21a_6b35_df0c_3ad7), // en-passant:b3
-            Id(0x003a_93d8_b280_6962), // en-passant:c3
-            Id(0x1c99_ded3_3cb8_90a1), // en-passant:d3
-            Id(0xcf31_45de_0add_4289), // en-passant:e3
-            Id(0xd0e4_427a_5514_fb72), // en-passant:f3
-            Id(0x77c6_21cc_9fb3_a483), // en-passant:g3
-            Id(0x67a3_4dac_4356_550b), // en-passant:h3
-            Id(0x70cc_73d9_0bc2_6e24), // en-passant:a6
-            Id(0xe21a_6b35_df0c_3ad7), // en-passant:b6
-            Id(0x003a_93d8_b280_6962), // en-passant:c6
-            Id(0x1c99_ded3_3cb8_90a1), // en-passant:d6
-            Id(0xcf31_45de_0add_4289), // en-passant:e6
-            Id(0xd0e4_427a_5514_fb72), // en-passant:f6
-            Id(0x77c6_21cc_9fb3_a483), // en-passant:g6
-            Id(0x67a3_4dac_4356_550b), // en-passant:h6
-        ]),
-    },
-    variant: Variant {
-        chess: Id(0x0000_0000_0000_0000),     // variant:chess
-        freestyle: Id(0x0000_0000_0000_0000), // variant:freestyle
-    },
+    en_passant: EnPassantTable::new([
+        Id(0x70cc_73d9_0bc2_6e24), // en-passant:a3
+        Id(0xe21a_6b35_df0c_3ad7), // en-passant:b3
+        Id(0x003a_93d8_b280_6962), // en-passant:c3
+        Id(0x1c99_ded3_3cb8_90a1), // en-passant:d3
+        Id(0xcf31_45de_0add_4289), // en-passant:e3
+        Id(0xd0e4_427a_5514_fb72), // en-passant:f3
+        Id(0x77c6_21cc_9fb3_a483), // en-passant:g3
+        Id(0x67a3_4dac_4356_550b), // en-passant:h3
+        Id(0x70cc_73d9_0bc2_6e24), // en-passant:a6
+        Id(0xe21a_6b35_df0c_3ad7), // en-passant:b6
+        Id(0x003a_93d8_b280_6962), // en-passant:c6
+        Id(0x1c99_ded3_3cb8_90a1), // en-passant:d6
+        Id(0xcf31_45de_0add_4289), // en-passant:e6
+        Id(0xd0e4_427a_5514_fb72), // en-passant:f6
+        Id(0x77c6_21cc_9fb3_a483), // en-passant:g6
+        Id(0x67a3_4dac_4356_550b), // en-passant:h6
+    ]),
+    variant: VariantTable::new([
+        Id(0x0000_0000_0000_0000), // variant:unvalidated
+        Id(0x0000_0000_0000_0000), // variant:chess
+        Id(0x0000_0000_0000_0000), // variant:freestyle
+    ]),
 };

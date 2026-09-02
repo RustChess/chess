@@ -1159,38 +1159,48 @@ pub const STANDARD: Basis = Basis {
         Id(0x70cb_00ab_210b_730b_eeca_73d3_dc25_dcc6), // turn:white
     ]),
     castle: PlayerTable::new([
-        SideTable::new([
-            Id(0x6c7d_e5ef_d10d_7f35_5831_68f7_d2b3_70e4), // castle:black:king
-            Id(0x1896_084f_e096_0bcc_c652_7810_9597_147b), // castle:black:queen
+        FileTable::new([
+            Id(0xd34e_10bb_c55a_61fb_12f3_4706_986a_dced), // castle:black:a
+            Id(0xea2f_f0b6_b125_87a8_18b0_e056_7af0_a1bc), // castle:black:b
+            Id(0xd298_fc0b_344d_9620_916c_a311_a73f_3142), // castle:black:c
+            Id(0xe21c_dffb_c9e6_964b_6670_ac21_0ea7_801b), // castle:black:d
+            Id(0x2139_39f0_1d99_756d_0162_72bb_045a_8d56), // castle:black:e
+            Id(0x6551_6e2b_92c7_5b63_7622_b9bc_d6be_4df1), // castle:black:f
+            Id(0xf035_4e54_66e5_ac8f_5ff4_2dfb_411b_8469), // castle:black:g
+            Id(0x59a9_248a_8a24_d44f_3e28_2b7e_2078_a452), // castle:black:h
         ]),
-        SideTable::new([
-            Id(0x11f8_530c_cc9a_0422_8c6d_5490_400b_4905), // castle:white:king
-            Id(0x52ea_807b_7fe5_29f5_76ea_09bf_1e42_8f1a), // castle:white:queen
+        FileTable::new([
+            Id(0xfae0_bd00_d619_c33a_38ea_f4d6_25ed_657a), // castle:white:a
+            Id(0xc79d_1b48_e5ea_67e7_af3f_3ea6_11b4_e74b), // castle:white:b
+            Id(0xbb90_4124_a01c_f011_6414_e951_8171_83c1), // castle:white:c
+            Id(0x2052_4c35_6a73_1c14_1ed7_8103_cbc7_5ff8), // castle:white:d
+            Id(0x51d5_d8f0_ddaa_24e8_416c_2a5e_4a93_766b), // castle:white:e
+            Id(0xfef7_7d9c_991c_7aa4_be68_f10c_781a_2da5), // castle:white:f
+            Id(0xa483_e74d_59d0_971f_8dd6_6e20_f810_06ee), // castle:white:g
+            Id(0xb62c_e1e5_7959_5651_848f_c442_f006_5f78), // castle:white:h
         ]),
     ]),
-    en_passant: EnPassant {
-        none: Id(0xb924_9a46_dcf2_74ef_6dcf_8e3d_4fab_74c3), // en-passant:none
-        square: en_passant::SquareTable::new([
-            Id(0x394d_a7d0_d3df_9e3a_8657_d305_a551_5d0d), // en-passant:a3
-            Id(0x89b7_e452_7bc8_92c5_f7d7_c140_2133_ab02), // en-passant:b3
-            Id(0xfa68_7866_c405_3387_485f_b2d1_832c_1561), // en-passant:c3
-            Id(0x3738_6c00_6809_933f_a366_3be7_6959_ac02), // en-passant:d3
-            Id(0xcc89_d5c9_2c9c_e46e_6439_1cab_c7f6_7564), // en-passant:e3
-            Id(0x121c_388d_2971_3744_cb12_03ef_92fb_3de8), // en-passant:f3
-            Id(0xb34e_4463_93f8_98b8_60e3_dbb3_ec89_a0ea), // en-passant:g3
-            Id(0xb2b6_d95c_2d21_0d0e_7005_720e_aa64_f1dd), // en-passant:h3
-            Id(0x8490_a269_a8a4_1e0f_0cd6_7db2_17ee_9af4), // en-passant:a6
-            Id(0x0492_6f96_7d4d_c98f_1e2e_09cc_d95e_92ed), // en-passant:b6
-            Id(0x6c27_1318_7393_3ef3_5bed_a74d_8bf6_08be), // en-passant:c6
-            Id(0x3c81_d2de_cb83_a68c_27c2_e7b5_8a41_9ed6), // en-passant:d6
-            Id(0xd9dd_c82c_6ad1_eef8_6184_f4c6_4699_ea40), // en-passant:e6
-            Id(0x71bb_e859_58fb_a5ab_9c71_8c2e_390a_247c), // en-passant:f6
-            Id(0x2cf2_e423_591c_5d90_fe1a_e72e_96cc_20c7), // en-passant:g6
-            Id(0xa4f9_c5dd_8670_7adb_f4af_18df_a5d3_faf1), // en-passant:h6
-        ]),
-    },
-    variant: Variant {
-        chess: Id(0x5dc5_6059_40db_1936_1955_9425_07cb_cf9a), // variant:chess
-        freestyle: Id(0x8b30_2f4f_e807_5e47_a43b_6953_bbd8_3736), // variant:freestyle
-    },
+    en_passant: EnPassantTable::new([
+        Id(0x394d_a7d0_d3df_9e3a_8657_d305_a551_5d0d), // en-passant:a3
+        Id(0x89b7_e452_7bc8_92c5_f7d7_c140_2133_ab02), // en-passant:b3
+        Id(0xfa68_7866_c405_3387_485f_b2d1_832c_1561), // en-passant:c3
+        Id(0x3738_6c00_6809_933f_a366_3be7_6959_ac02), // en-passant:d3
+        Id(0xcc89_d5c9_2c9c_e46e_6439_1cab_c7f6_7564), // en-passant:e3
+        Id(0x121c_388d_2971_3744_cb12_03ef_92fb_3de8), // en-passant:f3
+        Id(0xb34e_4463_93f8_98b8_60e3_dbb3_ec89_a0ea), // en-passant:g3
+        Id(0xb2b6_d95c_2d21_0d0e_7005_720e_aa64_f1dd), // en-passant:h3
+        Id(0x8490_a269_a8a4_1e0f_0cd6_7db2_17ee_9af4), // en-passant:a6
+        Id(0x0492_6f96_7d4d_c98f_1e2e_09cc_d95e_92ed), // en-passant:b6
+        Id(0x6c27_1318_7393_3ef3_5bed_a74d_8bf6_08be), // en-passant:c6
+        Id(0x3c81_d2de_cb83_a68c_27c2_e7b5_8a41_9ed6), // en-passant:d6
+        Id(0xd9dd_c82c_6ad1_eef8_6184_f4c6_4699_ea40), // en-passant:e6
+        Id(0x71bb_e859_58fb_a5ab_9c71_8c2e_390a_247c), // en-passant:f6
+        Id(0x2cf2_e423_591c_5d90_fe1a_e72e_96cc_20c7), // en-passant:g6
+        Id(0xa4f9_c5dd_8670_7adb_f4af_18df_a5d3_faf1), // en-passant:h6
+    ]),
+    variant: VariantTable::new([
+        Id(0x9124_6cad_0fe7_223e_bf81_c8a3_303f_0e93), // variant:unvalidated
+        Id(0x5dc5_6059_40db_1936_1955_9425_07cb_cf9a), // variant:chess
+        Id(0x8b30_2f4f_e807_5e47_a43b_6953_bbd8_3736), // variant:freestyle
+    ]),
 };

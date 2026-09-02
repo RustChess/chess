@@ -13,426 +13,25 @@
 //! chess variants, and implement for "freestyle" (aka Fisher Random aka Chess960) chess - to exercise our generality mindedness
 //!
 //! Compared to `shakmaty` our position is a concrete `struct`
-use core::{fmt, marker::PhantomData, num::NonZeroU32};
+use core::{marker::PhantomData, num::NonZeroU32};
 
-use crate::{
-    bitboard::Bitboard,
-    variant::{self, Variant},
-};
+use crate::{bitboard::Bitboard, variant};
 
-pub mod en_passant;
-pub mod square;
+pub use variant::{Chess, Freestyle, Unvalidated, Variant};
+
+mod board;
+mod finite;
+mod play;
 pub mod validate;
 
-pub use square::{File, Rank, Square};
+pub use board::Board;
+pub use finite::*;
+pub use play::*;
 
 pub use Kind::Normal;
 pub use Player::*;
 pub use Role::*;
-pub use Special::*;
-
-// Note: This is FIDE notation, even though "O-O" and "O-O-O" is prettier
-// Note: PGN uses vowel O instead of number 0
-pub const FIDE_SHORT_CASTLE: &str = "0-0";
-pub const PGN_SHORT_CASTLE: &str = "O-O";
-pub const FIDE_LONG_CASTLE: &str = "0-0-0";
-pub const PGN_LONG_CASTLE: &str = "O-O-O";
-
-pub const ALGEBRAIC_SHORT_CASTLE: &str = PGN_SHORT_CASTLE;
-pub const ALGEBRAIC_LONG_CASTLE: &str = PGN_LONG_CASTLE;
-pub const ALGEBRAIC_MOVE: char = '-';
-pub const ALGEBRAIC_CAPTURE: char = 'x';
-
-/// Reinhard Scharnagl's enumeration of all 960 starting positions.
-///
-/// Standard chess is position 518.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Scharnagl(u16);
-
-impl Scharnagl {
-    pub const fn new(i: u16) -> Option<Self> {
-        if i < 960 { Some(Self(i)) } else { None }
-    }
-}
-
-crate::finite_set!(
-    /// Black and white
-    Player,
-    Players,
-    PlayerTable,
-    Players {
-        Black = 0 as black,
-        White = 1 as white,
-    }
-);
-
-impl fmt::Display for Player {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Player::Black => write!(f, "black"),
-            Player::White => write!(f, "white"),
-        }
-    }
-}
-
-impl Player {
-    pub const fn eq(self, other: Player) -> bool {
-        self as u8 == other as u8
-    }
-
-    pub const fn other(self) -> Player {
-        match self {
-            Player::Black => Player::White,
-            Player::White => Player::Black,
-        }
-    }
-
-    pub const fn backrank(self) -> Rank {
-        match self {
-            Player::Black => Rank::Eight,
-            Player::White => Rank::One,
-        }
-    }
-
-    pub const fn pawn_start_rank(self) -> Rank {
-        match self {
-            Player::Black => Rank::Seven,
-            Player::White => Rank::Two,
-        }
-    }
-
-    pub const fn promotion_rank(self) -> Rank {
-        match self {
-            Player::Black => Rank::One,
-            Player::White => Rank::Eight,
-        }
-    }
-
-    /// `White.pawn()`. `Role::of` is the inverse spelling for `Pawn.of(White)`.
-    pub const fn pawn(self) -> Piece {
-        Role::Pawn.of(self)
-    }
-
-    pub const fn knight(self) -> Piece {
-        Role::Knight.of(self)
-    }
-
-    pub const fn bishop(self) -> Piece {
-        Role::Bishop.of(self)
-    }
-
-    pub const fn rook(self) -> Piece {
-        Role::Rook.of(self)
-    }
-
-    pub const fn queen(self) -> Piece {
-        Role::Queen.of(self)
-    }
-
-    pub const fn king(self) -> Piece {
-        Role::King.of(self)
-    }
-
-    /// The square the king moves to when castling on this side.
-    pub const fn castle_king_to(self, side: Side) -> Square {
-        Square::new(side.king_to_file(), self.backrank())
-    }
-
-    /// The square the rook moves from when castling from this file.
-    pub const fn castle_rook_from(self, file: File) -> Square {
-        Square::new(file, self.backrank())
-    }
-
-    /// The square the rook moves to when castling on this side.
-    pub const fn castle_rook_to(self, side: Side) -> Square {
-        Square::new(side.rook_to_file(), self.backrank())
-    }
-
-    /// Squares that must be empty when castling with this king and rook.
-    pub const fn castle_empty_path(self, king_from: Square, rook_file: File) -> Bitboard {
-        let side = Side::of_rook(king_from, rook_file);
-        let king_to = self.castle_king_to(side);
-        let rook_from = self.castle_rook_from(rook_file);
-        let rook_to = self.castle_rook_to(side);
-
-        let king_path = king_from.between(king_to).with(king_to);
-        let rook_path = rook_from.between(rook_to).with(rook_to);
-
-        // interval between king and rook, excluding endpoints
-        king_path
-            .union_const(rook_path)
-            .difference_const(Bitboard::from_square(king_from))
-            .difference_const(Bitboard::from_square(rook_from))
-    }
-
-    /// Squares the king occupies or crosses when castling on this side.
-    pub const fn castle_king_path(self, king_from: Square, side: Side) -> Bitboard {
-        let king_to = self.castle_king_to(side);
-        king_from.between(king_to).with(king_from).with(king_to)
-    }
-}
-
-// This has 1 + 2 players + 6 roles, so should be 9 * 8 = 72 bytes
-//
-// The `occupied` field is redundant, at which point it would be 64 bytes or 512 bits.
-// Maybe this fits in AVX-512 registers?
-//
-// Invariant: players disjoint, roles disjoint, both union to same (=occupied)
-#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-/// Location of pieces on the board
-pub struct Board {
-    pub occupied: Bitboard,
-    pub players: Players<Bitboard>,
-    pub roles: Roles<Bitboard>,
-}
-
-impl fmt::Debug for Board {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use fmt::Write as _;
-
-        for rank in Rank::ALL.into_iter().rev() {
-            for file in File::ALL {
-                let square = Square::new(file, rank);
-                f.write_char(self.piece_at(square).map_or('.', Piece::char))?;
-                f.write_char(if file < File::H { ' ' } else { '\n' })?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl Board {
-    pub const fn standard() -> Board {
-        Board {
-            occupied: Bitboard(0xffff_0000_0000_ffff),
-            players: Players { black: Bitboard(0xffff_0000_0000_0000), white: Bitboard(0xffff) },
-            roles: Roles {
-                pawn: Bitboard(0x00ff_0000_0000_ff00),
-                knight: Bitboard(0x4200_0000_0000_0042),
-                bishop: Bitboard(0x2400_0000_0000_0024),
-                rook: Bitboard(0x8100_0000_0000_0081),
-                queen: Bitboard(0x0800_0000_0000_0008),
-                king: Bitboard(0x1000_0000_0000_0010),
-            },
-        }
-    }
-
-    pub const fn freestyle(i: Scharnagl) -> Board {
-        let backrank = scharnagl(i);
-        let mut board = Board::empty();
-
-        let mut index = 0;
-        while index < File::LEN as u8 {
-            let file = File::panicky_from_index(index);
-            let role = backrank[file.index()];
-            board.add(Square::new(file, Rank::One), role.of(Player::White));
-            board.add(Square::new(file, Rank::Two), Player::White.pawn());
-            board.add(Square::new(file, Rank::Seven), Player::Black.pawn());
-            board.add(Square::new(file, Rank::Eight), role.of(Player::Black));
-            index += 1;
-        }
-
-        board
-    }
-
-    pub const fn empty() -> Board {
-        Board {
-            players: Players { black: Bitboard::EMPTY, white: Bitboard::EMPTY },
-            roles: Roles {
-                pawn: Bitboard::EMPTY,
-                knight: Bitboard::EMPTY,
-                bishop: Bitboard::EMPTY,
-                rook: Bitboard::EMPTY,
-                queen: Bitboard::EMPTY,
-                king: Bitboard::EMPTY,
-            },
-            occupied: Bitboard::EMPTY,
-        }
-    }
-
-    pub const fn split(self) -> (Players<Bitboard>, Roles<Bitboard>) {
-        (self.players, self.roles)
-    }
-
-    #[inline]
-    pub const fn occupied(self) -> Bitboard {
-        self.occupied
-    }
-
-    #[inline]
-    pub const fn pawns(self) -> Bitboard {
-        self.roles.pawn
-    }
-
-    #[inline]
-    pub const fn knights(self) -> Bitboard {
-        self.roles.knight
-    }
-
-    #[inline]
-    pub const fn bishops(self) -> Bitboard {
-        self.roles.bishop
-    }
-
-    #[inline]
-    pub const fn rooks(self) -> Bitboard {
-        self.roles.rook
-    }
-
-    #[inline]
-    pub const fn queens(self) -> Bitboard {
-        self.roles.queen
-    }
-
-    #[inline]
-    pub const fn kings(self) -> Bitboard {
-        self.roles.king
-    }
-
-    #[inline]
-    pub const fn black(self) -> Bitboard {
-        self.players.black
-    }
-
-    #[inline]
-    pub const fn white(self) -> Bitboard {
-        self.players.white
-    }
-
-    #[inline]
-    pub const fn player(self, player: Player) -> Bitboard {
-        self.players.get(player)
-    }
-
-    #[inline]
-    pub const fn role(self, role: Role) -> Bitboard {
-        self.roles.get(role)
-    }
-
-    pub const fn add(&mut self, square: Square, piece: Piece) {
-        self.occupied.insert(square);
-        self.players.get_mut(piece.player).insert(square);
-        self.roles.get_mut(piece.role).insert(square);
-    }
-
-    pub const fn remove(&mut self, square: Square) -> Option<Piece> {
-        let Some(piece) = self.piece_at(square) else {
-            return None;
-        };
-        self.occupied.remove(square);
-        self.players.get_mut(piece.player).remove(square);
-        self.roles.get_mut(piece.role).remove(square);
-        Some(piece)
-    }
-
-    fn play_unchecked(&mut self, player: Player, play: Move) {
-        let Some(special) = play.specials() else {
-            self.remove(play.from);
-            self.remove(play.to);
-            self.add(play.to, play.role.of(player));
-            return;
-        };
-
-        match special {
-            EnPassant => {
-                let captured = Square::new(play.to.file(), play.from.rank());
-                self.remove(play.from);
-                self.remove(captured);
-                self.add(play.to, player.pawn());
-            }
-            Castle(file) => {
-                let side = Side::of_rook(play.from, file);
-                let rook_from = player.castle_rook_from(file);
-                let rook_to = player.castle_rook_to(side);
-                self.remove(play.from);
-                self.remove(rook_from);
-                self.add(play.to, player.king());
-                self.add(rook_to, player.rook());
-            }
-            Promote(role) => {
-                self.remove(play.from);
-                self.remove(play.to);
-                self.add(play.to, role.of(player));
-            }
-        }
-    }
-
-    /// Bishops, rooks and queens.
-    #[inline]
-    pub const fn sliders(self) -> Bitboard {
-        let Roles { bishop, rook, queen, .. } = self.roles;
-        bishop.symmetric_difference_const(rook).symmetric_difference_const(queen)
-    }
-
-    #[inline]
-    pub const fn bishops_and_queens(self) -> Bitboard {
-        self.bishops().union_const(self.queens())
-    }
-
-    #[inline]
-    pub const fn rooks_and_queens(self) -> Bitboard {
-        self.rooks().union_const(self.queens())
-    }
-
-    /// Pawns, knights and kings.
-    #[inline]
-    pub const fn steppers(self) -> Bitboard {
-        let Roles { pawn, knight, king, .. } = self.roles;
-        pawn.symmetric_difference_const(knight).symmetric_difference_const(king)
-    }
-
-    #[inline]
-    pub const fn king_of(self, player: Player) -> Option<Square> {
-        self.roles.king.intersection_const(self.player(player)).first()
-    }
-
-    #[inline]
-    pub const fn player_at(self, square: Square) -> Option<Player> {
-        // not using Board::find to stay const fn
-        if self.players.black.contains(square) {
-            Some(Player::Black)
-        } else if self.players.white.contains(square) {
-            Some(Player::White)
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub const fn role_at(self, square: Square) -> Option<Role> {
-        // not using Board::find to stay const fn
-        if !self.occupied.contains(square) {
-            // early return
-            return None;
-        }
-        if self.roles.pawn.contains(square) {
-            Some(Role::Pawn)
-        } else if self.roles.knight.contains(square) {
-            Some(Role::Knight)
-        } else if self.roles.bishop.contains(square) {
-            Some(Role::Bishop)
-        } else if self.roles.rook.contains(square) {
-            Some(Role::Rook)
-        } else if self.roles.queen.contains(square) {
-            Some(Role::Queen)
-        } else if self.roles.king.contains(square) {
-            Some(Role::King)
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub const fn piece_at(self, square: Square) -> Option<Piece> {
-        match (self.player_at(square), self.role_at(square)) {
-            (Some(player), Some(role)) => Some(role.of(player)),
-            _ => None,
-        }
-    }
-}
-
-// pub const INITIAL: Board = Board;
+pub use Special::{Castle, Promote};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum Error {
@@ -453,130 +52,6 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-
-crate::finite_set!(
-    /// A chess piece role, such as pawn, knight, bishop, etc.
-    Role,
-    Roles,
-    RoleTable,
-    Roles {
-        Pawn = 1 as pawn,
-        Knight = 2 as knight,
-        Bishop = 3 as bishop,
-        Rook = 5 as rook,
-        Queen = 9 as queen,
-        King = 4 as king,
-    }
-);
-
-impl fmt::Display for Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Role::*;
-        write!(
-            f,
-            "{}",
-            match self {
-                Pawn => "pawn",
-                Knight => "knight",
-                Bishop => "bishop",
-                Rook => "rook",
-                Queen => "queen",
-                King => "king",
-            }
-        )
-    }
-}
-
-impl Role {
-    pub const fn eq(self, other: Role) -> bool {
-        self as u8 == other as u8
-    }
-
-    pub(crate) fn panicky_from_char(c: char) -> Self {
-        use Role::*;
-        let c = c.to_lowercase().next().unwrap();
-        match c {
-            'p' => Pawn,
-            'n' => Knight,
-            'b' => Bishop,
-            'r' => Rook,
-            'q' => Queen,
-            'k' => King,
-            _ => unreachable!(),
-        }
-    }
-
-    /// `Bishop.of(White)`
-    #[inline]
-    pub const fn of(self, player: Player) -> Piece {
-        Piece { player, role: self }
-    }
-
-    pub const fn lower(self) -> char {
-        use Role::*;
-        match self {
-            Pawn => 'p',
-            Knight => 'n',
-            Bishop => 'b',
-            Rook => 'r',
-            Queen => 'q',
-            King => 'k',
-        }
-    }
-
-    pub const fn upper(self) -> char {
-        use Role::*;
-        match self {
-            Pawn => 'P',
-            Knight => 'N',
-            Bishop => 'B',
-            Rook => 'R',
-            Queen => 'Q',
-            King => 'K',
-        }
-    }
-
-    pub const fn figurine(self) -> char {
-        use Role::*;
-        match self {
-            Pawn => '♙',
-            Knight => '♘',
-            Bishop => '♗',
-            Rook => '♖',
-            Queen => '♕',
-            King => '♔',
-        }
-    }
-
-    pub const fn black(self) -> char {
-        self.lower()
-    }
-
-    pub const fn white(self) -> char {
-        self.upper()
-    }
-}
-
-/// A chess piece, for instance a white pawn or a black queen.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Piece {
-    pub player: Player,
-    pub role: Role,
-}
-
-impl Piece {
-    pub const fn char(self) -> char {
-        match self.player {
-            Player::Black => self.role.black(),
-            Player::White => self.role.white(),
-        }
-    }
-
-    // Eq::eq is not const
-    pub const fn eq(self, other: Piece) -> bool {
-        self.player.eq(other.player) && self.role.eq(other.role)
-    }
-}
 
 /// Chess position, including the board, turn, rights, and counters.
 ///
@@ -604,7 +79,7 @@ impl Piece {
 ///
 /// [cql]: https://en.wikipedia.org/wiki/Chess_Query_Language
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Position<Variant = variant::Chess> {
+pub struct Position<Variant = Chess> {
     /// location of the pieces on the board
     pub board: Board,
     /// player to move
@@ -612,7 +87,7 @@ pub struct Position<Variant = variant::Chess> {
     /// possible castle sides
     pub castles: Castles,
     /// possible en passant square
-    pub en_passant: Option<en_passant::Square>,
+    pub en_passant: Option<EnPassant>,
     /// ply counter since last capture or pawn move (reversible moves)
     pub reversible: u32,
     /// starts at 1 and increments after every Black move
@@ -621,59 +96,8 @@ pub struct Position<Variant = variant::Chess> {
     pub(crate) variant: PhantomData<Variant>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Castles(pub Players<Sides<Option<File>>>);
-
-impl Side {
-    pub const fn chess_rook(self) -> File {
-        match self {
-            Side::King => File::H,
-            Side::Queen => File::A,
-        }
-    }
-}
-
-impl<T> Sides<Option<T>> {
-    pub const fn empty() -> Self {
-        Sides { queen: None, king: None }
-    }
-}
-impl Castles {
-    pub const fn empty() -> Self {
-        Self(Players { black: Sides::empty(), white: Sides::empty() })
-    }
-
-    pub const fn chess() -> Self {
-        use Side::*;
-        let rooks = Sides { queen: Some(Queen.chess_rook()), king: Some(King.chess_rook()) };
-        Self(Players { black: rooks, white: rooks })
-    }
-
-    pub const fn get(self, player: Player, side: Side) -> Option<File> {
-        self.0.get(player).get(side)
-    }
-
-    pub const fn has(self, player: Player, side: Side) -> bool {
-        self.get(player, side).is_some()
-    }
-
-    pub const fn set(&mut self, player: Player, side: Side, file: File) {
-        *self.0.get_mut(player).get_mut(side) = Some(file);
-    }
-
-    pub fn clear(&mut self, player: Player, side: Side) {
-        self.0[player][side] = None;
-    }
-
-    pub fn clear_player(&mut self, player: Player) {
-        self.0[player] = Sides::empty();
-    }
-}
-
-pub type Unvalidated = Position<variant::Unvalidated>;
-
-pub const fn unvalidated(board: Board, turn: Player) -> Unvalidated {
-    Unvalidated {
+pub const fn unvalidated(board: Board, turn: Player) -> Position<Unvalidated> {
+    Position {
         board,
         turn,
         castles: Castles::empty(),
@@ -684,8 +108,20 @@ pub const fn unvalidated(board: Board, turn: Player) -> Unvalidated {
     }
 }
 
-impl Position<variant::Chess> {
-    pub const fn start() -> Position<variant::Chess> {
+/// Reinhard Scharnagl's enumeration of all 960 starting positions.
+///
+/// Standard chess is position 518.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Scharnagl(u16);
+
+impl Scharnagl {
+    pub const fn new(i: u16) -> Option<Self> {
+        if i < 960 { Some(Self(i)) } else { None }
+    }
+}
+
+impl Position<Chess> {
+    pub const fn start() -> Position<Chess> {
         Position {
             board: Board::standard(),
             turn: Player::White,
@@ -698,8 +134,8 @@ impl Position<variant::Chess> {
     }
 }
 
-impl Position<variant::Freestyle> {
-    pub const fn freestyle(i: Scharnagl) -> Position<variant::Freestyle> {
+impl Position<Freestyle> {
+    pub const fn freestyle(i: Scharnagl) -> Position<Freestyle> {
         use Player::*;
         use Side::*;
 
@@ -730,8 +166,8 @@ impl Position<variant::Freestyle> {
     }
 }
 
-impl Position<variant::Unvalidated> {
-    pub const fn chess() -> Position<variant::Unvalidated> {
+impl Position<Unvalidated> {
+    pub const fn chess() -> Position<Unvalidated> {
         Position {
             board: Board::standard(),
             turn: Player::White,
@@ -743,7 +179,7 @@ impl Position<variant::Unvalidated> {
         }
     }
 
-    pub const fn empty() -> Position<variant::Unvalidated> {
+    pub const fn empty() -> Position<Unvalidated> {
         unvalidated(Board::empty(), Player::White)
     }
 
@@ -767,14 +203,20 @@ impl Position<variant::Unvalidated> {
     }
 }
 
-impl Default for Unvalidated {
+impl Default for Position<Unvalidated> {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl From<Position<variant::Chess>> for Unvalidated {
-    fn from(position: Position<variant::Chess>) -> Self {
+impl From<Position<Chess>> for Position<Unvalidated> {
+    fn from(position: Position<Chess>) -> Self {
+        position.unvalidated()
+    }
+}
+
+impl From<Position<Freestyle>> for Position<Unvalidated> {
+    fn from(position: Position<Freestyle>) -> Self {
         position.unvalidated()
     }
 }
@@ -818,7 +260,7 @@ impl<V> Position<V> {
         round * 2 + usize::from(self.turn == Player::Black)
     }
 
-    pub fn unvalidated(self) -> Position<variant::Unvalidated> {
+    pub fn unvalidated(self) -> Position<Unvalidated> {
         Position {
             board: self.board,
             turn: self.turn,
@@ -860,7 +302,7 @@ impl<V> Position<V> {
             let to = play.to as u8;
             if from.abs_diff(to) == 16 {
                 self.en_passant =
-                    en_passant::Square::try_from(Square::panicky_from_index((from + to) / 2)).ok();
+                    EnPassant::try_from(Square::panicky_from_index((from + to) / 2)).ok();
             }
         }
 
@@ -889,563 +331,6 @@ impl<V> Position<V> {
             }
         }
     }
-}
-
-impl<T> Players<T> {
-    #[inline]
-    pub fn swap(self) -> Players<T> {
-        Players { black: self.white, white: self.black }
-    }
-
-    #[inline]
-    pub fn for_each<F>(self, mut f: F)
-    where
-        F: FnMut(T),
-    {
-        f(self.black);
-        f(self.white);
-    }
-
-    #[inline]
-    pub fn map<U, F>(self, mut f: F) -> Players<U>
-    where
-        F: FnMut(T) -> U,
-    {
-        Players { black: f(self.black), white: f(self.white) }
-    }
-
-    #[inline]
-    pub fn find<F>(&self, mut predicate: F) -> Option<Player>
-    where
-        F: FnMut(&T) -> bool,
-    {
-        if predicate(&self.black) {
-            Some(Player::Black)
-        } else if predicate(&self.white) {
-            Some(Player::White)
-        } else {
-            None
-        }
-    }
-}
-
-impl<T> Roles<T> {
-    #[inline]
-    pub fn for_each<F>(self, mut f: F)
-    where
-        F: FnMut(T),
-    {
-        f(self.pawn);
-        f(self.knight);
-        f(self.bishop);
-        f(self.rook);
-        f(self.queen);
-        f(self.king);
-    }
-
-    #[inline]
-    pub fn map<U, F>(self, mut f: F) -> Roles<U>
-    where
-        F: FnMut(T) -> U,
-    {
-        Roles {
-            pawn: f(self.pawn),
-            knight: f(self.knight),
-            bishop: f(self.bishop),
-            rook: f(self.rook),
-            queen: f(self.queen),
-            king: f(self.king),
-        }
-    }
-
-    #[inline]
-    pub fn find<F>(&self, mut predicate: F) -> Option<Role>
-    where
-        F: FnMut(&T) -> bool,
-    {
-        if predicate(&self.pawn) {
-            Some(Role::Pawn)
-        } else if predicate(&self.knight) {
-            Some(Role::Knight)
-        } else if predicate(&self.bishop) {
-            Some(Role::Bishop)
-        } else if predicate(&self.rook) {
-            Some(Role::Rook)
-        } else if predicate(&self.queen) {
-            Some(Role::Queen)
-        } else if predicate(&self.king) {
-            Some(Role::King)
-        } else {
-            None
-        }
-    }
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Special {
-    EnPassant,
-    Castle(File),
-    Promote(Role),
-}
-
-impl Special {
-    #[inline]
-    pub const fn en_passant() -> Self {
-        EnPassant
-    }
-
-    #[inline]
-    pub const fn castle(file: File) -> Self {
-        Castle(file)
-    }
-
-    #[inline]
-    pub const fn promote(role: Role) -> Self {
-        Promote(role)
-    }
-    #[inline]
-    pub const fn is_en_passant(self) -> bool {
-        matches!(self, Special::EnPassant)
-    }
-
-    #[inline]
-    pub const fn is_castle(self) -> bool {
-        matches!(self, Special::Castle(_))
-    }
-
-    #[inline]
-    pub const fn castle_rook_file(self) -> Option<File> {
-        if let Special::Castle(file) = self { Some(file) } else { None }
-    }
-
-    #[inline]
-    pub const fn is_promote(self) -> bool {
-        matches!(self, Special::Promote(_))
-    }
-
-    #[inline]
-    pub const fn promotes(self) -> Option<Role> {
-        if let Special::Promote(role) = self { Some(role) } else { None }
-    }
-
-    #[inline]
-    pub const fn is_promote_role(self, role: Role) -> bool {
-        if let Special::Promote(this) = self { this as u8 == role as u8 } else { false }
-    }
-}
-
-/// What kind of move is it?
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Kind {
-    #[default]
-    Normal,
-    Special(Special),
-}
-
-impl Kind {
-    #[inline]
-    pub const fn normal() -> Self {
-        Normal
-    }
-
-    #[inline]
-    pub const fn special(special: Special) -> Self {
-        Kind::Special(special)
-    }
-
-    #[inline]
-    pub const fn en_passant() -> Self {
-        Kind::Special(EnPassant)
-    }
-
-    #[inline]
-    pub const fn castle(file: File) -> Self {
-        Kind::Special(Castle(file))
-    }
-
-    #[inline]
-    pub const fn promote(role: Role) -> Self {
-        Kind::Special(Promote(role))
-    }
-
-    #[inline]
-    pub const fn is_normal(self) -> bool {
-        matches!(self, Kind::Normal)
-    }
-
-    #[inline]
-    pub const fn is_special(self) -> bool {
-        matches!(self, Kind::Normal)
-    }
-
-    #[inline]
-    pub const fn specials(self) -> Option<Special> {
-        if let Kind::Special(special) = self { Some(special) } else { None }
-    }
-
-    #[inline]
-    pub const fn is_en_passant(self) -> bool {
-        if let Kind::Special(special) = self { special.is_en_passant() } else { false }
-    }
-
-    #[inline]
-    pub const fn is_castle(self) -> bool {
-        if let Kind::Special(special) = self { special.is_castle() } else { false }
-    }
-
-    #[inline]
-    pub const fn castle_rook_file(self) -> Option<File> {
-        if let Kind::Special(special) = self { special.castle_rook_file() } else { None }
-    }
-
-    #[inline]
-    pub const fn is_promote(self) -> bool {
-        if let Kind::Special(special) = self { special.is_promote() } else { false }
-    }
-
-    #[inline]
-    pub const fn promotes(self) -> Option<Role> {
-        if let Kind::Special(special) = self { special.promotes() } else { None }
-    }
-
-    #[inline]
-    pub const fn is_promote_role(self, role: Role) -> bool {
-        if let Kind::Special(special) = self { special.is_promote_role(role) } else { false }
-    }
-}
-
-// Since `move` is a keyword, can use `play: Move` as a synonym.
-// At least this is the most useful suggestion by Google AI Overview ;)
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-/// Move that a player can make.
-pub struct Move {
-    pub kind: Kind,
-    /// redundant when given the board
-    pub role: Role,
-    pub from: Square,
-    pub to: Square,
-    /// redundant when given the board
-    pub capture: Option<Role>,
-}
-
-pub type Moves = Vec<Move>;
-
-// This has a multitude of choices:
-// a) queenside / kingside (based on queen/king starting sides in chess)
-// b) long / short (based on travel of king in chess)
-// c) a-side / h-side (based on left/right-most files in both chess and freestyle) - used in freestyle
-// d) c-file / g-file (where the king lands in both chess and freestyle) - new invention
-//
-// The goal would be to have something that makes intuitive sense for Chess
-// and remains correct for Freestyle.
-//
-// Note that "O-O-O" and "O-O" continue to be used in Freestyle.
-// a) is wrong for Freestyle, c) is rare in Chess, d) is a new invention,
-// even though c) is not quite right in terms of actual king travel in Freestyle,
-// the move notation still reflects it.
-//
-// Also Side is a bit misleading, could also mean what we call Player
-crate::finite_set!(
-    /// A side of the board to castle toward.
-    Side,
-    Sides,
-    SideTable,
-    Sides {
-        King = 0 as king,
-        Queen = 1 as queen,
-    }
-);
-
-impl fmt::Display for Side {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Side::King => write!(f, "king"),
-            Side::Queen => write!(f, "queen"),
-        }
-    }
-}
-
-impl Side {
-    pub const fn eq(self, other: Side) -> bool {
-        self as u8 == other as u8
-    }
-
-    pub const fn king_side(king_side: bool) -> Self {
-        use Side::*;
-        if king_side { King } else { Queen }
-    }
-
-    pub const fn of_rook(king: Square, rook: File) -> Self {
-        Side::king_side(king.file() as u8 <= rook as u8)
-    }
-
-    /// The file the king moves to when castling on this side
-    pub const fn king_to_file(self) -> File {
-        use Side::*;
-        match self {
-            King => File::G,
-            Queen => File::C,
-        }
-    }
-
-    /// The file the rook moves to when castling on this side.
-    pub const fn rook_to_file(self) -> File {
-        use Side::*;
-        match self {
-            King => File::F,
-            Queen => File::D,
-        }
-    }
-}
-
-// Construct a normal move, or use the special constructors castle, en_passant, or promote.
-//
-// If a piece is captured, optionally set its role.
-
-/// Constructors
-impl Move {
-    #[inline]
-    pub const fn normal(role: Role, from: Square, to: Square) -> Move {
-        Move::capture(role, from, to, None)
-    }
-
-    #[inline]
-    pub const fn capture(role: Role, from: Square, to: Square, capture: Option<Role>) -> Move {
-        Move { kind: Normal, role, from, to, capture }
-    }
-
-    #[inline]
-    pub const fn chess_castle(player: Player, side: Side) -> Move {
-        Move::castle(player, Square::new(File::E, player.backrank()), side.chess_rook())
-    }
-
-    #[inline]
-    pub const fn castle(player: Player, from: Square, file: File) -> Move {
-        let side = Side::of_rook(from, file);
-        Move {
-            kind: Kind::Special(Castle(file)),
-            role: Role::King,
-            from,
-            to: player.castle_king_to(side),
-            capture: None,
-        }
-    }
-
-    #[inline]
-    pub const fn en_passant(from: Square, to: Square) -> Move {
-        Move { role: Role::Pawn, from, to, capture: None, kind: Kind::Special(EnPassant) }
-    }
-
-    #[inline]
-    pub const fn promote(from: Square, to: Square, role: Role) -> Move {
-        Move::promote_capture(from, to, role, None)
-    }
-
-    #[inline]
-    pub const fn promote_capture(
-        from: Square,
-        to: Square,
-        role: Role,
-        capture: Option<Role>,
-    ) -> Move {
-        Move { role: Role::Pawn, from, to, capture, kind: Kind::Special(Promote(role)) }
-    }
-
-    pub fn pawn(player: Player, from: Square, to: Square, capture: Option<Role>) -> Moves {
-        let mut moves = Moves::new();
-
-        if to.rank() as u8 == player.promotion_rank() as u8 {
-            for role in [Role::Queen, Role::Rook, Role::Bishop, Role::Knight] {
-                moves.push(Move::promote_capture(from, to, role, capture));
-            }
-        } else {
-            moves.push(Move::capture(Role::Pawn, from, to, capture));
-        }
-
-        moves
-    }
-}
-
-/// Builders
-impl Move {
-    #[inline]
-    pub const fn capturing(mut self, role: Role) -> Move {
-        self.capture = Some(role);
-        self
-    }
-}
-
-/// Accessors inherited from [`Kind`]
-impl Move {
-    #[inline]
-    pub const fn is_normal(self) -> bool {
-        self.kind.is_normal()
-    }
-
-    #[inline]
-    pub const fn is_special(self) -> bool {
-        self.kind.is_special()
-    }
-
-    #[inline]
-    pub const fn specials(self) -> Option<Special> {
-        self.kind.specials()
-    }
-}
-
-/// Accessors inherited from [`Special`]
-impl Move {
-    #[inline]
-    pub const fn is_en_passant(self) -> bool {
-        self.kind.is_en_passant()
-    }
-
-    #[inline]
-    pub const fn is_castle(self) -> bool {
-        self.kind.is_castle()
-    }
-
-    #[inline]
-    pub const fn castle_rook_file(self) -> Option<File> {
-        self.kind.castle_rook_file()
-    }
-
-    #[inline]
-    pub const fn is_castle_side(self, side: Side) -> bool {
-        match self.castle_side() {
-            Some(this) => this.eq(side),
-            None => false,
-        }
-    }
-
-    #[inline]
-    pub const fn castle_side(self) -> Option<Side> {
-        match self.castle_rook_file() {
-            Some(file) => Some(Side::of_rook(self.from, file)),
-            None => None,
-        }
-    }
-
-    #[inline]
-    pub const fn is_promote(self) -> bool {
-        self.kind.is_promote()
-    }
-
-    #[inline]
-    pub const fn promotes(self) -> Option<Role> {
-        self.kind.promotes()
-    }
-
-    #[inline]
-    pub const fn is_promote_role(self, role: Role) -> bool {
-        self.kind.is_promote_role(role)
-    }
-}
-
-/// Accessors inherited from `capture`
-impl Move {
-    #[inline]
-    pub const fn is_capture(self) -> bool {
-        self.capture.is_some()
-    }
-
-    #[inline]
-    pub const fn captures(self) -> Option<Role> {
-        self.capture
-    }
-
-    #[inline]
-    pub const fn is_capture_role(self, role: Role) -> bool {
-        if let Some(this) = self.capture { this as u8 == role as u8 } else { false }
-    }
-}
-
-/// Compact encoding
-impl Move {
-    #[inline]
-    pub const fn code(self) -> u16 {
-        (self.to as u16)
-            | ((self.from as u16) << 6)
-            | (self.promotion_code() << 12)
-            | (self.kind_code() << 14)
-    }
-
-    #[inline]
-    const fn promotion_code(self) -> u16 {
-        match self.promotes() {
-            Some(Role::Knight) => 0,
-            Some(Role::Bishop) => 1,
-            Some(Role::Rook) => 2,
-            Some(Role::Queen) => 3,
-            _ => 0,
-        }
-    }
-
-    #[inline]
-    const fn kind_code(self) -> u16 {
-        match self.specials() {
-            Some(Special::Promote(_)) => 1,
-            Some(Special::EnPassant) => 2,
-            Some(Special::Castle(_)) => 3,
-            None => 0,
-        }
-    }
-
-    fn long_algebraic(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use fmt::Write as _;
-
-        let Move { role, from, to, capture, kind } = *self;
-
-        if kind.is_castle() {
-            f.write_str(if from < to { ALGEBRAIC_SHORT_CASTLE } else { ALGEBRAIC_LONG_CASTLE })
-        } else {
-            if role != Role::Pawn {
-                f.write_char(role.upper())?;
-            }
-            let does = if capture.is_some() { ALGEBRAIC_CAPTURE } else { ALGEBRAIC_MOVE };
-            write!(f, "{}{}{}", from, does, to)?;
-
-            if let Some(promoted) = kind.promotes() {
-                write!(f, "={}", promoted.upper())?;
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Uses long algebraic notation.
-impl fmt::Display for Move {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.long_algebraic(f)
-    }
-}
-
-#[test]
-fn display_move() {
-    use {Player::*, Role::*, Square::*};
-
-    let mut play = Move::promote(A2, H7, Queen);
-
-    assert_eq!(play.to_string(), "a2-h7=Q");
-    assert_eq!(play.uci().to_string(), "a2h7q");
-
-    play.role = King;
-    assert_eq!(play.to_string(), "Ka2-h7=Q");
-    assert_eq!(play.uci().to_string(), "a2h7q");
-
-    play = play.capturing(Bishop);
-    assert_eq!(play.to_string(), "Ka2xh7=Q");
-    assert_eq!(play.uci().to_string(), "a2h7q");
-
-    let play = Move::chess_castle(White, Side::King);
-    assert_eq!(play.to_string(), ALGEBRAIC_SHORT_CASTLE);
-    assert_eq!(play.uci().to_string(), "e1g1");
-
-    let play = Move::chess_castle(Black, Side::Queen);
-    assert_eq!(play.to_string(), ALGEBRAIC_LONG_CASTLE);
-    assert_eq!(play.uci().to_string(), "e8c8");
 }
 
 #[test]
@@ -1492,89 +377,4 @@ fn all_random() {
         println!("{}", position.iter().collect::<String>());
     }
     assert_eq!(960, positions.len());
-}
-
-pub const fn scharnagl(Scharnagl(mut i): Scharnagl) -> [Role; 8] {
-    const KNIGHTS: [(u8, u8); 10] =
-        [(0, 0), (0, 1), (0, 2), (0, 3), (1, 1), (1, 2), (1, 3), (2, 2), (2, 3), (3, 3)];
-
-    const fn nth_free(roles: &[Role; 8], n: u8) -> File {
-        let mut seen = 0;
-        let mut file = 0;
-        while file < File::LEN as u8 {
-            if Role::Pawn.eq(roles[file as usize]) {
-                if seen == n {
-                    return File::panicky_from_index(file);
-                }
-                seen += 1;
-            }
-            file += 1;
-        }
-        unreachable!()
-    }
-
-    let mut roles = [Role::Pawn; 8];
-
-    // Place light bishop on b/d/f/h according to i % 4
-    // IOW, last two bits
-    let light_bishop = i % 4;
-    i /= 4;
-    roles[(light_bishop * 2 + 1) as usize] = Role::Bishop;
-
-    // Place dark bishop on a/c/e/g according to i % 4
-    // IOW, next two bits
-    let dark_bishop = i % 4;
-    i /= 4;
-    roles[(dark_bishop * 2) as usize] = Role::Bishop;
-
-    // Place queen on remaining files according to i % 6
-    // IOW, next six numbers
-    let queen = i % 6;
-    i /= 6;
-    let queen = nth_free(&roles, queen as u8);
-    roles[queen.index()] = Role::Queen;
-
-    // There are 960/4/4/6=10 cases left.
-    // Place the knights in any two remaining files, using the lookup table
-    // of all 2-of-4 subsets with replacement
-    let (left_knight, right_knight) = KNIGHTS[i as usize];
-    let left_knight = nth_free(&roles, left_knight);
-    roles[left_knight.index()] = Role::Knight;
-    let right_knight = nth_free(&roles, right_knight);
-    roles[right_knight.index()] = Role::Knight;
-
-    // Now fill in the remaining files with rooks and king,
-    // ensuring the king is between the rooks
-    let rook = nth_free(&roles, 0);
-    roles[rook.index()] = Role::Rook;
-    let king = nth_free(&roles, 0);
-    roles[king.index()] = Role::King;
-    let rook = nth_free(&roles, 0);
-    roles[rook.index()] = Role::Rook;
-
-    roles
-}
-
-#[test]
-fn freestyle_positions() {
-    use variant::{Chess, Freestyle};
-
-    assert_eq!(Scharnagl::new(960), None);
-    assert_eq!(Board::freestyle(Scharnagl(0)).fen(), "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR");
-    assert_eq!(
-        Board::freestyle(Scharnagl(631)).fen(),
-        "rnbkqrnb/pppppppp/8/8/8/8/PPPPPPPP/RNBKQRNB"
-    );
-    assert_eq!(Board::freestyle(Scharnagl(518)), Board::standard());
-    assert_eq!(
-        Board::freestyle(Scharnagl(959)).fen(),
-        "rkrnnqbb/pppppppp/8/8/8/8/PPPPPPPP/RKRNNQBB"
-    );
-
-    let position = Position::<Freestyle>::freestyle(Scharnagl(518));
-    assert_eq!(position.board, Position::<Chess>::start().board);
-    assert_eq!(position.castles.get(White, Side::Queen), Some(File::A));
-    assert_eq!(position.castles.get(White, Side::King), Some(File::H));
-    assert_eq!(position.castles.get(Black, Side::Queen), Some(File::A));
-    assert_eq!(position.castles.get(Black, Side::King), Some(File::H));
 }

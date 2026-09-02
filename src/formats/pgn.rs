@@ -27,7 +27,7 @@ pub mod stream;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     pub tags: Vec<Tag>,
-    pub start: Unvalidated,
+    pub start: Position<Unvalidated>,
     pub intro: Option<Comment>,
     pub moves: Vec<Move>,
     pub outcome: Outcome,
@@ -42,7 +42,7 @@ pub enum Tag {
     White(String),
     Black(String),
     Outcome(Outcome),
-    Fen(Unvalidated),
+    Fen(Position<Unvalidated>),
     SetUp(bool),
     Other(OtherTag),
 }
@@ -208,7 +208,7 @@ fn write_tag(f: &mut fmt::Formatter<'_>, key: &str, value: &str) -> fmt::Result 
     write!(f, "[{} \"{}\"]", key, escape_tag_value(value))
 }
 
-fn start_position(tags: &[Tag]) -> Unvalidated {
+fn start_position(tags: &[Tag]) -> Position<Unvalidated> {
     tags.iter()
         .rev()
         .find_map(|tag| match tag {
