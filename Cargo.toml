@@ -50,8 +50,10 @@ name = "chess"
 
 [features]
 default = []
-empty-id = []
+const-fn-polyglot-id = []
+const-fn-scharnagl-id = []
 const-fn-standard-id = []
+const-fn-statics = ["const-fn-polyglot-id", "const-fn-scharnagl-id", "const-fn-standard-id"]
 lichess = ["dep:chess-lichess"]
 serde = ["dep:serde", "dep:serde_with"]
 

@@ -7,7 +7,7 @@ use crate::{
         Board, Castles, Chess, EnPassant, File, Freestyle, Parts, Piece, Placement, Player,
         PlayerTable, Position, Rank, Side, Square, VariantEnum,
     },
-    variant::{Unvalidated, Validate, Variant},
+    variant::{Unvalidated, Variant},
 };
 
 use super::{StrInput as Input, prelude::*};
@@ -51,10 +51,10 @@ fn position(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
     .position())
 }
 
-impl<V: Validate> Position<V> {
+impl<V: Variant> Position<V> {
     pub fn from_fen(fen: &str) -> Result<Self> {
         let position = Unvalidated::from_fen(fen)?;
-        position.validate().map_err(|_| Error::Invalid(fen.to_string()))
+        V::validate(position).map_err(|_| Error::Invalid(fen.to_string()))
     }
 }
 

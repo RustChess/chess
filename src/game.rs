@@ -6,7 +6,7 @@ use std::{
 use crate::{
     Move, Position,
     formats::san::Check,
-    position::{Chess, File, Rank},
+    position::{Chess, File, Rank, Unvalidated},
     variant::Variant,
 };
 
@@ -103,6 +103,17 @@ impl<V> Game<V> {
 impl<V: Copy> Game<V> {
     pub fn start(&self) -> Position<V> {
         self.start.position()
+    }
+
+    pub fn unvalidated(self) -> Game<Unvalidated> {
+        Game {
+            roster: self.roster,
+            tags: self.tags,
+            intro: self.intro,
+            outcome: self.outcome,
+            start: self.start.unvalidated(),
+            tree: self.tree.unvalidated(),
+        }
     }
 
     fn position(&self, node: Node) -> Position<V> {
@@ -215,6 +226,18 @@ impl<V: Copy> Play<V> {
     pub fn position(&self) -> Position<V> {
         self.state.position()
     }
+
+    pub fn unvalidated(self) -> Play<Unvalidated> {
+        Play {
+            slot: self.slot,
+            previous: self.previous,
+            meta: self.meta,
+            play: self.play,
+            short: self.short,
+            state: self.state.unvalidated(),
+            options: self.options,
+        }
+    }
 }
 
 impl<V> State<V> {
@@ -233,6 +256,10 @@ impl<V: Copy> State<V> {
     #[inline]
     pub fn position(&self) -> Position<V> {
         self.position
+    }
+
+    pub fn unvalidated(self) -> State<Unvalidated> {
+        State { position: self.position.unvalidated(), legal: self.legal, check: self.check }
     }
 }
 

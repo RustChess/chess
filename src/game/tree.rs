@@ -1,6 +1,6 @@
 use std::collections::BTreeMap as Map;
 
-use crate::position::Chess;
+use crate::position::{Chess, Unvalidated};
 
 use super::Play;
 
@@ -100,6 +100,16 @@ impl<V> Tree<V> {
             self.remove(*option);
         }
         true
+    }
+}
+
+impl<V: Copy> Tree<V> {
+    pub fn unvalidated(self) -> Tree<Unvalidated> {
+        Tree {
+            next: self.next,
+            slots: self.slots.into_iter().map(|(slot, play)| (slot, play.unvalidated())).collect(),
+            start: self.start,
+        }
     }
 }
 

@@ -75,9 +75,7 @@ const fn split(hash: U256) -> (u128, u128) {
     (u128::from_be_bytes(upper), u128::from_be_bytes(lower))
 }
 
-impl Game {
-    // TODO: Make this variant-aware before `Game<Freestyle>` uses it.
-    // The current hash uses standard UCI formatting for moves.
+impl<V: crate::variant::Supported> Game<V> {
     // Experimental: A globally unique ID for all games
     pub fn id(&self) -> Id {
         use crate::game::cursor::Mainline;
@@ -85,7 +83,7 @@ impl Game {
         let mut id = hash(format!("game:{}", self.start().id()).as_bytes());
 
         for play in Mainline::new(self) {
-            id = hash(format!("game:{id}:{}", play.play().uci()).as_bytes());
+            id = hash(format!("game:{id}:{}", play.play().uci::<V>()).as_bytes());
         }
 
         id

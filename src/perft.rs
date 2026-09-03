@@ -40,7 +40,7 @@ fn assert_position_perft<V: Variant>(name: &str, position: Position<V>, expected
 // allowing to see the number of moves split count after first move
 fn divide<V: Variant>(position: Position<V>, depth: u32) {
     for play in position.legal_moves() {
-        println!("{}: {}", play.uci(), perft(position.apply_unchecked(play), depth - 1));
+        println!("{}: {}", play.uci_chess(), perft(position.apply_unchecked(play), depth - 1));
     }
 }
 

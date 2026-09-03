@@ -2,10 +2,9 @@ set shell := ["bash", "-c"]
 
 fmt:
     cargo fmt --all
-    rustfmt scripts/polyglot-id.rs
-    rustfmt src/id/polyglot.rs
-    rustfmt scripts/standard-id.rs
-    rustfmt src/id/standard.rs
+    rustfmt scripts/{polyglot,scharnagl,standard}-id.rs
+    rustfmt src/id/{polyglot,standard}.rs
+    rustfmt src/position/scharnagl-id.rs
     just --fmt --unstable
 
 lint:
@@ -38,6 +37,10 @@ standard-id:
 polyglot-id:
     rust-script scripts/polyglot-id.rs
     rustfmt src/id/polyglot.rs
+
+scharnagl-id:
+    rust-script scripts/scharnagl-id.rs
+    rustfmt src/position/scharnagl-id.rs
 
 clean:
     rm -f *.cb{a,c,e,g,h,j,l,m,p,s,t,tt,ini} *.{flags,ini}

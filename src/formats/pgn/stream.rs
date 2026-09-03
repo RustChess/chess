@@ -4,14 +4,16 @@ use std::{
 };
 
 use encoding_rs::WINDOWS_1252;
+use winnow::Parser as _;
 
-use super::*;
+use super::{Game, Result, parse};
 
 pub fn games<R: Read>(reader: R) -> impl Iterator<Item = io::Result<Result<Game>>> {
     GameShaped::new(reader).map(|chunk| {
         chunk.map(|chunk| {
-            game.parse(chunk.text.as_str())
-                .map_err(|error| Error::from(&chunk.text, chunk.line, error))
+            parse::game
+                .parse(chunk.text.as_str())
+                .map_err(|error| parse::Error::from(&chunk.text, chunk.line, error).into())
         })
     })
 }
@@ -128,7 +130,7 @@ impl Buffer {
         self.text.push_str(&line);
         self.text.push('\n');
 
-        let line = if self.in_comment { line.as_str() } else { strip_tags(&line) };
+        let line = if self.in_comment { line.as_str() } else { parse::strip_tags(&line) };
         for c in line.chars() {
             if self.in_comment {
                 if c == '}' {
@@ -156,7 +158,7 @@ impl Buffer {
     }
 
     fn is_complete(&self, next: Option<&str>) -> bool {
-        self.is_game_shaped() && next.is_none_or(tag_start_ok)
+        self.is_game_shaped() && next.is_none_or(parse::tag_start_ok)
     }
 
     fn take(self) -> String {

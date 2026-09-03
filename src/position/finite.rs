@@ -190,19 +190,19 @@ crate::finite_set!(
 crate::finite_set!(
     /// A supported chess variant.
     #[non_exhaustive]
-    VariantEnum,
-    VariantTable {
-        Unvalidated = 0 as unvalidated,
+    SupportedEnum,
+    SupportedTable {
         Chess = 1 as chess,
         Freestyle = 2 as freestyle,
     }
 );
 
 crate::finite_set!(
-    /// A supported chess variant.
+    /// A supported chess variant or Unvalidated.
     #[non_exhaustive]
-    SupportedEnum,
-    SupportedTable {
+    VariantEnum,
+    VariantTable {
+        Unvalidated = 0 as unvalidated,
         Chess = 1 as chess,
         Freestyle = 2 as freestyle,
     }

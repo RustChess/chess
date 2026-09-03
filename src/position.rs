@@ -13,7 +13,7 @@
 //! chess variants, and implement for "freestyle" (aka Fisher Random aka Chess960) chess - to exercise our generality mindedness
 //!
 //! Compared to `shakmaty` our position is a concrete `struct`
-use core::{marker::PhantomData, num::NonZeroU32};
+use core::{fmt, marker::PhantomData, num::NonZeroU32};
 
 use crate::{bitboard::Bitboard, variant};
 
@@ -24,7 +24,7 @@ mod finite;
 mod play;
 pub mod validate;
 
-pub use board::{Board, Placement};
+pub use board::{Board, Placement, scharnagl_by_id};
 pub use finite::*;
 pub use play::*;
 
@@ -159,6 +159,12 @@ impl Scharnagl {
 
     pub const fn new(i: u16) -> Option<Self> {
         if i < 960 { Some(Self(i)) } else { None }
+    }
+}
+
+impl fmt::Display for Scharnagl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -343,7 +349,7 @@ impl<V> Position<V> {
         round * 2 + usize::from(self.turn == Player::Black)
     }
 
-    pub fn unvalidated(self) -> Position<Unvalidated> {
+    pub const fn unvalidated(self) -> Position<Unvalidated> {
         Position {
             board: self.board,
             turn: self.turn,

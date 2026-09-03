@@ -5,6 +5,7 @@ use core::{fmt, str::FromStr};
 use crate::{
     Role,
     position::{File, Rank, Square},
+    variant::{Chess, Supported},
 };
 
 use super::{StrInput as Input, prelude::*};
@@ -17,25 +18,35 @@ pub struct Move {
     pub promotion: Option<Role>,
 }
 
-impl From<crate::Move> for Move {
-    // TODO: This is only valid for standard chess.
-    // In Freestyle, castling is a move to the rook.
-    fn from(play: crate::Move) -> Self {
-        Self { from: play.from, to: play.to, promotion: play.promotes() }
-    }
-}
-
 impl crate::Move {
-    pub fn uci(self) -> Move {
-        self.into()
+    pub fn uci<V: Supported>(self) -> Move {
+        if V::is_freestyle() { self.uci_freestyle() } else { self.uci_chess() }
+    }
+
+    pub fn uci_chess(self) -> Move {
+        Move { from: self.from, to: self.to, promotion: self.promotes() }
+    }
+
+    pub fn uci_freestyle(self) -> Move {
+        let to = match self.castle_rook_file() {
+            Some(file) => Square::new(file, self.from.rank()),
+            None => self.to,
+        };
+        Move { from: self.from, to, promotion: self.promotes() }
     }
 }
 
 impl Move {
-    pub fn resolve(self, legal: &[crate::Move]) -> Option<crate::Move> {
-        legal.iter().copied().find(|play| {
-            play.from == self.from && play.to == self.to && play.promotes() == self.promotion
-        })
+    pub fn resolve<V: Supported>(self, legal: &[crate::Move]) -> Option<crate::Move> {
+        if V::is_freestyle() { self.resolve_freestyle(legal) } else { self.resolve_chess(legal) }
+    }
+
+    pub fn resolve_chess(self, legal: &[crate::Move]) -> Option<crate::Move> {
+        legal.iter().copied().find(|play| play.uci_chess() == self)
+    }
+
+    pub fn resolve_freestyle(self, legal: &[crate::Move]) -> Option<crate::Move> {
+        legal.iter().copied().find(|play| play.uci_freestyle() == self)
     }
 }
 
@@ -108,11 +119,15 @@ pub enum Bound {
 
 /// Parse a UCI move and resolve it against legal moves.
 pub fn parse_move(text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
+    parse_move_as::<Chess>(text, legal)
+}
+
+pub fn parse_move_as<V: Supported>(text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
     let mut input = text.trim();
     let play = uci_move(&mut input).ok()?;
     input.is_empty().then_some(())?;
 
-    play.resolve(legal)
+    play.resolve::<V>(legal)
 }
 
 pub fn uci_move(input: &mut Input<'_>) -> ModalResult<Move> {

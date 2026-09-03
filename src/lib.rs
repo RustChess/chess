@@ -26,5 +26,5 @@ pub mod moves;
 mod perft;
 pub mod position;
 #[doc(inline)]
-pub use position::{Board, Move, Piece, Player, Position, Role, Side, Square};
+pub use position::{Board, Move, Piece, Player, Position, Role, Scharnagl, Side, Square};
 pub mod variant;

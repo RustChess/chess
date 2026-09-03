@@ -304,8 +304,8 @@ impl Move {
 
         let Move { role, from, to, capture, kind } = *self;
 
-        if kind.is_castle() {
-            f.write_str(if from < to { SHORT_CASTLE } else { LONG_CASTLE })
+        if let Some(side) = self.castle_side() {
+            f.write_str(if side == Side::King { SHORT_CASTLE } else { LONG_CASTLE })
         } else {
             if role != Role::Pawn {
                 f.write_char(role.upper())?;
@@ -400,21 +400,26 @@ fn display_move() {
     let mut play = Move::promote(A2, H7, Queen);
 
     assert_eq!(play.to_string(), "a2-h7=Q");
-    assert_eq!(play.uci().to_string(), "a2h7q");
+    assert_eq!(play.uci_chess().to_string(), "a2h7q");
 
     play.role = King;
     assert_eq!(play.to_string(), "Ka2-h7=Q");
-    assert_eq!(play.uci().to_string(), "a2h7q");
+    assert_eq!(play.uci_chess().to_string(), "a2h7q");
 
     play = play.capturing(Bishop);
     assert_eq!(play.to_string(), "Ka2xh7=Q");
-    assert_eq!(play.uci().to_string(), "a2h7q");
+    assert_eq!(play.uci_chess().to_string(), "a2h7q");
 
     let play = Move::chess_castle(White, Side::King);
     assert_eq!(play.to_string(), algebraic::SHORT_CASTLE);
-    assert_eq!(play.uci().to_string(), "e1g1");
+    assert_eq!(play.uci_chess().to_string(), "e1g1");
 
     let play = Move::chess_castle(Black, Side::Queen);
     assert_eq!(play.to_string(), algebraic::LONG_CASTLE);
-    assert_eq!(play.uci().to_string(), "e8c8");
+    assert_eq!(play.uci_chess().to_string(), "e8c8");
+
+    let play = Move::castle(White, G1, File::F);
+    assert_eq!(play.to_string(), algebraic::LONG_CASTLE);
+    assert_eq!(play.uci_chess().to_string(), "g1c1");
+    assert_eq!(play.uci_freestyle().to_string(), "g1f1");
 }

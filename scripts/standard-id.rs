@@ -1,7 +1,7 @@
 #!/usr/bin/env rust-script
 //! ```cargo
 //! [dependencies]
-//! rustchess = { path = "..", features = ["empty-id"] }
+//! rustchess = { path = "..", features = ["const-fn-statics"] }
 //! ```
 
 use std::{

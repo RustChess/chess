@@ -1,6 +1,6 @@
 use core::{fmt, ops};
 
-use crate::{bitboard::Bitboard, finite_for};
+use crate::{Id, bitboard::Bitboard, finite_for};
 
 use super::{
     File, Move, Piece, Player, Players, Rank, Role, Roles, Scharnagl, Side, Special, Square,
@@ -25,6 +25,40 @@ pub struct Board {
 pub struct Placement {
     pub players: Players<Bitboard>,
     pub roles: Roles<Bitboard>,
+}
+
+#[cfg(feature = "const-fn-scharnagl-id")]
+// This allow turns the error into a warning, which cannot currently be suppressed.
+#[allow(long_running_const_eval)]
+// has to be ordered by ID itself
+pub static SCHARNAGL_BY_ID: [(Id, Scharnagl); 960] = generate_scharnagl_by_id();
+#[cfg(not(feature = "const-fn-scharnagl-id"))]
+include!("scharnagl-id.rs");
+
+#[cfg(feature = "const-fn-scharnagl-id")]
+const fn generate_scharnagl_by_id() -> [(Id, Scharnagl); 960] {
+    let mut table = [(Id(0), Scharnagl(0)); 960];
+
+    let mut i = 0;
+    // binary insertion sort
+    while i < 960 {
+        let scharnagl = Scharnagl(i as u16);
+        let entry = (Board::freestyle(scharnagl).standard_id(), scharnagl);
+
+        let mut j = i;
+        while j > 0 && entry.0.0 < table[j - 1].0.0 {
+            table[j] = table[j - 1];
+            j -= 1;
+        }
+        table[j] = entry;
+        i += 1;
+    }
+
+    table
+}
+
+pub fn scharnagl_by_id(id: Id) -> Option<Scharnagl> {
+    SCHARNAGL_BY_ID.binary_search_by_key(&id, |(id, _)| *id).ok().map(|i| SCHARNAGL_BY_ID[i].1)
 }
 
 impl fmt::Debug for Board {

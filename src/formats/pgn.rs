@@ -2,15 +2,20 @@
 
 use std::{fmt, str};
 
+use winnow::Parser as _;
+
 use crate::{
     game::{Command, Nag, Outcome, Slot, Tag as OtherTag, Text},
-    position::{Position, SupportedEnum, Unvalidated},
+    position::{Position, Scharnagl, SupportedEnum, Unvalidated},
 };
 
-use super::{StrInput as Input, fen, prelude::*, san};
+use super::san;
 
 pub mod convert;
+pub mod parse;
 pub mod stream;
+
+pub use parse::game;
 
 // https://www.chessprogramming.org/Portable_Game_Notation
 // https://www.saremba.de/chessgml/standards/pgn/pgn-complete.htm
@@ -45,31 +50,29 @@ pub enum Tag {
     Fen(Position<Unvalidated>),
     SetUp(bool),
     Variant(String),
+    Chess960Id(Scharnagl),
     Other(OtherTag),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("PGN error at line {line}, column {column}: {message}")]
-pub struct Error {
-    pub line: usize,
-    pub column: usize,
-    pub message: String,
+impl Tag {
+    pub fn freestyle() -> Self {
+        Tag::Variant("Chess960".to_string())
+    }
+
+    pub fn variant(&self) -> Option<&str> {
+        if let Tag::Variant(value) = self { Some(value) } else { None }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Parse(#[from] parse::Error),
+    #[error(transparent)]
+    Convert(#[from] convert::Error),
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-
-pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
-    delimited(multispace0, (tags, comments, repeat(0.., parse_move), outcome), multispace0)
-        .map(|(tags, intro, moves, outcome)| Game {
-            start: start_position(&tags),
-            tags,
-            intro,
-            moves,
-            outcome,
-        })
-        .context(StrContext::Label("PGN game"))
-        .parse_next(input)
-}
 
 impl fmt::Display for Game {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -92,7 +95,7 @@ impl str::FromStr for Game {
     type Err = Error;
 
     fn from_str(text: &str) -> Result<Self> {
-        game.parse(text).map_err(|error| Error::from(text, 1, error))
+        parse::game.parse(text).map_err(|error| parse::Error::from(text, 1, error).into())
     }
 }
 
@@ -120,36 +123,6 @@ pub enum Annotation {
     Command(Command),
 }
 
-impl Error {
-    fn from(
-        text: &str,
-        first_line: usize,
-        error: winnow::error::ParseError<Input<'_>, ContextError>,
-    ) -> Self {
-        let (line, column) = line_column(text, first_line, error.offset());
-        Self { line, column, message: format!("{:?}", error.inner()) }
-    }
-}
-
-fn line_column(input: &str, first_line: usize, offset: usize) -> (usize, usize) {
-    let mut line = first_line;
-    let mut column = 1;
-
-    for (index, char) in input.char_indices() {
-        if index >= offset {
-            break;
-        }
-        if char == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
-}
-
 impl Game {
     pub fn movetext(&self) -> String {
         self.write_movetext(Notation::San)
@@ -170,37 +143,41 @@ impl Game {
         movetext
     }
 
-    pub fn freestyle(&self) -> Result<bool, String> {
-        let freestyle = match self.tag_variant()? {
-            SupportedEnum::Chess => !self.start.castles().chess_compatible(),
-            SupportedEnum::Freestyle => true,
-        };
-
-        Ok(freestyle)
-    }
-
-    pub fn tag_variant(&self) -> Result<SupportedEnum, String> {
-        let mut variant = SupportedEnum::Chess;
-        for tag in &self.tags {
-            if let Tag::Variant(value) = tag {
-                variant = SupportedEnum::from_tag(value)?;
-            }
+    pub fn supported(&self) -> Result<SupportedEnum, String> {
+        for tag in self.tags.iter().rev() {
+            let Some(variant) = tag.variant() else { continue };
+            let supported = SupportedEnum::from_tag(variant)?;
+            return Ok(supported);
         }
-        Ok(variant)
-    }
-}
 
-fn strip_tags(mut input: &str) -> &str {
-    loop {
-        let before = input;
-        if tag.parse_next(&mut input).is_err() {
-            return before;
+        // Possible alternative:
+        // - last SUPPORTED variant tag wins
+        // - else last UNSUPPORTED variant tag errors
+        // - else sniff board
+
+        // let variants = || self.tags.iter().filter_map(Tag::variant);
+        // let from_tag = SupportedEnum::from_tag;
+
+        // let supported = |variant| from_tag(variant).ok();
+        // let unsupported = |variant| from_tag(variant).is_err().then_some(variant);
+
+        // // If there are supported tags, use the last one.
+        // if let Some(supported) = variants().filter_map(supported).next_back() {
+        //     return Ok(supported);
+        // }
+
+        // // If there are unsupported tags, use the last one.
+        // if let Some(unsupported) = variants().filter_map(unsupported).next_back() {
+        //     return Err(unsupported.to_string());
+        // }
+
+        // No variant tags: look at the board for compatibility.
+        if self.start.castles().chess_compatible() {
+            Ok(SupportedEnum::Chess)
+        } else {
+            Ok(SupportedEnum::Freestyle)
         }
     }
-}
-
-fn tag_start_ok(mut input: &str) -> bool {
-    tag.parse_next(&mut input).is_ok()
 }
 
 impl fmt::Display for Tag {
@@ -216,6 +193,7 @@ impl fmt::Display for Tag {
             Tag::Fen(position) => write_tag(f, "FEN", &position.fen()),
             Tag::SetUp(setup) => write_tag(f, "SetUp", if *setup { "1" } else { "0" }),
             Tag::Variant(variant) => write_tag(f, "Variant", variant),
+            Tag::Chess960Id(id) => write_tag(f, "Chess960Id", &id.to_string()),
             Tag::Other(tag) => write_tag(f, tag.key.as_ref(), &tag.value),
         }
     }
@@ -476,262 +454,6 @@ impl Move {
     }
 }
 
-pub fn tags(input: &mut Input<'_>) -> ModalResult<Vec<Tag>> {
-    repeat(0.., tag).parse_next(input)
-}
-
-pub fn tag(input: &mut Input<'_>) -> ModalResult<Tag> {
-    delimited(
-        multispace0,
-        delimited(
-            ('[', multispace0),
-            separated_pair(name, multispace1, tag_value),
-            (multispace0, ']'),
-        ),
-        multispace0,
-    )
-    .verify_map(|(key, value)| tag_from_pair(key, value))
-    .context(StrContext::Label("PGN tag pair"))
-    .parse_next(input)
-}
-
-fn parse_move(input: &mut Input<'_>) -> ModalResult<Move> {
-    preceded(
-        (multispace0, opt(skip_move_number), multispace0),
-        (san::san.context(StrContext::Label("PGN move")), tail, variations).map(
-            |(san, (comment, annotations), variations)| Move {
-                san,
-                comment,
-                annotations,
-                variations,
-            },
-        ),
-    )
-    .parse_next(input)
-}
-
-fn variations(input: &mut Input<'_>) -> ModalResult<Vec<Variation>> {
-    repeat(0.., preceded(multispace0, variation)).parse_next(input)
-}
-
-// ({intro} 1... c5 {move comment}) {outro}
-fn variation(input: &mut Input<'_>) -> ModalResult<Variation> {
-    let mut variation = delimited(
-        ('(', multispace0),
-        seq! {Variation {
-            intro: comments,
-            moves: repeat(0.., parse_move),
-            outro: ().value(None),
-        }},
-        (multispace0, ')'),
-    )
-    .context(StrContext::Label("PGN variation"))
-    .parse_next(input)?;
-    variation.outro = comments(input)?;
-    Ok(variation)
-}
-
-fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Comment>, Vec<Annotation>)> {
-    repeat(0.., preceded(multispace0, tail_item))
-        .fold(
-            || (None, Vec::new()),
-            |(mut comment, mut annotations), item| {
-                match item {
-                    Tail::Comment(MoveComment { commands, text }) => {
-                        annotations.extend(commands.into_iter().map(Annotation::Command));
-                        if let Some(text) = text {
-                            merge_comments(&mut comment, text);
-                        }
-                    }
-                    Tail::Annotation(annotation) => annotations.push(annotation),
-                }
-                (comment, annotations)
-            },
-        )
-        .parse_next(input)
-}
-
-enum Tail {
-    Comment(MoveComment),
-    Annotation(Annotation),
-}
-
-fn tail_item(input: &mut Input<'_>) -> ModalResult<Tail> {
-    alt((
-        move_comment.map(Tail::Comment),
-        numeric_nag.map(Annotation::Nag).map(Tail::Annotation),
-        symbol_nag.map(Annotation::Nag).map(Tail::Annotation),
-    ))
-    .parse_next(input)
-}
-
-fn comments(input: &mut Input<'_>) -> ModalResult<Option<Comment>> {
-    repeat(0.., preceded(multispace0, comment))
-        .fold(
-            || None,
-            |mut comments, comment| {
-                if let Some(comment) = comment {
-                    merge_comments(&mut comments, comment);
-                }
-                comments
-            },
-        )
-        .parse_next(input)
-}
-
-// skip because it parses a valid 1. or 2... etc., but doesn't return it.
-fn skip_move_number(input: &mut Input<'_>) -> ModalResult<()> {
-    (dec_uint::<_, u32, _>, alt(("...", "."))).value(()).parse_next(input)
-}
-
-fn tag_from_pair(key: Text, value: String) -> Option<Tag> {
-    Some(match key.as_ref() {
-        "Event" => Tag::Event(value),
-        "Site" => Tag::Site(value),
-        "Date" => Tag::Date(value),
-        "Round" => Tag::Round(value),
-        "White" => Tag::White(value),
-        "Black" => Tag::Black(value),
-        "Result" => Tag::Outcome(outcome.parse(value.as_str()).ok()?),
-        "FEN" => Tag::Fen(fen::parse_position.parse(value.as_str()).ok()?),
-        "SetUp" => Tag::SetUp(match value.as_str() {
-            "0" => false,
-            "1" => true,
-            _ => return None,
-        }),
-        "Variant" => Tag::Variant(value),
-        _ => Tag::Other(OtherTag { key, value }),
-    })
-}
-
-fn tag_value(input: &mut Input<'_>) -> ModalResult<String> {
-    delimited(
-        '"',
-        repeat(0.., tag_value_char).fold(String::new, |mut value, c| {
-            value.push(c);
-            value
-        }),
-        '"',
-    )
-    .parse_next(input)
-}
-
-fn tag_value_char(input: &mut Input<'_>) -> ModalResult<char> {
-    alt((preceded('\\', any), none_of(['"', '\\']))).parse_next(input)
-}
-
-fn name(input: &mut Input<'_>) -> ModalResult<Text> {
-    take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
-        .verify_map(Text::new)
-        .parse_next(input)
-}
-
-fn numeric_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
-    preceded('$', dec_uint).map(Nag::Numeric).parse_next(input)
-}
-
-fn symbol_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
-    alt(("!!", "!?", "?!", "??", "!", "?"))
-        .map(|nag: &str| Nag::Symbol(nag.to_string()))
-        .parse_next(input)
-}
-
-fn comment(input: &mut Input<'_>) -> ModalResult<Option<Comment>> {
-    alt((bracket_comment, semicolon_comment))
-        .map(|comment| Text::new(comment).map(Comment))
-        .context(StrContext::Label("PGN comment"))
-        .parse_next(input)
-}
-
-fn move_comment(input: &mut Input<'_>) -> ModalResult<MoveComment> {
-    alt((bracket_comment, semicolon_comment))
-        .map(split_comment)
-        .context(StrContext::Label("PGN comment"))
-        .parse_next(input)
-}
-
-fn bracket_comment(input: &mut Input<'_>) -> ModalResult<String> {
-    preceded('{', terminated(take_till(0.., '}'), '}')).map(ToString::to_string).parse_next(input)
-}
-
-fn semicolon_comment(input: &mut Input<'_>) -> ModalResult<String> {
-    preceded(';', take_till(0.., '\n')).map(ToString::to_string).parse_next(input)
-}
-
-fn split_comment(raw: String) -> MoveComment {
-    let mut commands = Vec::new();
-    let mut comment = String::new();
-    let mut rest: Input<'_> = raw.as_str();
-
-    while let Some(start) = rest.find("[%") {
-        comment.push_str(&rest[..start]);
-        rest = &rest[start..];
-
-        let mut candidate: Input<'_> = rest;
-        if let Ok(command) = command.parse_next(&mut candidate) {
-            commands.push(command);
-            rest = candidate;
-        } else {
-            if let Some((invalid_command, next)) = rest.split_once(']') {
-                comment.push_str(invalid_command);
-                comment.push(']');
-                rest = next;
-            } else {
-                comment.push_str(rest);
-                rest = "";
-            }
-        }
-    }
-
-    comment.push_str(rest);
-    MoveComment { commands, text: Text::new(comment).map(Comment) }
-}
-
-fn command(input: &mut Input<'_>) -> ModalResult<Command> {
-    delimited("[%", (name, opt(preceded(space1, parameters))), (space0, ']'))
-        .map(|(command, parameters): (Text, Option<Vec<String>>)| Command {
-            command,
-            parameters: parameters.unwrap_or_default(),
-        })
-        .parse_next(input)
-}
-
-fn parameters(input: &mut Input<'_>) -> ModalResult<Vec<String>> {
-    separated(0.., parameter, ',').parse_next(input)
-}
-
-fn parameter(input: &mut Input<'_>) -> ModalResult<String> {
-    alt((quoted_parameter, unquoted_parameter)).parse_next(input)
-}
-
-fn quoted_parameter(input: &mut Input<'_>) -> ModalResult<String> {
-    // Command parameters are a loose extension. Escaped quotes are not handled here, and
-    // `.take()` keeps the surrounding quotes so display can write the raw parameter back.
-    delimited('"', take_till(0.., '"'), '"').take().map(ToString::to_string).parse_next(input)
-}
-
-fn unquoted_parameter(input: &mut Input<'_>) -> ModalResult<String> {
-    take_till(1.., [',', ']']).map(|parameter: &str| parameter.trim().to_string()).parse_next(input)
-}
-
-fn merge_comments(into: &mut Option<Comment>, comment: Comment) {
-    match into {
-        Some(into) => into.merge(&comment),
-        None => *into = Some(comment),
-    }
-}
-
-fn outcome(input: &mut Input<'_>) -> ModalResult<Outcome> {
-    use Outcome::*;
-
-    preceded(
-        multispace0,
-        alt(("1/2-1/2".value(Draw), "1-0".value(White), "0-1".value(Black), "*".value(Unknown))),
-    )
-    .context(StrContext::Label("PGN outcome"))
-    .parse_next(input)
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -811,7 +533,7 @@ mod tests {
 "#,
             )
             .unwrap();
-        let game = crate::Game::try_from(pgn).unwrap();
+        let game = Chess::from_pgn(pgn).unwrap();
 
         assert_eq!(game.roster.event, Some(text("x")));
         assert_eq!(game.tags.len(), 0);
@@ -843,7 +565,7 @@ mod tests {
 "#,
             )
             .unwrap();
-        let game = crate::Game::try_from(pgn).unwrap();
+        let game = Chess::from_pgn(pgn).unwrap();
 
         let options = game.start_options();
         let e4 = options.first().unwrap();
@@ -875,8 +597,7 @@ mod tests {
         let pgn = game.parse(pgn).unwrap();
 
         assert_eq!(pgn.tags, vec![Tag::Variant("Fischer Random".to_string())]);
-        assert_eq!(pgn.tag_variant().unwrap(), SupportedEnum::Freestyle);
-        assert!(pgn.freestyle().unwrap());
+        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Freestyle);
         assert!(pgn.to_string().contains("[Variant \"Fischer Random\"]"));
     }
 
@@ -889,31 +610,50 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.tag_variant().unwrap(), SupportedEnum::Chess);
-        assert!(!pgn.freestyle().unwrap());
+        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Chess);
     }
 
     #[test]
-    fn variant_rejects_unsupported_tags() {
+    fn last_variant_tag_wins() {
+        let pgn = r#"
+            [Variant "Antichess"]
+            [Variant "Chess960"]
+            *
+        "#;
+        let pgn = game.parse(pgn).unwrap();
+
+        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Freestyle);
+
+        let pgn = r#"
+            [Variant "Chess960"]
+            [Variant "Antichess"]
+            *
+        "#;
+        let pgn = game.parse(pgn).unwrap();
+
+        assert_eq!(pgn.supported().unwrap_err(), "Antichess");
+    }
+
+    #[test]
+    fn supported_rejects_unsupported_tags() {
         let pgn = r#"
             [Variant "Antichess"]
             *
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.tag_variant().unwrap_err(), "Antichess");
-        assert_eq!(pgn.freestyle().unwrap_err(), "Antichess");
+        assert_eq!(pgn.supported().unwrap_err(), "Antichess");
     }
 
     #[test]
-    fn freestyle_falls_back_to_position_castling() {
+    fn supported_falls_back_to_position_castling() {
         let fen = r#"
             [FEN "8/8/8/8/8/8/8/8 w - - 0 1"]
             *
         "#;
         let pgn = game.parse(fen).unwrap();
 
-        assert!(!pgn.freestyle().unwrap());
+        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Chess);
 
         let fen = r#"
             [FEN "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9"]
@@ -921,7 +661,48 @@ mod tests {
         "#;
         let pgn = game.parse(fen).unwrap();
 
-        assert!(pgn.freestyle().unwrap());
+        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Freestyle);
+    }
+
+    #[test]
+    fn converts_to_variant_game() {
+        let pgn = game.parse(r#"[Event "x"] 1. e4 *"#).unwrap();
+        let variant_game = crate::variant::Game::try_from(pgn).unwrap();
+        assert!(variant_game.is_chess());
+
+        let pgn = game
+            .parse(
+                r#"[Variant "Chess960"]
+[FEN "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9"]
+9. e4 *"#,
+            )
+            .unwrap();
+        let game = crate::variant::Game::try_from(pgn).unwrap();
+        assert!(game.is_freestyle());
+    }
+
+    #[test]
+    fn unsupported_variant_downgrades_to_unvalidated_game() {
+        let pgn = game.parse(r#"[Variant "Antichess"] *"#).unwrap();
+        let game = crate::variant::Game::try_from(pgn).unwrap();
+
+        assert!(game.is_unvalidated());
+        assert!(
+            matches!(game.error(), Some(convert::Downgrade::Variant(variant)) if variant == "Antichess")
+        );
+    }
+
+    #[test]
+    fn invalid_start_downgrades_to_unvalidated_game() {
+        let pgn =
+            game.parse(r#"[Variant "Standard"] [FEN "4k3/8/8/8/8/8/8/4K2P w - - 0 1"] *"#).unwrap();
+        let game = crate::variant::Game::try_from(pgn).unwrap();
+
+        assert!(game.is_unvalidated());
+        assert!(matches!(
+            game.error(),
+            Some(convert::Downgrade::Start { variant: Some(SupportedEnum::Chess), .. })
+        ));
     }
 
     #[test]
@@ -983,6 +764,7 @@ mod tests {
 
         assert!(pgn.to_string().contains("[Variant \"Chess960\"]"), "{}", pgn);
         assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
+        assert!(pgn.to_string().contains("[Chess960Id \"518\"]"), "{}", pgn);
         assert!(
             pgn.to_string()
                 .contains("[FEN \"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w HAha - 0 1\"]"),
@@ -1007,7 +789,8 @@ mod tests {
         }
 
         let pgn = Game::from(game);
-        let roundtrip = Game::from(crate::Game::try_from(pgn.clone()).unwrap());
+        let game = Chess::from_pgn(pgn.clone()).unwrap();
+        let roundtrip = Game::from(game);
 
         assert_eq!(roundtrip, pgn);
     }

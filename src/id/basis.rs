@@ -2,18 +2,16 @@ use crate::{finite::Empty as _, finite_for, position::*};
 
 use super::{Id, fold};
 
-#[cfg(feature = "empty-id")]
-pub const STANDARD: Basis = Basis::empty();
-#[cfg(all(not(feature = "empty-id"), feature = "const-fn-standard-id"))]
+#[cfg(feature = "const-fn-standard-id")]
 // This allow turns the error into a warning, which cannot currently be suppressed.
 #[allow(long_running_const_eval)]
 pub const STANDARD: Basis = Basis::generate_standard();
-#[cfg(all(not(feature = "empty-id"), not(feature = "const-fn-standard-id")))]
+#[cfg(not(feature = "const-fn-standard-id"))]
 include!("standard.rs");
 
-#[cfg(feature = "empty-id")]
+#[cfg(feature = "const-fn-polyglot-id")]
 pub const POLYGLOT: Basis = Basis::empty();
-#[cfg(not(feature = "empty-id"))]
+#[cfg(not(feature = "const-fn-polyglot-id"))]
 include!("polyglot.rs");
 
 type BoardTable<T> = SquareTable<PlayerTable<RoleTable<T>>>;
