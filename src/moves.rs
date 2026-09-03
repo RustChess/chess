@@ -2,7 +2,7 @@ use core::ops;
 
 use crate::{
     bitboard::{Bitboard, Direction},
-    position::{Board, EnPassant, Move, Moves, Piece, Player, Position, Rank, Role, Side, Square},
+    position::{Board, EnPassant, Move, Piece, Player, Position, Rank, Role, Side, Square},
     variant::Variant,
 };
 
@@ -11,6 +11,8 @@ use crate::{
 // #[allow(long_running_const_eval)]
 // static SLIDER_SIGHTS: SliderSights = SliderSights::volker_annuss();
 include!("slider_sights.rs");
+
+type Moves = Vec<Move>;
 
 // move generation
 impl<V: Variant> Position<V> {

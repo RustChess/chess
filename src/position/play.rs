@@ -16,8 +16,6 @@ pub struct Move {
     pub capture: Option<Role>,
 }
 
-pub type Moves = Vec<Move>;
-
 /// What kind of move is it?
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -160,8 +158,8 @@ impl Move {
         Move { role: Role::Pawn, from, to, capture, kind: Kind::Special(Special::Promote(role)) }
     }
 
-    pub fn pawn(player: Player, from: Square, to: Square, capture: Option<Role>) -> Moves {
-        let mut moves = Moves::new();
+    pub fn pawn(player: Player, from: Square, to: Square, capture: Option<Role>) -> Vec<Move> {
+        let mut moves = Vec::new();
 
         if to.rank() as u8 == player.promotion_rank() as u8 {
             for role in [Role::Queen, Role::Rook, Role::Bishop, Role::Knight] {

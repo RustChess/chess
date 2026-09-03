@@ -311,15 +311,15 @@ impl<V> Position<V> {
 }
 
 impl<V: Variant> Position<V> {
-    pub fn capture_moves(&self) -> Moves {
+    pub fn capture_moves(&self) -> Vec<Move> {
         self.legal_moves().into_iter().filter(|m| m.is_capture()).collect()
     }
 
-    pub fn castle_side_moves(&self, side: Side) -> Moves {
+    pub fn castle_side_moves(&self, side: Side) -> Vec<Move> {
         self.legal_moves().into_iter().filter(|m| m.is_castle_side(side)).collect()
     }
 
-    pub fn castle_moves(&self) -> Moves {
+    pub fn castle_moves(&self) -> Vec<Move> {
         self.legal_moves().into_iter().filter(|m| m.is_castle()).collect()
     }
 }

@@ -1,14 +1,16 @@
 use std::collections::BTreeMap as Map;
 
+use crate::position::Chess;
+
 use super::Play;
 
 /// A local index into the game's slot map, which actually stores the moves of the game.
 pub type Slot = u32;
 
-#[derive(Clone, Default, PartialEq)]
-pub struct Tree {
+#[derive(Clone, PartialEq)]
+pub struct Tree<Variant = Chess> {
     next: Slot,
-    slots: Map<Slot, Play>,
+    slots: Map<Slot, Play<Variant>>,
     start: Vec<Slot>,
 }
 
@@ -20,16 +22,26 @@ pub enum Node {
     Play(Slot),
 }
 
-impl Tree {
+impl<V> Default for Tree<V> {
+    fn default() -> Self {
+        Tree::new()
+    }
+}
+
+impl<V> Tree<V> {
+    pub const fn new() -> Self {
+        Self { next: 0, slots: Map::new(), start: Vec::new() }
+    }
+
     pub fn contains(&self, slot: Slot) -> bool {
         self.slots.contains_key(&slot)
     }
 
-    pub fn play(&self, slot: Slot) -> Option<&Play> {
+    pub fn play(&self, slot: Slot) -> Option<&Play<V>> {
         self.slots.get(&slot)
     }
 
-    pub(super) fn play_mut(&mut self, slot: Slot) -> Option<&mut Play> {
+    pub(super) fn play_mut(&mut self, slot: Slot) -> Option<&mut Play<V>> {
         self.slots.get_mut(&slot)
     }
 
@@ -37,13 +49,13 @@ impl Tree {
         self.slots.keys().copied()
     }
 
-    pub fn plays(&self) -> impl Iterator<Item = &Play> {
+    pub fn plays(&self) -> impl Iterator<Item = &Play<V>> {
         self.slots.values()
     }
 
     // unused for now, added for consistency
     #[allow(dead_code)]
-    pub(super) fn plays_mut(&mut self) -> impl Iterator<Item = &mut Play> {
+    pub(super) fn plays_mut(&mut self) -> impl Iterator<Item = &mut Play<V>> {
         self.slots.values_mut()
     }
 
@@ -70,14 +82,14 @@ impl Tree {
     }
 
     // Non-public, Game controls play coherence and legality.
-    pub(super) fn insert(&mut self, f: impl FnOnce(Slot) -> Play) -> Play {
+    pub(super) fn insert(&mut self, f: impl FnOnce(Slot) -> Play<V>) -> Slot {
         let slot = self.next;
         self.next += 1;
 
         let play = f(slot);
         debug_assert_eq!(slot, play.slot);
-        self.slots.insert(slot, play.clone());
-        play
+        self.slots.insert(slot, play);
+        slot
     }
 
     // Could plausibly be public, but would have to return bool to

@@ -76,6 +76,8 @@ const fn split(hash: U256) -> (u128, u128) {
 }
 
 impl Game {
+    // TODO: Make this variant-aware before `Game<Freestyle>` uses it.
+    // The current hash uses standard UCI formatting for moves.
     // Experimental: A globally unique ID for all games
     pub fn id(&self) -> Id {
         use crate::game::cursor::Mainline;

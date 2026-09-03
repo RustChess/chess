@@ -6,7 +6,8 @@ use std::{
 use crate::{
     Move, Position,
     formats::san::Check,
-    position::{File, Moves, Rank},
+    position::{Chess, File, Rank},
+    variant::Variant,
 };
 
 pub mod cursor;
@@ -31,18 +32,18 @@ pub enum Error {
 
 /// A game of chess, including variations and annotations.
 #[derive(Clone, PartialEq)]
-pub struct Game {
+pub struct Game<Variant = Chess> {
     pub roster: Roster,
     pub tags: Vec<Tag>,
     pub intro: Option<Text>,
     pub outcome: Outcome,
     /// State before any options are played.
-    start: State,
-    tree: Tree,
+    start: State<Variant>,
+    tree: Tree<Variant>,
 }
 
 #[derive(Clone, PartialEq)]
-pub struct Play {
+pub struct Play<Variant = Chess> {
     slot: Slot,
     previous: Node,
     pub meta: Meta,
@@ -50,61 +51,29 @@ pub struct Play {
     play: Move,
     short: Short,
     /// State after playing this move, before any options are played.
-    state: State,
+    state: State<Variant>,
     /// Options to play after this position.
     options: Vec<Slot>,
 }
 
 #[derive(Clone, PartialEq)]
-pub struct State {
-    position: Position,
-    legal: Moves,
+pub struct State<Variant = Chess> {
+    position: Position<Variant>,
+    legal: Vec<Move>,
     check: Option<Check>,
 }
 
-impl Game {
-    pub fn new(position: Position) -> Self {
-        let legal = position.legal_moves();
-        Self {
-            roster: Default::default(),
-            tags: Default::default(),
-            intro: None,
-            outcome: Default::default(),
-            start: State { position, legal, check: None },
-            tree: Default::default(),
-        }
-    }
-
-    pub fn start(&self) -> Position {
-        self.start.position()
-    }
-
-    pub fn start_options(&self) -> OptionsRef<'_> {
+impl<V> Game<V> {
+    pub fn start_options(&self) -> OptionsRef<'_, V> {
         self.options_ref(Node::Start)
     }
 
-    pub fn start_options_mut(&mut self) -> OptionsMut<'_> {
-        OptionsMut { game: self, node: Node::Start }
-    }
-
-    pub fn play(&self, slot: Slot) -> Option<PlayRef<'_>> {
+    pub fn play(&self, slot: Slot) -> Option<PlayRef<'_, V>> {
         self.tree.contains(slot).then_some(PlayRef { game: self, slot })
     }
 
-    pub fn play_mut(&mut self, slot: Slot) -> Option<PlayMut<'_>> {
+    pub fn play_mut(&mut self, slot: Slot) -> Option<PlayMut<'_, V>> {
         self.tree.contains(slot).then_some(PlayMut { game: self, slot })
-    }
-
-    pub fn cursor(self) -> Cursor {
-        Cursor::new(self)
-    }
-
-    pub fn options(&self, node: Node) -> Option<OptionsRef<'_>> {
-        if self.contains(node) { Some(self.options_ref(node)) } else { None }
-    }
-
-    pub fn options_mut(&mut self, node: Node) -> Option<OptionsMut<'_>> {
-        if self.contains(node) { Some(OptionsMut { game: self, node }) } else { None }
     }
 
     fn contains(&self, node: Node) -> bool {
@@ -114,14 +83,65 @@ impl Game {
         }
     }
 
-    fn options_ref(&self, node: Node) -> OptionsRef<'_> {
+    fn options_ref(&self, node: Node) -> OptionsRef<'_, V> {
         let options = self.tree.options(node);
         OptionsRef { game: self, node, options }
     }
 
+    fn state(&self, node: Node) -> &State<V> {
+        match node {
+            Node::Start => &self.start,
+            Node::Play(slot) => &self.tree.play(slot).expect("slot exists").state,
+        }
+    }
+
+    fn delete_slot(&mut self, slot: Slot) {
+        self.tree.remove(slot);
+    }
+}
+
+impl<V: Copy> Game<V> {
+    pub fn start(&self) -> Position<V> {
+        self.start.position()
+    }
+
+    fn position(&self, node: Node) -> Position<V> {
+        self.state(node).position()
+    }
+}
+
+impl<V: Variant> Game<V> {
+    pub fn new(position: Position<V>) -> Self {
+        let legal = position.legal_moves();
+        Self {
+            roster: Default::default(),
+            tags: Default::default(),
+            intro: None,
+            outcome: Default::default(),
+            start: State { position, legal, check: None },
+            tree: Tree::new(),
+        }
+    }
+
+    pub fn start_options_mut(&mut self) -> OptionsMut<'_, V> {
+        OptionsMut { game: self, node: Node::Start }
+    }
+
+    pub fn cursor(self) -> Cursor<V> {
+        Cursor::new(self)
+    }
+
+    pub fn options(&self, node: Node) -> Option<OptionsRef<'_, V>> {
+        if self.contains(node) { Some(self.options_ref(node)) } else { None }
+    }
+
+    pub fn options_mut(&mut self, node: Node) -> Option<OptionsMut<'_, V>> {
+        if self.contains(node) { Some(OptionsMut { game: self, node }) } else { None }
+    }
+
     // Responsible for validating the move, calculating derived state, assigning
     // a slot, and storing the play. It does not attach the play to the options of the node yet.
-    fn create_play(&mut self, node: Node, play: Move) -> Result<Play, Error> {
+    fn create_play(&mut self, node: Node, play: Move) -> Result<Slot, Error> {
         // avoid move generation
         if let Some(index) = self.options_ref(node).index(play) {
             return Err(Error::Duplicate(index));
@@ -151,7 +171,7 @@ impl Game {
         };
         let short = Short::new(state.legal(), play);
 
-        let play = self.tree.insert(|slot| Play {
+        let slot = self.tree.insert(|slot| Play {
             slot,
             previous: node,
             meta: Default::default(),
@@ -161,26 +181,11 @@ impl Game {
             options: Default::default(),
         });
 
-        Ok(play)
-    }
-
-    fn position(&self, node: Node) -> Position {
-        self.state(node).position()
-    }
-
-    fn state(&self, node: Node) -> &State {
-        match node {
-            Node::Start => &self.start,
-            Node::Play(slot) => &self.tree.play(slot).expect("slot exists").state,
-        }
-    }
-
-    fn delete_slot(&mut self, slot: Slot) {
-        self.tree.remove(slot);
+        Ok(slot)
     }
 }
 
-impl Play {
+impl<V> Play<V> {
     pub fn slot(&self) -> Slot {
         self.slot
     }
@@ -201,21 +206,18 @@ impl Play {
         self.state.check()
     }
 
-    pub fn position(&self) -> Position {
-        self.state.position()
-    }
-
     pub fn legal(&self) -> &[Move] {
         self.state.legal()
     }
 }
 
-impl State {
-    #[inline]
-    pub fn position(&self) -> Position {
-        self.position
+impl<V: Copy> Play<V> {
+    pub fn position(&self) -> Position<V> {
+        self.state.position()
     }
+}
 
+impl<V> State<V> {
     #[inline]
     pub fn legal(&self) -> &[Move] {
         &self.legal
@@ -224,6 +226,13 @@ impl State {
     #[inline]
     pub fn check(&self) -> Option<Check> {
         self.check
+    }
+}
+
+impl<V: Copy> State<V> {
+    #[inline]
+    pub fn position(&self) -> Position<V> {
+        self.position
     }
 }
 
@@ -399,71 +408,67 @@ pub enum Nag {
     Symbol(String),
 }
 
-pub struct PlayRef<'a> {
-    game: &'a Game,
+pub struct PlayRef<'a, Variant = Chess> {
+    game: &'a Game<Variant>,
     slot: Slot,
 }
 
-impl Deref for PlayRef<'_> {
-    type Target = Play;
+impl<V> Deref for PlayRef<'_, V> {
+    type Target = Play<V>;
 
-    fn deref(&self) -> &Play {
+    fn deref(&self) -> &Play<V> {
         self.game.tree.play(self.slot).expect("valid play")
     }
 }
 
-impl<'a> PlayRef<'a> {
-    pub fn options(&self) -> OptionsRef<'a> {
+impl<'a, V> PlayRef<'a, V> {
+    pub fn options(&self) -> OptionsRef<'a, V> {
         self.game.options_ref(Node::Play(self.slot))
     }
 }
 
-pub struct PlayMut<'a> {
-    game: &'a mut Game,
+pub struct PlayMut<'a, Variant = Chess> {
+    game: &'a mut Game<Variant>,
     slot: Slot,
 }
 
-impl Deref for PlayMut<'_> {
-    type Target = Play;
+impl<V> Deref for PlayMut<'_, V> {
+    type Target = Play<V>;
 
-    fn deref(&self) -> &Play {
+    fn deref(&self) -> &Play<V> {
         self.game.tree.play(self.slot).expect("valid play")
     }
 }
 
-impl DerefMut for PlayMut<'_> {
-    fn deref_mut(&mut self) -> &mut Play {
+impl<V> DerefMut for PlayMut<'_, V> {
+    fn deref_mut(&mut self) -> &mut Play<V> {
         self.game.tree.play_mut(self.slot).expect("valid play")
     }
 }
 
-impl PlayMut<'_> {
-    pub fn options(&self) -> OptionsRef<'_> {
+impl<V> PlayMut<'_, V> {
+    pub fn options(&self) -> OptionsRef<'_, V> {
         self.game.options_ref(Node::Play(self.slot))
     }
 
-    pub fn options_mut(&mut self) -> OptionsMut<'_> {
+    pub fn options_mut(&mut self) -> OptionsMut<'_, V> {
         OptionsMut { game: self.game, node: Node::Play(self.slot) }
     }
 }
 
 /// Read-only iterator over the options of a `Node`.
 #[derive(Clone, Copy)]
-pub struct OptionsRef<'a> {
-    game: &'a Game,
+pub struct OptionsRef<'a, Variant = Chess> {
+    game: &'a Game<Variant>,
     node: Node,
     options: &'a [Slot],
 }
 
 // The Options Traversal API
-impl<'a> OptionsRef<'a> {
-    fn get(&self, index: usize) -> Option<PlayRef<'a>> {
+impl<'a, V> OptionsRef<'a, V> {
+    fn get(&self, index: usize) -> Option<PlayRef<'a, V>> {
         let slot = self.options.get(index)?;
         Some(PlayRef { game: self.game, slot: *slot })
-    }
-
-    fn index(&self, play: Move) -> Option<usize> {
-        self.iter().position(|option| option.play == play)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -474,15 +479,7 @@ impl<'a> OptionsRef<'a> {
         self.options.len()
     }
 
-    pub fn contains(&self, play: Move) -> bool {
-        self.index(play).is_some()
-    }
-
-    pub fn position(&self) -> Position {
-        self.game.position(self.node)
-    }
-
-    pub fn state(&self) -> &State {
+    pub fn state(&self) -> &State<V> {
         self.game.state(self.node)
     }
 
@@ -490,11 +487,11 @@ impl<'a> OptionsRef<'a> {
         self.state().legal()
     }
 
-    pub fn first(&self) -> Option<PlayRef<'a>> {
+    pub fn first(&self) -> Option<PlayRef<'a, V>> {
         self.get(0)
     }
 
-    pub fn after_first(&self) -> OptionsRef<'a> {
+    pub fn after_first(&self) -> OptionsRef<'a, V> {
         OptionsRef {
             game: self.game,
             node: self.node,
@@ -507,7 +504,7 @@ impl<'a> OptionsRef<'a> {
     /// When this contains all options after a move, the first option is the
     /// mainline move, and the remaining options are variations from the same
     /// position.
-    pub fn split_first(&self) -> Option<(PlayRef<'a>, OptionsRef<'a>)> {
+    pub fn split_first(&self) -> Option<(PlayRef<'a, V>, OptionsRef<'a, V>)> {
         let (slot, rest) = self.options.split_first()?;
         Some((
             PlayRef { game: self.game, slot: *slot },
@@ -515,28 +512,42 @@ impl<'a> OptionsRef<'a> {
         ))
     }
 
-    pub fn iter(self) -> OptionsIter<'a> {
+    pub fn iter(self) -> OptionsIter<'a, V> {
         self.into_iter()
     }
 }
 
-impl<'a> IntoIterator for OptionsRef<'a> {
-    type Item = PlayRef<'a>;
-    type IntoIter = OptionsIter<'a>;
+impl<'a, V: Copy> OptionsRef<'a, V> {
+    fn index(&self, play: Move) -> Option<usize> {
+        self.iter().position(|option| option.play == play)
+    }
+
+    pub fn contains(&self, play: Move) -> bool {
+        self.index(play).is_some()
+    }
+
+    pub fn position(&self) -> Position<V> {
+        self.game.position(self.node)
+    }
+}
+
+impl<'a, V> IntoIterator for OptionsRef<'a, V> {
+    type Item = PlayRef<'a, V>;
+    type IntoIter = OptionsIter<'a, V>;
 
     fn into_iter(self) -> Self::IntoIter {
         OptionsIter { game: self.game, options: self.options, index: 0 }
     }
 }
 
-pub struct OptionsIter<'a> {
-    game: &'a Game,
+pub struct OptionsIter<'a, Variant = Chess> {
+    game: &'a Game<Variant>,
     options: &'a [Slot],
     index: usize,
 }
 
-impl<'a> Iterator for OptionsIter<'a> {
-    type Item = PlayRef<'a>;
+impl<'a, V> Iterator for OptionsIter<'a, V> {
+    type Item = PlayRef<'a, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let slot = self.options.get(self.index)?;
@@ -550,22 +561,22 @@ impl<'a> Iterator for OptionsIter<'a> {
     }
 }
 
-impl ExactSizeIterator for OptionsIter<'_> {
+impl<V> ExactSizeIterator for OptionsIter<'_, V> {
     fn len(&self) -> usize {
         self.options.len() - self.index
     }
 }
 
-pub struct OptionsMut<'a> {
-    game: &'a mut Game,
+pub struct OptionsMut<'a, Variant = Chess> {
+    game: &'a mut Game<Variant>,
     node: Node,
 }
 
 // Forwarding to OptionsRef or "conversion of manipulation to traversal API"
 // - explicit for now
 // - can bring back helpful ones once the APIs settle
-impl OptionsMut<'_> {
-    pub fn as_ref(&self) -> OptionsRef<'_> {
+impl<V> OptionsMut<'_, V> {
+    pub fn as_ref(&self) -> OptionsRef<'_, V> {
         self.game.options_ref(self.node)
     }
 
@@ -583,11 +594,11 @@ impl OptionsMut<'_> {
 }
 
 // The Options Manipulation API
-impl OptionsMut<'_> {
+impl<V: Variant> OptionsMut<'_, V> {
     pub fn push(&mut self, play: Move) -> Result<Slot, Error> {
-        let play = self.game.create_play(self.node, play)?;
-        self.game.tree.options_mut(self.node).push(play.slot);
-        Ok(play.slot)
+        let slot = self.game.create_play(self.node, play)?;
+        self.game.tree.options_mut(self.node).push(slot);
+        Ok(slot)
     }
 
     pub fn insert(&mut self, index: usize, play: Move) -> Result<Slot, Error> {
@@ -596,9 +607,9 @@ impl OptionsMut<'_> {
             return Err(Error::OutOfBounds { index, len });
         }
 
-        let play = self.game.create_play(self.node, play)?;
-        self.game.tree.options_mut(self.node).insert(index, play.slot);
-        Ok(play.slot)
+        let slot = self.game.create_play(self.node, play)?;
+        self.game.tree.options_mut(self.node).insert(index, slot);
+        Ok(slot)
     }
 
     #[must_use]
