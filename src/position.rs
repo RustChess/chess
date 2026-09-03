@@ -78,7 +78,7 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 /// - counters
 ///
 /// [cql]: https://en.wikipedia.org/wiki/Chess_Query_Language
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Position<Variant = Chess> {
     /// location of the pieces on the board
     board: Board,
@@ -96,6 +96,15 @@ pub struct Position<Variant = Chess> {
     pub(crate) variant: PhantomData<Variant>,
 }
 
+// Here and elsewhere, a #[derive(Clone, Copy)] won't work due to
+// derive macro limitations - Position is in fact Copy
+impl<V> Copy for Position<V> {}
+
+impl<V> Clone for Position<V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 /// Equivalent to [`Position<Unvalidated>`].
 ///
 /// We want to keep `V: Validate` position fields private,

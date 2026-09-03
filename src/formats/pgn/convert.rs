@@ -1,36 +1,58 @@
 use crate::game::{self, Node, Roster};
-use crate::position::{Position, SupportedEnum};
-use crate::variant::Supported;
+use crate::position::{
+    self, Chess, Freestyle, Position, SupportedEnum, Unvalidated, scharnagl_by_id,
+};
+use crate::variant::{self, Supported, Variant};
 
 use super::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Resolve(#[from] Resolve),
+    #[error(transparent)]
+    Downgrade(#[from] Downgrade),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Downgrade {
+    #[error("invalid PGN start position {fen}: {error}")]
+    Start { variant: Option<SupportedEnum>, fen: String, error: position::Error },
+    #[error("unsupported PGN variant: {0}")]
+    Variant(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+// Conceptually, resolving PGN movetext into a game tree has four expected
+// failure modes: invalid SAN, illegal SAN, ambiguous SAN, or a duplicate move.
+// The source-shaped variants below should be refined with the Game API.
+//
+// Additionally, our currently san.resolve calculates legal moves twice.
+pub enum Resolve {
     #[error("SAN error: {0}")]
     San(#[from] san::Error),
     #[error("game error: {0}")]
     Game(#[from] game::Error),
-    #[error("invalid FEN: {0}")]
-    Fen(String),
-    #[error("empty PGN variation of {} {san}", MoveNumber(*ply))]
-    EmptyVariation { ply: usize, san: san::San },
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 impl<V: Supported> From<crate::Game<V>> for Game {
     fn from(game: crate::Game<V>) -> Self {
-        let freestyle = V::SUPPORTED == SupportedEnum::Freestyle;
+        let freestyle = V::is_freestyle();
         let start = game.start();
         let moves = pgn_moves(&game, game.start_options());
         let mut tags = pgn_roster(&game.roster, game.outcome);
         if freestyle {
-            tags.push(Tag::Variant("Chess960".to_string()));
+            tags.push(Tag::freestyle());
         }
         tags.extend(game.tags.into_iter().map(Tag::Other));
 
         if freestyle || (start.unvalidated() != Position::start().unvalidated()) {
             pgn_set_start(&mut tags, start.unvalidated());
+        }
+        if freestyle && let Some(id) = scharnagl_by_id(start.board().standard_id()) {
+            tags.push(Tag::Chess960Id(id));
         }
 
         Self {
@@ -43,47 +65,111 @@ impl<V: Supported> From<crate::Game<V>> for Game {
     }
 }
 
-impl TryFrom<Game> for crate::Game {
+impl<V: Variant> TryFrom<Game> for crate::Game<V> {
     type Error = Error;
 
     fn try_from(pgn: Game) -> Result<Self> {
-        let position = pgn.start.validate().map_err(|_| Error::Fen(pgn.start.fen()))?;
-        let mut game = crate::Game::new(position);
-        game.roster = game_roster(&pgn.tags);
-        game.tags = game_tags(&pgn.tags);
-        game.intro = pgn.intro.map(Into::into);
-        game.outcome = pgn.outcome;
-
-        game_moves(&mut game, Node::Start, 0, pgn.moves)?;
-
-        Ok(game)
+        let position = V::validate(pgn.start).map_err(|error| Downgrade::Start {
+            variant: V::VARIANT.supported(),
+            fen: pgn.start.fen(),
+            error,
+        })?;
+        Ok(game_from_position(pgn, position)?)
     }
 }
 
-fn game_moves(
-    game: &mut crate::Game,
+impl TryFrom<Game> for variant::Game<Downgrade> {
+    type Error = Resolve;
+
+    fn try_from(pgn: Game) -> core::result::Result<Self, Resolve> {
+        let downgrade = match pgn.supported() {
+            Ok(SupportedEnum::Chess) => match Chess::validate(pgn.start) {
+                Ok(position) => return game_from_position(pgn, position).map(variant::Game::Chess),
+                Err(error) => Downgrade::Start {
+                    variant: Some(SupportedEnum::Chess),
+                    fen: pgn.start.fen(),
+                    error,
+                },
+            },
+            Ok(SupportedEnum::Freestyle) => match Freestyle::validate(pgn.start) {
+                Ok(position) => {
+                    return game_from_position(pgn, position).map(variant::Game::Freestyle);
+                }
+                Err(error) => Downgrade::Start {
+                    variant: Some(SupportedEnum::Freestyle),
+                    fen: pgn.start.fen(),
+                    error,
+                },
+            },
+            Err(variant) => Downgrade::Variant(variant),
+        };
+
+        let start = pgn.start;
+        let game = game_from_position(pgn, start)?;
+        Ok(variant::Game::Unvalidated { game, error: downgrade })
+    }
+}
+
+impl<V: Variant> crate::Game<V> {
+    pub fn from_pgn(pgn: Game) -> Result<Self> {
+        pgn.try_into()
+    }
+}
+
+impl Chess {
+    pub fn from_pgn(pgn: Game) -> Result<crate::Game<Self>> {
+        pgn.try_into()
+    }
+}
+
+impl Freestyle {
+    pub fn from_pgn(pgn: Game) -> Result<crate::Game<Self>> {
+        pgn.try_into()
+    }
+}
+
+impl Unvalidated {
+    pub fn from_pgn(pgn: Game) -> Result<crate::Game<Self>> {
+        pgn.try_into()
+    }
+}
+
+fn game_from_position<V: Variant>(
+    pgn: Game,
+    position: Position<V>,
+) -> core::result::Result<crate::Game<V>, Resolve> {
+    let mut game = crate::Game::new(position);
+    game.roster = game_roster(&pgn.tags);
+    game.tags = game_tags(&pgn.tags);
+    game.intro = pgn.intro.map(Into::into);
+    game.outcome = pgn.outcome;
+
+    game_moves(&mut game, Node::Start, 0, pgn.moves)?;
+
+    Ok(game)
+}
+
+fn game_moves<V: Variant>(
+    game: &mut crate::Game<V>,
     mut previous: Node,
     mut ply: usize,
     moves: Vec<Move>,
-) -> Result<()> {
+) -> core::result::Result<(), Resolve> {
     for pgn_move in moves {
         let mut options = game.options_mut(previous).expect("previous play exists");
         let play = pgn_move.san.resolve(options.as_ref().legal())?;
-        let slot = options.push(play)?;
-
-        {
-            let mut play = game.play_mut(slot).expect("inserted play exists");
-            play.meta.comment = pgn_move.comment.map(Into::into);
-            for annotation in pgn_move.annotations {
-                match annotation {
-                    Annotation::Nag(nag) => play.meta.nags.push(nag),
-                    Annotation::Command(command) => play.meta.commands.push(command),
-                }
+        let mut play = options.push(play)?;
+        let slot = play.slot();
+        play.meta.comment = pgn_move.comment.map(Into::into);
+        for annotation in pgn_move.annotations {
+            match annotation {
+                Annotation::Nag(nag) => play.meta.nags.push(nag),
+                Annotation::Command(command) => play.meta.commands.push(command),
             }
         }
 
         for variation in pgn_move.variations {
-            game_variation(game, previous, ply, pgn_move.san, variation)?;
+            game_variation(game, previous, ply, variation)?;
         }
 
         previous = Node::Play(slot);
@@ -93,36 +179,32 @@ fn game_moves(
     Ok(())
 }
 
-fn game_variation(
-    game: &mut crate::Game,
+fn game_variation<V: Variant>(
+    game: &mut crate::Game<V>,
     previous: Node,
     ply: usize,
-    after: san::San,
     variation: Variation,
-) -> Result<()> {
+) -> core::result::Result<(), Resolve> {
     let Some((first, rest)) = variation.moves.split_first() else {
-        return Err(Error::EmptyVariation { ply, san: after });
+        return Ok(());
     };
 
     let mut options = game.options_mut(previous).expect("previous play exists");
     let play = first.san.resolve(options.as_ref().legal())?;
-    let slot = options.push(play)?;
-
-    {
-        let mut play = game.play_mut(slot).expect("inserted play exists");
-        play.meta.intro = variation.intro.map(Into::into);
-        play.meta.outro = variation.outro.map(Into::into);
-        play.meta.comment = first.comment.clone().map(Into::into);
-        for annotation in &first.annotations {
-            match annotation {
-                Annotation::Nag(nag) => play.meta.nags.push(nag.clone()),
-                Annotation::Command(command) => play.meta.commands.push(command.clone()),
-            }
+    let mut play = options.push(play)?;
+    let slot = play.slot();
+    play.meta.intro = variation.intro.map(Into::into);
+    play.meta.outro = variation.outro.map(Into::into);
+    play.meta.comment = first.comment.clone().map(Into::into);
+    for annotation in &first.annotations {
+        match annotation {
+            Annotation::Nag(nag) => play.meta.nags.push(nag.clone()),
+            Annotation::Command(command) => play.meta.commands.push(command.clone()),
         }
     }
 
     for variation in &first.variations {
-        game_variation(game, previous, ply, first.san, variation.clone())?;
+        game_variation(game, previous, ply, variation.clone())?;
     }
     game_moves(game, Node::Play(slot), ply + 1, rest.to_vec())
 }
@@ -144,7 +226,12 @@ fn game_roster(tags: &[Tag]) -> Roster {
             Tag::Round(value) => roster.round = roster_text(value, "?"),
             Tag::White(value) => roster.white = roster_text(value, "?"),
             Tag::Black(value) => roster.black = roster_text(value, "?"),
-            Tag::Outcome(_) | Tag::Fen(_) | Tag::SetUp(_) | Tag::Variant(_) | Tag::Other(_) => {}
+            Tag::Outcome(_)
+            | Tag::Fen(_)
+            | Tag::SetUp(_)
+            | Tag::Variant(_)
+            | Tag::Chess960Id(_)
+            | Tag::Other(_) => {}
         }
     }
 

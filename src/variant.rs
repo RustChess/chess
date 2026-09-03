@@ -1,4 +1,23 @@
-use crate::position::{Position, Result, SupportedEnum, VariantEnum};
+use crate::position::{Result, SupportedEnum, VariantEnum};
+
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq)]
+pub enum Position {
+    Chess(crate::Position<Chess>),
+    Freestyle(crate::Position<Freestyle>),
+}
+
+impl From<crate::Position<Chess>> for Position {
+    fn from(position: crate::Position<Chess>) -> Self {
+        Self::Chess(position)
+    }
+}
+
+impl From<crate::Position<Freestyle>> for Position {
+    fn from(position: crate::Position<Freestyle>) -> Self {
+        Self::Freestyle(position)
+    }
+}
 
 /// A universal receiver for any supported or unvalidated chess game.
 ///
@@ -74,11 +93,11 @@ pub trait Variant: Copy + Sized {
     /// the `Variant` trait to an enum value.
     const VARIANT: VariantEnum;
 
-    fn validate(position: Position<Unvalidated>) -> Result<Position<Self>>;
+    fn validate(position: crate::Position<Unvalidated>) -> Result<crate::Position<Self>>;
 }
 
 pub trait Validate: Variant {
-    fn validate_castling(position: Position<Unvalidated>) -> Result<()>;
+    fn validate_castling(position: crate::Position<Unvalidated>) -> Result<()>;
 }
 
 // Trait-side equivalent to the idea that Variant = Supported | Unvalidated.
@@ -106,7 +125,7 @@ pub struct Unvalidated;
 impl Variant for Chess {
     const VARIANT: VariantEnum = VariantEnum::Chess;
 
-    fn validate(position: Position<Unvalidated>) -> Result<Position<Self>> {
+    fn validate(position: crate::Position<Unvalidated>) -> Result<crate::Position<Self>> {
         position.validate()
     }
 }
@@ -118,7 +137,7 @@ impl Supported for Chess {
 impl Variant for Freestyle {
     const VARIANT: VariantEnum = VariantEnum::Freestyle;
 
-    fn validate(position: Position<Unvalidated>) -> Result<Position<Self>> {
+    fn validate(position: crate::Position<Unvalidated>) -> Result<crate::Position<Self>> {
         position.validate()
     }
 }
@@ -130,19 +149,19 @@ impl Supported for Freestyle {
 impl Variant for Unvalidated {
     const VARIANT: VariantEnum = VariantEnum::Unvalidated;
 
-    fn validate(position: Position<Unvalidated>) -> Result<Position<Self>> {
+    fn validate(position: crate::Position<Unvalidated>) -> Result<crate::Position<Self>> {
         Ok(position)
     }
 }
 
 impl Validate for Chess {
-    fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
-        Position::<Self>::validate_castling(position)
+    fn validate_castling(position: crate::Position<Unvalidated>) -> Result<()> {
+        crate::Position::<Self>::validate_castling(position)
     }
 }
 
 impl Validate for Freestyle {
-    fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
-        Position::<Self>::validate_castling(position)
+    fn validate_castling(position: crate::Position<Unvalidated>) -> Result<()> {
+        crate::Position::<Self>::validate_castling(position)
     }
 }

@@ -3,7 +3,7 @@
 use core::{fmt, str::FromStr};
 
 use crate::{
-    Role,
+    Game, Role, game,
     position::{File, Rank, Square},
     variant::{Chess, Supported},
 };
@@ -47,6 +47,68 @@ impl Move {
 
     pub fn resolve_freestyle(self, legal: &[crate::Move]) -> Option<crate::Move> {
         legal.iter().copied().find(|play| play.uci_freestyle() == self)
+    }
+}
+
+impl<'a, V: Supported> game::OptionsMut<'a, V> {
+    pub fn push_uci(&mut self, uci: Move) -> Result<game::PlayMut<'_, V>, game::Error> {
+        let options = self.as_ref();
+        let legal = options.legal();
+        let Some(play) = uci.resolve::<V>(legal) else {
+            return Err(game::Error::Illegal);
+        };
+        self.push(play)
+    }
+    pub fn into_push_uci(self, uci: Move) -> Result<game::PlayMut<'a, V>, game::Error> {
+        let options = self.as_ref();
+        let legal = options.legal();
+        let Some(play) = uci.resolve::<V>(legal) else {
+            return Err(game::Error::Illegal);
+        };
+        self.into_push(play)
+    }
+}
+
+impl<V: Supported> crate::Position<V> {
+    pub fn resolve_uci(self, moves: &[Move]) -> Vec<crate::Move> {
+        let mut game = Game::new(self);
+        let mut options = game.start_options_mut();
+        let mut resolved = Vec::with_capacity(moves.len());
+
+        for uci in moves {
+            let Ok(play) = options.into_push_uci(*uci) else {
+                break;
+            };
+            resolved.push(play.play());
+            options = play.into_options_mut();
+        }
+
+        resolved
+    }
+
+    pub fn resolve_uci_san(self, moves: &[Move]) -> Vec<String> {
+        let mut game = Game::new(self);
+        let mut options = game.start_options_mut();
+        let mut resolved = Vec::with_capacity(moves.len());
+
+        for uci in moves {
+            let Ok(play) = options.into_push_uci(*uci) else {
+                break;
+            };
+            resolved.push(play.san().to_string());
+            options = play.into_options_mut();
+        }
+
+        resolved
+    }
+}
+
+impl crate::variant::Position {
+    pub fn resolve_uci_san(self, moves: &[Move]) -> Vec<String> {
+        match self {
+            Self::Chess(position) => position.resolve_uci_san(moves),
+            Self::Freestyle(position) => position.resolve_uci_san(moves),
+        }
     }
 }
 

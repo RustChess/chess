@@ -155,6 +155,12 @@ impl From<(crate::Move, game::Short, Option<Check>)> for San {
     }
 }
 
+impl<V> game::Play<V> {
+    pub fn san(&self) -> San {
+        San::from((self.play(), self.short(), self.check()))
+    }
+}
+
 impl San {
     pub fn resolve(&self, legal: &[crate::Move]) -> Result<crate::Move, Error> {
         // We ignore incorrect check(mate) annotations.

@@ -111,7 +111,7 @@ impl<V> Cursor<V> {
     }
 }
 
-impl<V: Copy> Cursor<V> {
+impl<V> Cursor<V> {
     pub fn position(&self) -> Position<V> {
         self.game.position(self.node)
     }
@@ -136,7 +136,8 @@ impl<V: Variant> Cursor<V> {
             return Err(Error::Nonlinear(next));
         }
 
-        let slot = self.game.options_mut(self.node).expect("cursor node must exist").push(play)?;
+        let slot =
+            self.game.options_mut(self.node).expect("cursor node must exist").push(play)?.slot();
         self.node = Node::Play(slot);
         Ok(slot)
     }

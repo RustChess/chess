@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn displays_figurine_movetext() {
         let mut game = crate::Game::new(Position::start());
-        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap();
+        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.play_mut(e4).unwrap().options_mut().push(crate::Move::normal(Knight, G8, F6)).unwrap();
 
         let pgn = Game::from(game);
@@ -735,14 +735,14 @@ mod tests {
         let mut game = crate::Game::new(Position::start());
         game.roster.event = Some(text("x"));
 
-        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap();
+        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.start_options_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap();
 
         {
             let mut e4 = game.play_mut(e4).unwrap();
             e4.meta.nags.push(Nag::Symbol("!".to_string()));
             e4.options_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
-            let c5 = e4.options_mut().push(crate::Move::normal(Pawn, C7, C5)).unwrap();
+            let c5 = e4.options_mut().push(crate::Move::normal(Pawn, C7, C5)).unwrap().slot();
             game.play_mut(c5).unwrap().meta.comment = Some(text("Sicilian"));
         }
 
@@ -780,7 +780,7 @@ mod tests {
         let mut game = crate::Game::new(position);
 
         for play in position.legal_moves() {
-            let id = game.start_options_mut().push(play).unwrap();
+            let id = game.start_options_mut().push(play).unwrap().slot();
             let replies = game.play(id).unwrap().legal().to_vec();
             let mut play = game.play_mut(id).unwrap();
             for reply in replies {

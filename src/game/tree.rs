@@ -103,7 +103,7 @@ impl<V> Tree<V> {
     }
 }
 
-impl<V: Copy> Tree<V> {
+impl<V> Tree<V> {
     pub fn unvalidated(self) -> Tree<Unvalidated> {
         Tree {
             next: self.next,

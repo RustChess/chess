@@ -190,8 +190,11 @@ crate::finite_set!(
 crate::finite_set!(
     /// A supported chess variant.
     #[non_exhaustive]
+    #[derive(Default)]
+    #[cfg_attr(feature = "serde", derive(serde_with::DeserializeFromStr))]
     SupportedEnum,
     SupportedTable {
+        #[default]
         Chess = 1 as chess,
         Freestyle = 2 as freestyle,
     }
@@ -218,8 +221,24 @@ impl From<SupportedEnum> for VariantEnum {
 }
 
 impl SupportedEnum {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
     pub fn variant(self) -> VariantEnum {
         self.into()
+    }
+}
+
+impl FromStr for SupportedEnum {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "chess" => Ok(Self::Chess),
+            "freestyle" => Ok(Self::Freestyle),
+            _ => Err(format!("expected chess or freestyle, got {value:?}")),
+        }
     }
 }
 
