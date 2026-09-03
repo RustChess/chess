@@ -737,7 +737,7 @@ mod tests {
     use crate::{
         Position,
         formats::san,
-        position::{Chess, File::*, Role::*, Square::*},
+        position::{Chess, File::*, Freestyle, Role::*, Scharnagl, Square::*},
     };
 
     use super::*;
@@ -972,6 +972,22 @@ mod tests {
 [Result "*"]
 
 1. e4! (1. d4) 1... e5 (1... c5 {Sicilian}) *"#
+        );
+    }
+
+    #[test]
+    fn converts_from_freestyle_game() {
+        let game = crate::Game::new(Position::<Freestyle>::freestyle(Scharnagl::CHESS));
+
+        let pgn = Game::from(game);
+
+        assert!(pgn.to_string().contains("[Variant \"Chess960\"]"), "{}", pgn);
+        assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
+        assert!(
+            pgn.to_string()
+                .contains("[FEN \"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w HAha - 0 1\"]"),
+            "{}",
+            pgn
         );
     }
 

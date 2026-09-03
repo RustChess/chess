@@ -370,13 +370,13 @@ fn freestyle_positions() {
         Board::freestyle(Scharnagl(631)).fen(),
         "rnbkqrnb/pppppppp/8/8/8/8/PPPPPPPP/RNBKQRNB"
     );
-    assert_eq!(Board::freestyle(Scharnagl(518)), Board::standard());
+    assert_eq!(Board::freestyle(Scharnagl::CHESS), Board::standard());
     assert_eq!(
         Board::freestyle(Scharnagl(959)).fen(),
         "rkrnnqbb/pppppppp/8/8/8/8/PPPPPPPP/RKRNNQBB"
     );
 
-    let position = Position::freestyle(Scharnagl(518));
+    let position = Position::freestyle(Scharnagl::CHESS);
     assert_eq!(position.board, Position::start().board);
     assert_eq!(position.castles.get(White, Side::Queen), Some(File::A));
     assert_eq!(position.castles.get(White, Side::King), Some(File::H));

@@ -50,7 +50,7 @@ fn freestyle_positions() {
     // https://github.com/niklasf/shakmaty/blob/master/shakmaty/tests/chess960.perft
     assert_position_perft(
         "chess960 position 518",
-        Position::freestyle(Scharnagl::new(518).unwrap()),
+        Position::freestyle(Scharnagl::CHESS),
         &[(1, 20), (2, 400), (3, 8902), (4, 197281)],
     );
     assert_freestyle_perft(

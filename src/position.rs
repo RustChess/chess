@@ -155,6 +155,8 @@ pub const fn unvalidated(board: Board, turn: Player) -> Position<Unvalidated> {
 pub struct Scharnagl(u16);
 
 impl Scharnagl {
+    pub const CHESS: Self = Self(518);
+
     pub const fn new(i: u16) -> Option<Self> {
         if i < 960 { Some(Self(i)) } else { None }
     }

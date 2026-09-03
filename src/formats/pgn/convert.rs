@@ -1,5 +1,6 @@
-use crate::Position;
 use crate::game::{self, Node, Roster};
+use crate::position::{Position, SupportedEnum};
+use crate::variant::Supported;
 
 use super::*;
 
@@ -17,14 +18,18 @@ pub enum Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-impl From<crate::Game> for Game {
-    fn from(game: crate::Game) -> Self {
+impl<V: Supported> From<crate::Game<V>> for Game {
+    fn from(game: crate::Game<V>) -> Self {
+        let freestyle = V::SUPPORTED == SupportedEnum::Freestyle;
         let start = game.start();
         let moves = pgn_moves(&game, game.start_options());
         let mut tags = pgn_roster(&game.roster, game.outcome);
+        if freestyle {
+            tags.push(Tag::Variant("Chess960".to_string()));
+        }
         tags.extend(game.tags.into_iter().map(Tag::Other));
 
-        if start != Position::start() {
+        if freestyle || (start.unvalidated() != Position::start().unvalidated()) {
             pgn_set_start(&mut tags, start.unvalidated());
         }
 
@@ -189,7 +194,7 @@ fn pgn_set_start(tags: &mut Vec<Tag>, position: Position<Unvalidated>) {
     tags.push(Tag::Fen(position));
 }
 
-fn pgn_moves<'a>(game: &'a crate::Game, options: game::OptionsRef<'a>) -> Vec<Move> {
+fn pgn_moves<'a, V>(game: &'a crate::Game<V>, options: game::OptionsRef<'a, V>) -> Vec<Move> {
     let mut moves = Vec::new();
     let mut options = options;
 
@@ -201,7 +206,11 @@ fn pgn_moves<'a>(game: &'a crate::Game, options: game::OptionsRef<'a>) -> Vec<Mo
     moves
 }
 
-fn pgn_move(game: &crate::Game, play: &game::Play, variations: game::OptionsRef<'_>) -> Move {
+fn pgn_move<V>(
+    game: &crate::Game<V>,
+    play: &game::Play<V>,
+    variations: game::OptionsRef<'_, V>,
+) -> Move {
     Move {
         san: san::San::from((play.play(), play.short(), play.check())),
         comment: play.meta.comment.clone().map(Comment),
@@ -210,7 +219,7 @@ fn pgn_move(game: &crate::Game, play: &game::Play, variations: game::OptionsRef<
     }
 }
 
-fn pgn_variation(game: &crate::Game, slot: Slot) -> Variation {
+fn pgn_variation<V>(game: &crate::Game<V>, slot: Slot) -> Variation {
     let play = game.play(slot).expect("option must reference an existing play");
     Variation {
         intro: play.meta.intro.clone().map(Comment),
@@ -219,13 +228,13 @@ fn pgn_variation(game: &crate::Game, slot: Slot) -> Variation {
     }
 }
 
-fn pgn_moves_from<'a>(game: &'a crate::Game, play: &game::PlayRef<'a>) -> Vec<Move> {
+fn pgn_moves_from<'a, V>(game: &'a crate::Game<V>, play: &game::PlayRef<'a, V>) -> Vec<Move> {
     let mut moves = vec![pgn_move_without_variations(play)];
     moves.extend(pgn_moves(game, play.options()));
     moves
 }
 
-fn pgn_move_without_variations(play: &game::Play) -> Move {
+fn pgn_move_without_variations<V>(play: &game::Play<V>) -> Move {
     Move {
         san: san::San::from((play.play(), play.short(), play.check())),
         comment: play.meta.comment.clone().map(Comment),
