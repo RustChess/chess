@@ -4,7 +4,7 @@ use std::{fmt, str};
 
 use crate::{
     game::{Command, Nag, Outcome, Slot, Tag as OtherTag, Text},
-    position::{Position, Unvalidated},
+    position::{Position, SupportedEnum, Unvalidated},
 };
 
 use super::{StrInput as Input, fen, prelude::*, san};
@@ -44,6 +44,7 @@ pub enum Tag {
     Outcome(Outcome),
     Fen(Position<Unvalidated>),
     SetUp(bool),
+    Variant(String),
     Other(OtherTag),
 }
 
@@ -168,6 +169,25 @@ impl Game {
             .expect("writing PGN movetext to string");
         movetext
     }
+
+    pub fn freestyle(&self) -> Result<bool, String> {
+        let freestyle = match self.tag_variant()? {
+            SupportedEnum::Chess => !self.start.castles().chess_compatible(),
+            SupportedEnum::Freestyle => true,
+        };
+
+        Ok(freestyle)
+    }
+
+    pub fn tag_variant(&self) -> Result<SupportedEnum, String> {
+        let mut variant = SupportedEnum::Chess;
+        for tag in &self.tags {
+            if let Tag::Variant(value) = tag {
+                variant = SupportedEnum::from_tag(value)?;
+            }
+        }
+        Ok(variant)
+    }
 }
 
 fn strip_tags(mut input: &str) -> &str {
@@ -195,7 +215,18 @@ impl fmt::Display for Tag {
             Tag::Outcome(outcome) => write_tag(f, "Result", &outcome.to_string()),
             Tag::Fen(position) => write_tag(f, "FEN", &position.fen()),
             Tag::SetUp(setup) => write_tag(f, "SetUp", if *setup { "1" } else { "0" }),
+            Tag::Variant(variant) => write_tag(f, "Variant", variant),
             Tag::Other(tag) => write_tag(f, tag.key.as_ref(), &tag.value),
+        }
+    }
+}
+
+impl SupportedEnum {
+    fn from_tag(value: &str) -> Result<Self, String> {
+        match value.to_ascii_lowercase().as_str() {
+            "chess" | "standard" => Ok(Self::Chess),
+            "chess960" | "fischerandom" | "fischer random" | "freestyle" => Ok(Self::Freestyle),
+            _ => Err(value.to_string()),
         }
     }
 }
@@ -568,6 +599,7 @@ fn tag_from_pair(key: Text, value: String) -> Option<Tag> {
             "1" => true,
             _ => return None,
         }),
+        "Variant" => Tag::Variant(value),
         _ => Tag::Other(OtherTag { key, value }),
     })
 }
@@ -832,6 +864,64 @@ mod tests {
             .unwrap();
 
         assert_eq!(pgn.start.fen(), "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1");
+    }
+
+    #[test]
+    fn parses_variant_tag() {
+        let pgn = r#"
+            [Variant "Fischer Random"]
+            *
+        "#;
+        let pgn = game.parse(pgn).unwrap();
+
+        assert_eq!(pgn.tags, vec![Tag::Variant("Fischer Random".to_string())]);
+        assert_eq!(pgn.tag_variant().unwrap(), SupportedEnum::Freestyle);
+        assert!(pgn.freestyle().unwrap());
+        assert!(pgn.to_string().contains("[Variant \"Fischer Random\"]"));
+    }
+
+    #[test]
+    fn variant_folds_over_tags() {
+        let pgn = r#"
+            [Variant "Chess960"]
+            [Variant "Standard"]
+            *
+        "#;
+        let pgn = game.parse(pgn).unwrap();
+
+        assert_eq!(pgn.tag_variant().unwrap(), SupportedEnum::Chess);
+        assert!(!pgn.freestyle().unwrap());
+    }
+
+    #[test]
+    fn variant_rejects_unsupported_tags() {
+        let pgn = r#"
+            [Variant "Antichess"]
+            *
+        "#;
+        let pgn = game.parse(pgn).unwrap();
+
+        assert_eq!(pgn.tag_variant().unwrap_err(), "Antichess");
+        assert_eq!(pgn.freestyle().unwrap_err(), "Antichess");
+    }
+
+    #[test]
+    fn freestyle_falls_back_to_position_castling() {
+        let fen = r#"
+            [FEN "8/8/8/8/8/8/8/8 w - - 0 1"]
+            *
+        "#;
+        let pgn = game.parse(fen).unwrap();
+
+        assert!(!pgn.freestyle().unwrap());
+
+        let fen = r#"
+            [FEN "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9"]
+            *
+        "#;
+        let pgn = game.parse(fen).unwrap();
+
+        assert!(pgn.freestyle().unwrap());
     }
 
     #[test]

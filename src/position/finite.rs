@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::{bitboard::Bitboard, finite::Empty as _};
+use crate::{bitboard::Bitboard, finite::Empty as _, finite_for};
 
 /// A chess piece, for instance a white pawn or a black queen.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -198,6 +198,47 @@ crate::finite_set!(
     }
 );
 
+crate::finite_set!(
+    /// A supported chess variant.
+    #[non_exhaustive]
+    SupportedEnum,
+    SupportedTable {
+        Chess = 1 as chess,
+        Freestyle = 2 as freestyle,
+    }
+);
+
+impl From<SupportedEnum> for VariantEnum {
+    fn from(supported: SupportedEnum) -> Self {
+        match supported {
+            SupportedEnum::Chess => VariantEnum::Chess,
+            SupportedEnum::Freestyle => VariantEnum::Freestyle,
+        }
+    }
+}
+
+impl SupportedEnum {
+    pub fn variant(self) -> VariantEnum {
+        self.into()
+    }
+}
+
+impl From<VariantEnum> for Option<SupportedEnum> {
+    fn from(variant: VariantEnum) -> Self {
+        match variant {
+            VariantEnum::Unvalidated => None,
+            VariantEnum::Chess => Some(SupportedEnum::Chess),
+            VariantEnum::Freestyle => Some(SupportedEnum::Freestyle),
+        }
+    }
+}
+
+impl VariantEnum {
+    pub fn supported(self) -> Option<SupportedEnum> {
+        self.into()
+    }
+}
+
 impl Castles {
     #[inline]
     pub const fn empty() -> Self {
@@ -209,6 +250,33 @@ impl Castles {
         use Side::*;
         let rooks = Sides { queen: Some(Queen.chess_rook()), king: Some(King.chess_rook()) };
         Self(Players { black: rooks, white: rooks })
+    }
+
+    #[inline]
+    pub const fn chess_compatible(self) -> bool {
+        self.is_subset(Self::chess())
+    }
+
+    #[inline]
+    pub const fn is_subset(self, other: Self) -> bool {
+        // This needs const eq, so can't use the Eq trait and define on Option<T>.
+        const fn file_subset(left: Option<File>, right: Option<File>) -> bool {
+            match (left, right) {
+                (None, _) => true,
+                (Some(left), Some(right)) => left.eq(right),
+                (Some(_), None) => false,
+            }
+        }
+
+        finite_for!(player in Player {
+            finite_for!(side in Side {
+                if !file_subset(self.get(player, side), other.get(player, side)) {
+                    return false;
+                }
+            });
+        });
+
+        true
     }
 
     #[inline]

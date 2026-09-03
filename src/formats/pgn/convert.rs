@@ -139,7 +139,7 @@ fn game_roster(tags: &[Tag]) -> Roster {
             Tag::Round(value) => roster.round = roster_text(value, "?"),
             Tag::White(value) => roster.white = roster_text(value, "?"),
             Tag::Black(value) => roster.black = roster_text(value, "?"),
-            Tag::Outcome(_) | Tag::Fen(_) | Tag::SetUp(_) | Tag::Other(_) => {}
+            Tag::Outcome(_) | Tag::Fen(_) | Tag::SetUp(_) | Tag::Variant(_) | Tag::Other(_) => {}
         }
     }
 

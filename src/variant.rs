@@ -1,23 +1,22 @@
-use crate::position::{Position, Result, VariantEnum as Enum};
+use crate::position::{Position, Result, SupportedEnum, VariantEnum};
 
 pub trait Variant: Copy + Sized {
     /// The variant enum value for this variant.
     ///
     /// This serves as the "universal bridge" from implemenations of
     /// the `Variant` trait to an enum value.
-    const VARIANT: Enum;
+    const VARIANT: VariantEnum;
 }
 
 pub trait Validate: Variant {
     fn validate_castling(position: Position<Unvalidated>) -> Result<()>;
 }
 
-// Commented out as unused - if we ever grow more traits like Validate,
-// this would be the combination of them - a variant the is supported
-// would have "core/full support".
-//
-// pub trait Supported: Validate {}
-// impl<T: Validate> Supported for T {}
+// Really, there should be a condition that SUPPORTED
+// must map to its corresponding VARIANT.
+pub trait Supported: Validate {
+    const SUPPORTED: SupportedEnum;
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Chess;
@@ -29,15 +28,23 @@ pub struct Freestyle;
 pub struct Unvalidated;
 
 impl Variant for Chess {
-    const VARIANT: Enum = Enum::Chess;
+    const VARIANT: VariantEnum = VariantEnum::Chess;
+}
+
+impl Supported for Chess {
+    const SUPPORTED: SupportedEnum = SupportedEnum::Chess;
 }
 
 impl Variant for Freestyle {
-    const VARIANT: Enum = Enum::Freestyle;
+    const VARIANT: VariantEnum = VariantEnum::Freestyle;
+}
+
+impl Supported for Freestyle {
+    const SUPPORTED: SupportedEnum = SupportedEnum::Freestyle;
 }
 
 impl Variant for Unvalidated {
-    const VARIANT: Enum = Enum::Unvalidated;
+    const VARIANT: VariantEnum = VariantEnum::Unvalidated;
 }
 
 impl Validate for Chess {
