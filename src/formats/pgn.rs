@@ -562,7 +562,7 @@ fn tag_from_pair(key: Text, value: String) -> Option<Tag> {
         "White" => Tag::White(value),
         "Black" => Tag::Black(value),
         "Result" => Tag::Outcome(outcome.parse(value.as_str()).ok()?),
-        "FEN" => Tag::Fen(fen::position_unvalidated.parse(value.as_str()).ok()?),
+        "FEN" => Tag::Fen(fen::parse_position.parse(value.as_str()).ok()?),
         "SetUp" => Tag::SetUp(match value.as_str() {
             "0" => false,
             "1" => true,
@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn displays_fen_game_from_its_start_ply() {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
-        let position = fen::position_unvalidated.parse(fen).unwrap().validate().unwrap();
+        let position = fen::parse_position.parse(fen).unwrap().validate().unwrap();
         let mut game = crate::Game::new(position);
         game.start_options_mut().push(crate::Move::normal(King, E8, D8)).unwrap();
 
@@ -888,7 +888,7 @@ mod tests {
     #[test]
     fn roundtrips_kiwipete_game_tree() {
         let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
-        let position = fen::position_unvalidated.parse(fen).unwrap().validate().unwrap();
+        let position = fen::parse_position.parse(fen).unwrap().validate().unwrap();
         let mut game = crate::Game::new(position);
 
         for play in position.legal_moves() {

@@ -10,10 +10,7 @@ use std::{
 };
 
 use chess::{
-    id::{
-        basis::Basis,
-        Id,
-    },
+    id::{basis::Basis, Id},
     position::{
         EnPassant, EnPassantTable, File, FileTable, Player, PlayerTable, Role, RoleTable, Square,
         SquareTable, VariantEnum, VariantTable,

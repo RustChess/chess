@@ -1,4 +1,4 @@
-use crate::{finite_for, position::*};
+use crate::{finite::Empty as _, finite_for, position::*};
 
 use super::{Id, fold};
 
@@ -31,11 +31,11 @@ pub struct Basis {
 impl Basis {
     pub const fn empty() -> Self {
         Self {
-            board: BoardTable::empty(),
-            turn: PlayerTable::empty(),
-            castle: CastleTable::empty(),
-            en_passant: EnPassantTable::empty(),
-            variant: VariantTable::empty(),
+            board: BoardTable::EMPTY,
+            turn: PlayerTable::EMPTY,
+            castle: CastleTable::EMPTY,
+            en_passant: EnPassantTable::EMPTY,
+            variant: VariantTable::EMPTY,
         }
     }
 

@@ -17,9 +17,10 @@ pub use basis::{Basis, POLYGLOT, STANDARD};
 // We set zeros/repeat to achieve compatibility.
 
 use crate::{
+    finite_for,
     game::Game,
     position::{Board, Castles, EnPassant, Player, Position, Role, Side, VariantEnum},
-    variant::Variant,
+    variant::{Unvalidated, Validate, Variant},
 };
 
 /// Type of globally unique identifiers.
@@ -103,44 +104,12 @@ impl Game {
     // }
 }
 
-impl Board {
-    pub const fn polyglot_id(self) -> Id {
-        self.id(&POLYGLOT)
-    }
-
-    pub const fn standard_id(self) -> Id {
-        self.id(&STANDARD)
-    }
-
-    pub const fn id(self, basis: &Basis) -> Id {
-        let mut id = Id(0);
-
-        let mut p = 0;
-        while p < Player::LEN as u8 {
-            let player = Player::panicky_from_index(p);
-
-            let mut r = 0;
-            while r < Role::LEN as u8 {
-                let role = Role::panicky_from_index(r);
-
-                let mut squares = self.players.get(player).intersection_const(self.roles.get(role));
-                while let Some(square) = squares.pop_first() {
-                    id = id.xor(basis.board.get(square).get(player).get(role));
-                }
-                r += 1;
-            }
-            p += 1;
-        }
-        id
-    }
-}
-
-impl<V: Variant> Position<V> {
+impl<V: Validate> Position<V> {
     // standard ID plus counters and explicit variant
     pub fn id(self) -> Id {
         self.standard_id()
-            .xor(counter_id("reversible", self.reversible))
-            .xor(counter_id("round", self.round.get()))
+            .xor(counter_id("reversible", self.reversible()))
+            .xor(counter_id("round", self.round().get()))
             .xor(variant_id(&STANDARD, V::VARIANT))
     }
 
@@ -155,14 +124,52 @@ impl<V: Variant> Position<V> {
     }
 
     pub const fn transposition_id(self, basis: &Basis) -> Id {
+        // In validated positions, en_passant is normalized to effective rights.
         self.apparent_id(basis)
-            .xor(castle_id(basis, self.castles))
-            .xor(en_passant_id(basis, self.effective_en_passant()))
+            .xor(castle_id(basis, self.castles()))
+            .xor(en_passant_id(basis, self.en_passant()))
     }
+}
 
+impl<V: Variant> Position<V> {
     // What one typically sees in a depicted position: The board, and the player to move
     pub const fn apparent_id(self, basis: &Basis) -> Id {
-        self.board.id(basis).xor(turn_id(basis, self.turn))
+        self.board().id(basis).xor(turn_id(basis, self.turn()))
+    }
+}
+
+impl Position<Unvalidated> {
+    /// For unvalidated positions, there is no "only effective e.p"
+    /// invariant, so we normalize it.
+    pub const fn normalized_transposition_id(self, basis: &Basis) -> Id {
+        self.apparent_id(basis)
+            .xor(castle_id(basis, self.castles()))
+            .xor(en_passant_id(basis, self.effective_en_passant()))
+    }
+}
+
+impl Board {
+    pub const fn polyglot_id(self) -> Id {
+        self.id(&POLYGLOT)
+    }
+
+    pub const fn standard_id(self) -> Id {
+        self.id(&STANDARD)
+    }
+
+    pub const fn id(self, basis: &Basis) -> Id {
+        let mut id = Id(0);
+
+        finite_for!(player in Player {
+            finite_for!(role in Role {
+                let mut squares = self.players.get(player).intersection_const(self.roles.get(role));
+                while let Some(square) = squares.pop_first() {
+                    id = id.xor(basis.board.get(square).get(player).get(role));
+                }
+            });
+        });
+
+        id
     }
 }
 
@@ -188,20 +195,13 @@ const fn en_passant_id(basis: &Basis, en_passant: Option<EnPassant>) -> Id {
 const fn castle_id(basis: &Basis, castles: Castles) -> Id {
     let mut id = Id(0);
 
-    let mut p = 0;
-    while p < Player::LEN as u8 {
-        let player = Player::panicky_from_index(p);
-
-        let mut s = 0;
-        while s < Side::LEN as u8 {
-            let side = Side::panicky_from_index(s);
+    finite_for!(player in Player {
+        finite_for!(side in Side {
             if let Some(file) = castles.get(player, side) {
                 id = id.xor(basis.castle.get(player).get(file));
             }
-            s += 1;
-        }
-        p += 1;
-    }
+        });
+    });
 
     id
 }
@@ -260,8 +260,8 @@ mod tests {
         // Polyglot collision with the standard start position:
         // https://talkchess.com/viewtopic.php?sid=19ffa9bbce9b0b8c00e176365ba29da6&start=20&t=57255
         // https://talkchess.com/viewtopic.php?start=40&t=57255
-        let start = Position::<Chess>::start();
-        let position = Position::<Chess>::from_fen(COLLISION_FEN).unwrap();
+        let start = Position::start();
+        let position = Chess::from_fen(COLLISION_FEN).unwrap();
 
         assert_eq!(position.polyglot_id(), start.polyglot_id());
         assert_ne!(position.standard_id(), start.standard_id());
@@ -280,7 +280,7 @@ mod tests {
         cursor.end();
         let constructed = cursor.position();
 
-        let expected = Position::<Chess>::from_fen(COLLISION_FEN).unwrap();
+        let expected = Chess::from_fen(COLLISION_FEN).unwrap();
 
         assert_eq!(constructed.fen(), expected.fen());
         assert_eq!(constructed.transposition_fen(), expected.transposition_fen());
@@ -294,8 +294,7 @@ mod tests {
         // https://talkchess.com/forum/viewtopic.php?p=482951
         // https://talkchess.com/viewtopic.php?sid=19ffa9bbce9b0b8c00e176365ba29da6&start=20&t=57255
         let position =
-            Position::<Chess>::from_fen("2b1k3/4p3/3p1p2/p2P2p1/P2P4/2P2PP1/4P3/2NQKB2 b - - 0 1")
-                .unwrap();
+            Chess::from_fen("2b1k3/4p3/3p1p2/p2P2p1/P2P4/2P2PP1/4P3/2NQKB2 b - - 0 1").unwrap();
 
         assert_eq!(position.polyglot_id(), Id(0));
         assert_ne!(position.transposition_id(&STANDARD), Id(0));

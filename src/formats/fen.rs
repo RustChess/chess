@@ -1,11 +1,11 @@
-use core::{marker::PhantomData, num::NonZeroU32};
+use core::num::NonZeroU32;
 
-#[cfg(test)]
-use crate::variant::{Chess, Freestyle};
 use crate::{
     bitboard::Bitboard,
+    finite::Empty as _,
     position::{
-        Board, Castles, EnPassant, File, Player, Players, Position, Rank, Role, Roles, Side, Square,
+        Board, Castles, Chess, EnPassant, File, Freestyle, Parts, Piece, Placement, Player,
+        PlayerTable, Position, Rank, Side, Square, VariantEnum,
     },
     variant::{Unvalidated, Validate, Variant},
 };
@@ -30,24 +30,25 @@ fn backtrack() -> ErrMode<ContextError> {
     ErrMode::Backtrack(ContextError::new())
 }
 
-// Lenient - fills up with default values.
-// TODO: Currently, malformed "tails" after board are filled with the default values.
-// Also, missing castling in chess is not distinguished from a valid "-" value,
-// in particular, it does not grant the KQkq castling rights.
-pub fn position_unvalidated(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
-    let board = board_fen.parse_next(input)?;
-    let Fields { turn, castle_files, en_passant, reversible, round } =
-        fields_fen.parse_next(input)?;
-    let castles = castle_files.castles(board).ok_or_else(backtrack)?;
-    Ok(Position { board, turn, castles, en_passant, reversible, round, variant: PhantomData })
+// Lenient - missing suffix fields are filled with default values.
+// Missing castling rights are treated like "-", not inferred as KQkq.
+pub fn parse_position(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
+    backtrack_err(preceded(multispace0, position)).parse_next(input)
 }
 
-impl Unvalidated {
-    // implementing on Unvalidated instead of Position<Unvalidated> on purpose,
-    // to avoid "duplicate from_fen" in natural call sites.
-    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
-        position_unvalidated.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))
+fn position(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
+    let board = board.parse_next(input)?;
+    let fields = fields.parse_next(input)?;
+    let castles = resolve_castles(board, fields.castle_rights).ok_or_else(backtrack)?;
+    Ok(Parts {
+        board,
+        turn: fields.turn,
+        castles,
+        en_passant: fields.en_passant,
+        reversible: fields.reversible,
+        round: fields.round,
     }
+    .position())
 }
 
 impl<V: Validate> Position<V> {
@@ -57,31 +58,49 @@ impl<V: Validate> Position<V> {
     }
 }
 
+impl Chess {
+    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
+        Position::from_fen(fen)
+    }
+}
+
+impl Freestyle {
+    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
+        Position::from_fen(fen)
+    }
+}
+
+impl Unvalidated {
+    // implementing on Unvalidated instead of Position<Unvalidated> on purpose,
+    // to avoid "duplicate from_fen" in natural call sites.
+    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
+        parse_position.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))
+    }
+}
+
 impl<V> Position<V> {
     pub fn apparent_fen(&self) -> String {
-        format!("{} {}", self.board.fen(), self.turn.fen(),)
-    }
-
-    pub fn fen(&self) -> String {
-        format!(
-            "{} {} {} {} {} {}",
-            self.board.fen(),
-            self.turn.fen(),
-            self.castles.fen(),
-            en_passant_square(self.en_passant),
-            self.reversible,
-            self.round
-        )
+        format!("{} {}", self.board().fen(), self.turn().fen(),)
     }
 }
 
 impl<V: Variant> Position<V> {
+    pub fn fen(&self) -> String {
+        format!(
+            "{} {} {} {} {}",
+            self.apparent_fen(),
+            self.castles().fen::<V>(),
+            en_passant_square(self.en_passant()),
+            self.reversible(),
+            self.round()
+        )
+    }
+
     pub fn transposition_fen(&self) -> String {
         format!(
-            "{} {} {} {}",
-            self.board.fen(),
-            self.turn.fen(),
-            self.castles.fen(),
+            "{} {} {}",
+            self.apparent_fen(),
+            self.castles().fen::<V>(),
             en_passant_square(self.effective_en_passant()),
         )
     }
@@ -128,7 +147,7 @@ impl Player {
 }
 
 impl Castles {
-    fn fen(self) -> String {
+    pub fn chess_fen(self) -> String {
         use Player::*;
         use Side::*;
 
@@ -150,53 +169,135 @@ impl Castles {
         }
         fen
     }
+
+    pub fn shredder_fen(self) -> String {
+        use Player::*;
+        use Side::*;
+
+        let mut fen = String::new();
+        for (player, side) in [(White, King), (White, Queen), (Black, King), (Black, Queen)] {
+            if let Some(file) = self.get(player, side) {
+                let letter = if player.is_white() { file.upper() } else { file.lower() };
+                fen.push(letter);
+            }
+        }
+        if fen.is_empty() {
+            fen.push('-');
+        }
+        fen
+    }
+
+    pub fn fen<V: Variant>(self) -> String {
+        match V::VARIANT {
+            VariantEnum::Chess => self.chess_fen(),
+            // Debatable for Unvalidated, but chess_fen can lose information,
+            // so if you want chess_fen, validate the file first.
+            VariantEnum::Freestyle | VariantEnum::Unvalidated => self.shredder_fen(),
+        }
+    }
+}
+
+pub fn board(input: &mut Input<'_>) -> ModalResult<Board> {
+    let mut placement = Placement::default();
+    for rank in Rank::iter_rev() {
+        if rank != Rank::Eight {
+            '/'.parse_next(input)?;
+        }
+
+        placement |= board_row(rank).parse_next(input)?;
+    }
+    Ok(placement.board())
+}
+
+fn board_row(rank: Rank) -> impl FnMut(&mut Input<'_>) -> ModalResult<Placement> {
+    move |input| {
+        let mut row = Placement::default();
+        let mut files = File::cursor();
+        loop {
+            if files.done() {
+                return Ok(row);
+            }
+
+            let char = board_fen_char.parse_next(input)?;
+            match char {
+                i @ '1'..='8' => {
+                    if !files.skip(i as u8 - b'0') {
+                        return Err(backtrack());
+                    }
+                }
+                piece => {
+                    let Some(file) = files.next() else {
+                        return Err(backtrack());
+                    };
+                    let square = Bitboard::from(Square::new(file, rank));
+                    let piece = Piece::panicky_from_char(piece);
+                    row.players[piece.player] |= square;
+                    row.roles[piece.role] |= square;
+                }
+            }
+        }
+    }
+}
+
+struct Fields {
+    turn: Player,
+    castle_rights: CastleRights,
+    en_passant: Option<EnPassant>,
+    reversible: u32,
+    round: NonZeroU32,
+}
+
+fn fields(input: &mut Input<'_>) -> ModalResult<Fields> {
+    // Missing suffix fields are defaulted. Once a field separator is present,
+    // cut_err prevents malformed field content from backtracking into "missing".
+    let counters = opt_field((reversible, opt_field(round)));
+    let suffix = opt_field((turn, opt_field((castle_rights, opt_field((en_passant, counters))))))
+        .parse_next(input)?;
+
+    let mut fields = Fields {
+        turn: Player::White,
+        castle_rights: CastleRights::empty(),
+        en_passant: None,
+        reversible: 0,
+        round: NonZeroU32::MIN,
+    };
+
+    let Some((turn, suffix)) = suffix else {
+        return Ok(fields);
+    };
+    fields.turn = turn;
+
+    let Some((castle_rights, suffix)) = suffix else {
+        return Ok(fields);
+    };
+    fields.castle_rights = castle_rights;
+
+    let Some((en_passant, suffix)) = suffix else {
+        return Ok(fields);
+    };
+    fields.en_passant = en_passant;
+
+    let Some((reversible, round)) = suffix else {
+        return Ok(fields);
+    };
+    fields.reversible = reversible;
+
+    if let Some(round) = round {
+        fields.round = round;
+    }
+
+    Ok(fields)
 }
 
 fn en_passant_square(en_passant: Option<EnPassant>) -> String {
     en_passant.map_or_else(|| "-".to_string(), |square| Square::from(square).to_string())
 }
 
-fn is_board_fen_char(c: char) -> bool {
-    "12345678pnbrkqPNBRKQ".contains(c)
-}
-
 fn board_fen_char(input: &mut Input<'_>) -> ModalResult<char> {
-    one_of(is_board_fen_char).parse_next(input)
+    one_of(|c| "12345678pnbrkqPNBRKQ".contains(c)).parse_next(input)
 }
 
-pub fn board_fen(input: &mut Input<'_>) -> ModalResult<Board> {
-    // trim leading whitespace
-    *input = input.trim_start();
-
-    let mut players: Players<Bitboard> = Default::default();
-    let mut roles: Roles<Bitboard> = Default::default();
-    let mut it = Square::rank_rev_iter();
-    while let Some(square) = it.next() {
-        match preceded(opt('/'), board_fen_char).parse_next(input)? {
-            i @ '1'..='8' => {
-                for _ in '1'..i {
-                    if it.next().is_none() {
-                        // TODO: error out here instead
-                        break;
-                    }
-                }
-            }
-            piece => {
-                let square = Bitboard::from(square);
-                if piece.is_lowercase() {
-                    players.black |= square;
-                } else {
-                    players.white |= square;
-                };
-                let role = Role::panicky_from_char(piece);
-                roles[role] |= square;
-            }
-        }
-    }
-    Ok(Board { occupied: players.black | players.white, players, roles })
-}
-
-fn player(input: &mut Input<'_>) -> ModalResult<Player> {
+fn turn(input: &mut Input<'_>) -> ModalResult<Player> {
     one_of(|c| "bw".contains(c))
         .map(|c| match c {
             'b' => Player::Black,
@@ -206,72 +307,122 @@ fn player(input: &mut Input<'_>) -> ModalResult<Player> {
         .parse_next(input)
 }
 
-#[derive(Clone, Copy, Default)]
-struct CastleFiles(Players<[Option<File>; 2]>);
+type CastleRights = PlayerTable<Vec<CastleRight>>;
 
-impl CastleFiles {
-    fn empty() -> Self {
-        Default::default()
-    }
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CastleRight {
+    File(File),
+    Side(Side),
+}
 
-    fn castles(self, board: Board) -> Option<Castles> {
-        let mut castles = Castles::empty();
-
-        for player in Player::ALL {
-            if self.0[player].iter().all(Option::is_none) {
-                continue;
-            }
-
-            let king = board.king_of(player)?;
-            for file in self.0[player].into_iter().flatten() {
-                let side = Side::of_rook(king, file);
-                if castles.has(player, side) {
-                    return None;
-                }
-                castles.set(player, side, file);
-            }
-        }
-
-        Some(castles)
-    }
-
-    /// Pushes a file for the given player, returning `None` if the file is already present.
-    fn push(&mut self, player: Player, file: File) -> Option<()> {
-        let files = &mut self.0[player];
-        if files.contains(&Some(file)) {
-            return None;
-        }
-
-        let slot = files.iter_mut().find(|file| file.is_none())?;
-        *slot = Some(file);
-        Some(())
+impl From<File> for CastleRight {
+    fn from(file: File) -> Self {
+        Self::File(file)
     }
 }
 
-fn castle(input: &mut Input<'_>) -> ModalResult<CastleFiles> {
-    use Player::*;
-    use Side::*;
+impl From<Side> for CastleRight {
+    fn from(side: Side) -> Self {
+        Self::Side(side)
+    }
+}
 
-    alt((
-        '-'.value(Some(CastleFiles::empty())),
-        repeat(1..=4, one_of(|c| "ABCDEFGHKQabcdefghkq".contains(c))).map(|letters: Vec<char>| {
-            let mut files = CastleFiles::empty();
-            for letter in letters {
-                match letter {
-                    'K' => files.push(White, King.chess_rook())?,
-                    'Q' => files.push(White, Queen.chess_rook())?,
-                    'k' => files.push(Black, King.chess_rook())?,
-                    'q' => files.push(Black, Queen.chess_rook())?,
-                    'A'..='H' => files.push(White, File::panicky_from_char(letter))?,
-                    'a'..='h' => files.push(Black, File::panicky_from_char(letter))?,
-                    _ => unreachable!(),
-                }
+fn resolve_castles(board: Board, rights: CastleRights) -> Option<Castles> {
+    let mut castles = Castles::empty();
+
+    for player in Player::iter() {
+        let rights = rights.get_ref(player);
+        if rights.is_empty() {
+            continue;
+        }
+
+        let king = board.king_of(player)?;
+        for &right in rights.iter() {
+            // Determine the side and file of the castle right.
+            // The side is determined in terms of the king's position.
+            // For the file:
+            //   - For Shredder FEN, the file is directly named
+            //   - For standard chess FEN, K/Q/k/q would directly answer both,
+            //     but we also want to support X-FEN, where we need to determine
+            //     the file from the backrank.
+            let (side, file) = match right {
+                CastleRight::File(file) => (Side::of_rook(king, file), file),
+                CastleRight::Side(side) => (side, x_fen_rook(board, player, king, side)?),
+            };
+            // Castle rights must be on different sides of the king
+            if castles.has(player, side) {
+                return None;
             }
-            Some(files)
-        }),
-    ))
-    .verify_map(|files| files)
-    .parse_next(input)
+            castles.set(player, side, file);
+        }
+    }
+
+    Some(castles)
+}
+
+// Resolve an X-FEN K/Q/k/q right to a rook file.
+// The right names the outermost same-colored rook on that side of the king.
+fn x_fen_rook(board: Board, player: Player, king: Square, side: Side) -> Option<File> {
+    let backrank_rooks = board
+        .rooks()
+        .intersection(board.player(player))
+        .intersection(Bitboard::from_rank(player.backrank()));
+    match side {
+        Side::King => backrank_rooks.intersection(king.east()).last(),
+        Side::Queen => backrank_rooks.intersection(king.west()).first(),
+    }
+    .map(Square::file)
+}
+
+fn castle_rights(input: &mut Input<'_>) -> ModalResult<CastleRights> {
+    alt(('-'.value(CastleRights::empty()), some_castles)).parse_next(input)
+}
+
+fn some_castles(input: &mut Input<'_>) -> ModalResult<CastleRights> {
+    use Player::*;
+
+    let mut rights = PlayerTable::default();
+    rights[White] = opt(player_castles(White)).parse_next(input)?.unwrap_or_default();
+    rights[Black] = opt(player_castles(Black)).parse_next(input)?.unwrap_or_default();
+
+    if rights.is_empty() {
+        return Err(backtrack());
+    }
+
+    Ok(rights)
+}
+
+fn player_castles<'i>(
+    player: Player,
+) -> impl FnMut(&mut Input<'i>) -> ModalResult<Vec<CastleRight>> {
+    move |input: &mut Input<'i>| {
+        let mut castle_letter = castle_letter(player);
+        let first = castle_letter.parse_next(input)?;
+        let mut rights = vec![first];
+
+        if let Some(second) = opt(&mut castle_letter).parse_next(input)? {
+            if first == second {
+                return Err(backtrack());
+            }
+            rights.push(second);
+        }
+
+        Ok(rights)
+    }
+}
+
+fn castle_letter<'i>(player: Player) -> impl FnMut(&mut Input<'i>) -> ModalResult<CastleRight> {
+    move |input: &mut Input<'i>| {
+        let letters = if player.is_black() { "abcdefghkq" } else { "ABCDEFGHKQ" };
+        one_of(|c| letters.contains(c))
+            .map(|letter: char| match letter.to_ascii_lowercase() {
+                'k' => Side::King.into(),
+                'q' => Side::Queen.into(),
+                'a'..='h' => File::panicky_from_char(letter).into(),
+                _ => unreachable!(),
+            })
+            .parse_next(input)
+    }
 }
 
 fn file(input: &mut Input<'_>) -> ModalResult<File> {
@@ -295,46 +446,10 @@ fn round(input: &mut Input<'_>) -> ModalResult<NonZeroU32> {
     dec_uint.verify_map(NonZeroU32::new).parse_next(input)
 }
 
-struct Fields {
-    turn: Player,
-    castle_files: CastleFiles,
-    en_passant: Option<EnPassant>,
-    reversible: u32,
-    round: NonZeroU32,
-}
-
-fn fields_fen(input: &mut Input<'_>) -> ModalResult<Fields> {
-    let Some(turn) = opt(preceded(space0, player)).parse_next(input)? else {
-        return Ok(default_fields());
-    };
-
-    let Some(castle_files) = opt(preceded(space0, castle)).parse_next(input)? else {
-        return Ok(Fields { turn, ..default_fields() });
-    };
-
-    let Some(en_passant) = opt(preceded(space0, en_passant)).parse_next(input)? else {
-        return Ok(Fields { turn, castle_files, ..default_fields() });
-    };
-
-    let Some(reversible) = opt(preceded(space0, reversible)).parse_next(input)? else {
-        return Ok(Fields { turn, castle_files, en_passant, ..default_fields() });
-    };
-
-    let Some(round) = opt(preceded(space0, round)).parse_next(input)? else {
-        return Ok(Fields { turn, castle_files, en_passant, reversible, ..default_fields() });
-    };
-
-    Ok(Fields { turn, castle_files, en_passant, reversible, round })
-}
-
-fn default_fields() -> Fields {
-    Fields {
-        turn: Player::White,
-        castle_files: CastleFiles::empty(),
-        en_passant: None,
-        reversible: 0,
-        round: NonZeroU32::MIN,
-    }
+fn opt_field<'i, O>(
+    parser: impl Parser<Input<'i>, O, ErrMode<ContextError>>,
+) -> impl Parser<Input<'i>, Option<O>, ErrMode<ContextError>> {
+    opt(preceded(space1, cut_err(parser)))
 }
 
 #[test]
@@ -344,60 +459,66 @@ fn board_fen_example() {
     use Rank::*;
     use Side::*;
 
-    println!("{:?}", board_fen.parse("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR").unwrap());
-    println!(
-        "{:?}",
-        board_fen.parse_next(&mut "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNRxxx").unwrap()
-    );
+    // println!("{:?}", board_fen.parse("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR").unwrap());
+    // println!(
+    //     "{:?}",
+    //     board_fen.parse_next(&mut "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNRxxx").unwrap()
+    // );
 
     let fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 1 3";
-    let position = position_unvalidated.parse(fen).unwrap();
-    assert_eq!(position.turn, Black);
-    assert!(position.castles.has(Black, King));
-    assert!(position.castles.has(Black, Queen));
-    assert!(position.castles.has(White, King));
-    assert!(position.castles.has(White, Queen));
-    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(E, Three)));
-    assert_eq!(position.reversible, 1);
-    assert_eq!(u32::from(position.round), 3);
-    assert_eq!(position.validate::<Chess>().unwrap().fen(), fen);
-    assert_eq!(Position::<Chess>::from_fen(fen).unwrap().fen(), fen);
-
-    let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
-    let position = position_unvalidated.parse(partial_fen).unwrap();
-    assert_eq!(position.turn, Black);
-    assert!(position.castles.has(Black, King));
-    assert!(position.castles.has(Black, Queen));
-    assert!(position.castles.has(White, King));
-    assert!(position.castles.has(White, Queen));
-    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(E, Three)));
-    assert_eq!(position.reversible, 0);
-    assert_eq!(u32::from(position.round), 1);
+    let position = parse_position.parse(fen).unwrap();
+    assert_eq!(position.turn(), Black);
+    assert!(position.castles().has(Black, King));
+    assert!(position.castles().has(Black, Queen));
+    assert!(position.castles().has(White, King));
+    assert!(position.castles().has(White, Queen));
+    assert_eq!(position.en_passant().map(Into::into), Some(Square::new(E, Three)));
+    assert_eq!(position.reversible(), 1);
+    assert_eq!(u32::from(position.round()), 3);
     assert_eq!(
         position.validate::<Chess>().unwrap().fen(),
-        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 1 3"
     );
     assert_eq!(
-        Position::<Chess>::from_fen(partial_fen).unwrap().fen(),
-        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+        Chess::from_fen(fen).unwrap().fen(),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 1 3"
+    );
+
+    let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
+    let position = parse_position.parse(partial_fen).unwrap();
+    assert_eq!(position.turn(), Black);
+    assert!(position.castles().has(Black, King));
+    assert!(position.castles().has(Black, Queen));
+    assert!(position.castles().has(White, King));
+    assert!(position.castles().has(White, Queen));
+    assert_eq!(position.en_passant().map(Into::into), Some(Square::new(E, Three)));
+    assert_eq!(position.reversible(), 0);
+    assert_eq!(u32::from(position.round()), 1);
+    assert_eq!(
+        position.validate::<Chess>().unwrap().fen(),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    );
+    assert_eq!(
+        Chess::from_fen(partial_fen).unwrap().fen(),
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
     );
 
     let board_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR";
-    let position = position_unvalidated.parse(board_fen).unwrap();
-    assert_eq!(position.turn, White);
-    assert!(!position.castles.has(Black, King));
-    assert!(!position.castles.has(Black, Queen));
-    assert!(!position.castles.has(White, King));
-    assert!(!position.castles.has(White, Queen));
-    assert_eq!(position.en_passant, None);
-    assert_eq!(position.reversible, 0);
-    assert_eq!(u32::from(position.round), 1);
+    let position = parse_position.parse(board_fen).unwrap();
+    assert_eq!(position.turn(), White);
+    assert!(!position.castles().has(Black, King));
+    assert!(!position.castles().has(Black, Queen));
+    assert!(!position.castles().has(White, King));
+    assert!(!position.castles().has(White, Queen));
+    assert_eq!(position.en_passant(), None);
+    assert_eq!(position.reversible(), 0);
+    assert_eq!(u32::from(position.round()), 1);
     assert_eq!(
         position.validate::<Chess>().unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
     );
     assert_eq!(
-        Position::<Chess>::from_fen(board_fen).unwrap().fen(),
+        Chess::from_fen(board_fen).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
     );
 }
@@ -409,11 +530,84 @@ fn parses_shredder_castling() {
     use Side::*;
 
     let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9";
-    let position = Position::<Freestyle>::from_fen(fen).unwrap();
-    assert_eq!(position.castles.get(White, King), Some(H));
-    assert_eq!(position.castles.get(White, Queen), Some(F));
-    assert_eq!(position.castles.get(Black, King), Some(H));
-    assert_eq!(position.castles.get(Black, Queen), Some(F));
+    let position = Freestyle::from_fen(fen).unwrap();
+    assert_eq!(position.castles().get(White, King), Some(H));
+    assert_eq!(position.castles().get(White, Queen), Some(F));
+    assert_eq!(position.castles().get(Black, King), Some(H));
+    assert_eq!(position.castles().get(Black, Queen), Some(F));
+    assert_eq!(position.fen(), fen);
+    assert_eq!(
+        position.transposition_fen(),
+        "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf -"
+    );
+}
+
+#[test]
+fn parses_x_fen_castling() {
+    use File::*;
+    use Player::*;
+    use Side::*;
+
+    let fen = "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w KQkq - 0 1";
+    let position = Freestyle::from_fen(fen).unwrap();
+
+    assert_eq!(position.castles().get(White, King), Some(H));
+    assert_eq!(position.castles().get(White, Queen), Some(F));
+    assert_eq!(position.castles().get(Black, King), Some(H));
+    assert_eq!(position.castles().get(Black, Queen), Some(F));
+    assert_eq!(position.fen(), "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w HFhf - 0 1");
+}
+
+#[test]
+fn writes_chess_and_shredder_castling() {
+    use File::*;
+    use Player::*;
+    use Side::*;
+
+    let mut castles = Castles::empty();
+    castles.set(White, King, H);
+    castles.set(White, Queen, F);
+    castles.set(Black, King, H);
+    castles.set(Black, Queen, F);
+
+    assert_eq!(castles.chess_fen(), "KQkq");
+    assert_eq!(castles.shredder_fen(), "HFhf");
+    assert_eq!(castles.fen::<Chess>(), "KQkq");
+    assert_eq!(castles.fen::<Freestyle>(), "HFhf");
+    assert_eq!(Castles::empty().fen::<Chess>(), "-");
+    assert_eq!(Castles::empty().fen::<Freestyle>(), "-");
+}
+
+#[test]
+fn castle_resolves_x_fen_castling() {
+    use File::*;
+    use Player::*;
+    use Side::*;
+
+    let board = Board::freestyle(crate::position::Scharnagl::new(0).unwrap());
+    let rights = castle_rights.parse("KQkq").unwrap();
+    let castles = resolve_castles(board, rights).unwrap();
+
+    assert_eq!(castles.get(White, King), Some(H));
+    assert_eq!(castles.get(White, Queen), Some(F));
+    assert_eq!(castles.get(Black, King), Some(H));
+    assert_eq!(castles.get(Black, Queen), Some(F));
+}
+
+#[test]
+fn castle_resolves_shredder_castling() {
+    use File::*;
+    use Player::*;
+    use Side::*;
+
+    let board = Board::freestyle(crate::position::Scharnagl::new(0).unwrap());
+    let rights = castle_rights.parse("HFhf").unwrap();
+    let castles = resolve_castles(board, rights).unwrap();
+
+    assert_eq!(castles.get(White, King), Some(H));
+    assert_eq!(castles.get(White, Queen), Some(F));
+    assert_eq!(castles.get(Black, King), Some(H));
+    assert_eq!(castles.get(Black, Queen), Some(F));
 }
 
 #[test]
@@ -426,4 +620,26 @@ fn rejects_duplicate_castling_files() {
 fn rejects_more_than_two_castling_files_per_player() {
     let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFAh - 2 9";
     assert!(Unvalidated::from_fen(fen).is_err());
+}
+
+#[test]
+fn board_row_parses_exactly_one_rank() {
+    assert!(board_row(Rank::Eight).parse("rnbqkbnr").is_ok());
+    assert!(board_row(Rank::Eight).parse("8").is_ok());
+}
+
+#[test]
+fn board_row_rejects_invalid_rank_width() {
+    assert!(board_row(Rank::Eight).parse("7").is_err());
+    assert!(board_row(Rank::Eight).parse("9").is_err());
+    assert!(board_row(Rank::Eight).parse("rnbqkbnrr").is_err());
+    assert!(board_row(Rank::Eight).parse("8r").is_err());
+}
+
+#[test]
+fn rejects_invalid_board_rank_width() {
+    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/8 w - - 0 1").is_ok());
+    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/7 w - - 0 1").is_err());
+    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/9 w - - 0 1").is_err());
+    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/8r w - - 0 1").is_err());
 }

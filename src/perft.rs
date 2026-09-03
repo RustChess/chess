@@ -1,5 +1,5 @@
 use crate::{
-    formats::{Parser as _, fen::position_unvalidated},
+    formats::{Parser as _, fen::parse_position},
     position::{Position, Scharnagl},
     variant::{Chess, Freestyle, Variant},
 };
@@ -17,14 +17,14 @@ pub(crate) fn perft<V: Variant>(position: Position<V>, depth: u32) -> u64 {
 }
 
 fn assert_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = position_unvalidated.parse(fen).unwrap().validate::<Chess>().unwrap();
+    let position = parse_position.parse(fen).unwrap().validate::<Chess>().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
 }
 
 fn assert_freestyle_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = position_unvalidated.parse(fen).unwrap().validate::<Freestyle>().unwrap();
+    let position = parse_position.parse(fen).unwrap().validate::<Freestyle>().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
@@ -50,7 +50,7 @@ fn freestyle_positions() {
     // https://github.com/niklasf/shakmaty/blob/master/shakmaty/tests/chess960.perft
     assert_position_perft(
         "chess960 position 518",
-        Position::<Freestyle>::freestyle(Scharnagl::new(518).unwrap()),
+        Position::freestyle(Scharnagl::new(518).unwrap()),
         &[(1, 20), (2, 400), (3, 8902), (4, 197281)],
     );
     assert_freestyle_perft(
@@ -83,7 +83,7 @@ fn freestyle_positions() {
 #[test]
 #[ignore]
 fn deep_freestyle_positions() {
-    let position = position_unvalidated
+    let position = parse_position
         .parse("b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9")
         .unwrap()
         .validate::<Freestyle>()

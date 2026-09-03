@@ -1,6 +1,6 @@
-use core::fmt;
+use core::{fmt, ops};
 
-use crate::bitboard::Bitboard;
+use crate::{bitboard::Bitboard, finite_for};
 
 use super::{
     File, Move, Piece, Player, Players, Rank, Role, Roles, Scharnagl, Side, Special, Square,
@@ -12,10 +12,17 @@ use super::{
 // Maybe this fits in AVX-512 registers?
 //
 // Invariant: players disjoint, roles disjoint, both union to same (=occupied)
-#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
 /// Location of pieces on the board
 pub struct Board {
     pub occupied: Bitboard,
+    pub players: Players<Bitboard>,
+    pub roles: Roles<Bitboard>,
+}
+
+/// Piece placement without the redundant occupied cache.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Placement {
     pub players: Players<Bitboard>,
     pub roles: Roles<Bitboard>,
 }
@@ -56,16 +63,13 @@ impl Board {
         let backrank = scharnagl(i);
         let mut board = Board::empty();
 
-        let mut index = 0;
-        while index < File::LEN as u8 {
-            let file = File::panicky_from_index(index);
+        finite_for!(file in File {
             let role = backrank[file.index()];
             board.add(Square::new(file, Rank::One), role.of(Player::White));
             board.add(Square::new(file, Rank::Two), Player::White.pawn());
             board.add(Square::new(file, Rank::Seven), Player::Black.pawn());
             board.add(Square::new(file, Rank::Eight), role.of(Player::Black));
-            index += 1;
-        }
+        });
 
         board
     }
@@ -87,6 +91,11 @@ impl Board {
 
     pub const fn split(self) -> (Players<Bitboard>, Roles<Bitboard>) {
         (self.players, self.roles)
+    }
+
+    #[inline]
+    pub const fn placement(self) -> Placement {
+        Placement { players: self.players, roles: self.roles }
     }
 
     #[inline]
@@ -266,70 +275,93 @@ impl Board {
     }
 }
 
+impl Placement {
+    #[inline]
+    pub const fn board(self) -> Board {
+        Board {
+            occupied: self.players.black.union_const(self.players.white),
+            players: self.players,
+            roles: self.roles,
+        }
+    }
+}
+
+impl ops::BitOrAssign for Placement {
+    #[inline]
+    fn bitor_assign(&mut self, other: Self) {
+        self.players.black |= other.players.black;
+        self.players.white |= other.players.white;
+
+        finite_for!(role in Role {
+            self.roles[role] |= other.roles[role];
+        });
+    }
+}
+
 const fn scharnagl(Scharnagl(mut i): Scharnagl) -> [Role; 8] {
+    use Role::*;
+
     const KNIGHTS: [(u8, u8); 10] =
         [(0, 0), (0, 1), (0, 2), (0, 3), (1, 1), (1, 2), (1, 3), (2, 2), (2, 3), (3, 3)];
 
     const fn nth_free(roles: &[Role; 8], n: u8) -> File {
         let mut seen = 0;
-        let mut file = 0;
-        while file < File::LEN as u8 {
-            if Role::Pawn.eq(roles[file as usize]) {
+        finite_for!(file in File {
+            if Pawn.eq(roles[file.index()]) {
                 if seen == n {
-                    return File::panicky_from_index(file);
+                    return file;
                 }
                 seen += 1;
             }
-            file += 1;
-        }
+        });
         unreachable!()
     }
 
-    let mut roles = [Role::Pawn; 8];
+    let mut roles = [Pawn; 8];
 
     // Place light bishop on b/d/f/h according to i % 4
     // IOW, last two bits
     let light_bishop = i % 4;
     i /= 4;
-    roles[(light_bishop * 2 + 1) as usize] = Role::Bishop;
+    roles[(light_bishop * 2 + 1) as usize] = Bishop;
 
     // Place dark bishop on a/c/e/g according to i % 4
     // IOW, next two bits
     let dark_bishop = i % 4;
     i /= 4;
-    roles[(dark_bishop * 2) as usize] = Role::Bishop;
+    roles[(dark_bishop * 2) as usize] = Bishop;
 
     // Place queen on remaining files according to i % 6
     // IOW, next six numbers
     let queen = i % 6;
     i /= 6;
     let queen = nth_free(&roles, queen as u8);
-    roles[queen.index()] = Role::Queen;
+    roles[queen.index()] = Queen;
 
     // There are 960/4/4/6=10 cases left.
     // Place the knights in any two remaining files, using the lookup table
     // of all 2-of-4 subsets with replacement
     let (left_knight, right_knight) = KNIGHTS[i as usize];
     let left_knight = nth_free(&roles, left_knight);
-    roles[left_knight.index()] = Role::Knight;
+    roles[left_knight.index()] = Knight;
     let right_knight = nth_free(&roles, right_knight);
-    roles[right_knight.index()] = Role::Knight;
+    roles[right_knight.index()] = Knight;
 
     // Now fill in the remaining files with rooks and king,
     // ensuring the king is between the rooks
     let rook = nth_free(&roles, 0);
-    roles[rook.index()] = Role::Rook;
+    roles[rook.index()] = Rook;
     let king = nth_free(&roles, 0);
-    roles[king.index()] = Role::King;
+    roles[king.index()] = King;
     let rook = nth_free(&roles, 0);
-    roles[rook.index()] = Role::Rook;
+    roles[rook.index()] = Rook;
 
     roles
 }
 
 #[test]
 fn freestyle_positions() {
-    use super::{Chess, Freestyle, Position, Side};
+    use super::{Position, Side};
     use Player::*;
 
     assert_eq!(Scharnagl::new(960), None);
@@ -344,8 +376,8 @@ fn freestyle_positions() {
         "rkrnnqbb/pppppppp/8/8/8/8/PPPPPPPP/RKRNNQBB"
     );
 
-    let position = Position::<Freestyle>::freestyle(Scharnagl(518));
-    assert_eq!(position.board, Position::<Chess>::start().board);
+    let position = Position::freestyle(Scharnagl(518));
+    assert_eq!(position.board, Position::start().board);
     assert_eq!(position.castles.get(White, Side::Queen), Some(File::A));
     assert_eq!(position.castles.get(White, Side::King), Some(File::H));
     assert_eq!(position.castles.get(Black, Side::Queen), Some(File::A));

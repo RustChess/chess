@@ -2,20 +2,20 @@ use super::*;
 use variant::Validate;
 
 impl Position<Unvalidated> {
+    // Note that this does not "just" validate, but also
+    // removes non-effective en passant rights.
     pub fn validate<V: Validate>(self) -> Result<Position<V>> {
         let board = self.board;
         board.validate()?;
         board.validate_kings(self.turn)?;
         board.validate_pawns()?;
         V::validate_castling(self)?;
-        // TODO: Validate en-passant plausibility beyond the restricted
-        // EnPassant rank type.
 
         Ok(Position {
             board: self.board,
             turn: self.turn,
             castles: self.castles,
-            en_passant: self.en_passant,
+            en_passant: self.effective_en_passant(),
             reversible: self.reversible,
             round: self.round,
             variant: PhantomData,
@@ -148,13 +148,13 @@ impl Position<variant::Freestyle> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        formats::{Parser as _, fen::position_unvalidated},
+        formats::{Parser as _, fen::parse_position},
         position::{Castles, Error, File, Player, Position, Side, Square, Square::*},
         variant::{Chess, Freestyle, Unvalidated},
     };
 
     fn validate(fen: &str) -> Result<Position<Chess>, Error> {
-        position_unvalidated.parse(fen).unwrap().validate()
+        parse_position.parse(fen).unwrap().validate()
     }
 
     #[test]
@@ -173,6 +173,13 @@ mod tests {
     #[test]
     fn rejects_pawn_on_backrank() {
         assert_eq!(validate("4k3/8/8/8/8/8/8/4K2P w - - 0 1").unwrap_err(), Error::PawnOnBackrank);
+    }
+
+    #[test]
+    fn drops_ineffective_en_passant() {
+        let position = validate("4k3/8/8/8/8/8/8/4K3 w - e3 0 1").unwrap();
+
+        assert_eq!(position.en_passant, None);
     }
 
     #[test]

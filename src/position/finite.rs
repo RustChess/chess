@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::bitboard::Bitboard;
+use crate::{bitboard::Bitboard, finite::Empty as _};
 
 /// A chess piece, for instance a white pawn or a black queen.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -46,7 +46,8 @@ crate::finite_set!(
         F = 5 as f,
         G = 6 as g,
         H = 7 as h,
-    }
+    },
+    FileCursor
 );
 
 crate::finite_set!(
@@ -200,7 +201,7 @@ crate::finite_set!(
 impl Castles {
     #[inline]
     pub const fn empty() -> Self {
-        Self(Players { black: Sides::empty(), white: Sides::empty() })
+        Self(Players::EMPTY)
     }
 
     #[inline]
@@ -232,7 +233,7 @@ impl Castles {
 
     #[inline]
     pub fn clear_player(&mut self, player: Player) {
-        self.0[player] = Sides::empty();
+        self.0[player] = Sides::EMPTY;
     }
 }
 
@@ -340,6 +341,24 @@ impl File {
 
 impl Piece {
     #[inline]
+    pub const fn from_char(c: char) -> Option<Self> {
+        let player = if c.is_ascii_lowercase() { Player::Black } else { Player::White };
+        match Role::from_char(c) {
+            Some(role) => Some(Self { player, role }),
+            None => None,
+        }
+    }
+
+    #[inline]
+    #[track_caller]
+    pub(crate) const fn panicky_from_char(c: char) -> Self {
+        match Self::from_char(c) {
+            Some(piece) => piece,
+            None => panic!("invalid piece character"),
+        }
+    }
+
+    #[inline]
     pub const fn char(self) -> char {
         match self.player {
             Player::Black => self.role.black(),
@@ -355,6 +374,16 @@ impl Piece {
 }
 
 impl Player {
+    #[inline]
+    pub const fn is_black(self) -> bool {
+        matches!(self, Player::Black)
+    }
+
+    #[inline]
+    pub const fn is_white(self) -> bool {
+        matches!(self, Player::White)
+    }
+
     #[inline]
     pub const fn other(self) -> Player {
         match self {
@@ -721,13 +750,6 @@ impl Square {
     #[inline]
     pub const fn coordinates(self) -> (File, Rank) {
         (self.file(), self.rank())
-    }
-}
-
-impl<T> Sides<Option<T>> {
-    #[inline]
-    pub const fn empty() -> Self {
-        Sides { queen: None, king: None }
     }
 }
 

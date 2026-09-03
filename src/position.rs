@@ -24,7 +24,7 @@ mod finite;
 mod play;
 pub mod validate;
 
-pub use board::Board;
+pub use board::{Board, Placement};
 pub use finite::*;
 pub use play::*;
 
@@ -81,6 +81,28 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Position<Variant = Chess> {
     /// location of the pieces on the board
+    board: Board,
+    /// player to move
+    turn: Player,
+    /// possible castle sides
+    castles: Castles,
+    /// possible en passant square
+    en_passant: Option<EnPassant>,
+    /// ply counter since last capture or pawn move (reversible moves)
+    reversible: u32,
+    /// starts at 1 and increments after every Black move
+    round: NonZeroU32,
+
+    pub(crate) variant: PhantomData<Variant>,
+}
+
+/// Equivalent to [`Position<Unvalidated>`].
+///
+/// We want to keep `V: Validate` position fields private,
+/// so we can uphold the validated invariants.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Parts {
+    /// location of the pieces on the board
     pub board: Board,
     /// player to move
     pub turn: Player,
@@ -92,8 +114,26 @@ pub struct Position<Variant = Chess> {
     pub reversible: u32,
     /// starts at 1 and increments after every Black move
     pub round: NonZeroU32,
+}
 
-    pub(crate) variant: PhantomData<Variant>,
+impl Parts {
+    pub const fn position(self) -> Position<Unvalidated> {
+        Position {
+            board: self.board,
+            turn: self.turn,
+            castles: self.castles,
+            en_passant: self.en_passant,
+            reversible: self.reversible,
+            round: self.round,
+            variant: PhantomData,
+        }
+    }
+}
+
+impl From<Parts> for Position<Unvalidated> {
+    fn from(parts: Parts) -> Self {
+        parts.position()
+    }
 }
 
 pub const fn unvalidated(board: Board, turn: Player) -> Position<Unvalidated> {
@@ -227,7 +267,37 @@ impl From<Position<Freestyle>> for Position<Unvalidated> {
 //     }
 // }
 
-impl<V: Variant> Position<V> {
+impl<V> Position<V> {
+    #[inline]
+    pub const fn board(&self) -> Board {
+        self.board
+    }
+
+    #[inline]
+    pub const fn turn(&self) -> Player {
+        self.turn
+    }
+
+    #[inline]
+    pub const fn castles(&self) -> Castles {
+        self.castles
+    }
+
+    #[inline]
+    pub const fn en_passant(&self) -> Option<EnPassant> {
+        self.en_passant
+    }
+
+    #[inline]
+    pub const fn reversible(&self) -> u32 {
+        self.reversible
+    }
+
+    #[inline]
+    pub const fn round(&self) -> NonZeroU32 {
+        self.round
+    }
+
     pub const fn checkers(&self) -> Bitboard {
         match self.board.king_of(self.turn) {
             Some(king) => self.board.attacks_on(king, self.turn.other(), self.board.occupied()),
@@ -255,6 +325,17 @@ impl<V: Variant> Position<V> {
 }
 
 impl<V> Position<V> {
+    pub const fn parts(self) -> Parts {
+        Parts {
+            board: self.board,
+            turn: self.turn,
+            castles: self.castles,
+            en_passant: self.en_passant,
+            reversible: self.reversible,
+            round: self.round,
+        }
+    }
+
     pub fn first_ply(&self) -> usize {
         let round = self.round.get() as usize - 1;
         round * 2 + usize::from(self.turn == Player::Black)
@@ -271,7 +352,15 @@ impl<V> Position<V> {
             variant: PhantomData,
         }
     }
+}
 
+impl<V> From<Position<V>> for Parts {
+    fn from(position: Position<V>) -> Self {
+        position.parts()
+    }
+}
+
+impl<V: Variant> Position<V> {
     pub(crate) fn apply_unchecked(mut self, play: Move) -> Position<V> {
         let player = self.turn;
         let captured = if play.is_en_passant() {
@@ -296,13 +385,12 @@ impl<V> Position<V> {
 
         self.board.play_unchecked(player, play);
 
-        self.en_passant = None;
+        let mut en_passant = None;
         if play.role == Role::Pawn {
             let from = play.from as u8;
             let to = play.to as u8;
             if from.abs_diff(to) == 16 {
-                self.en_passant =
-                    EnPassant::try_from(Square::panicky_from_index((from + to) / 2)).ok();
+                en_passant = EnPassant::try_from(Square::panicky_from_index((from + to) / 2)).ok();
             }
         }
 
@@ -317,6 +405,10 @@ impl<V> Position<V> {
         }
 
         self.turn = player.other();
+        self.en_passant = match en_passant {
+            Some(en_passant) => self.attacked_en_passant(en_passant),
+            None => None,
+        };
         self
     }
 

@@ -2,7 +2,7 @@ use core::ops;
 
 use crate::{
     bitboard::{Bitboard, Direction},
-    position::{Board, Move, Moves, Piece, Player, Position, Rank, Role, Side, Square},
+    position::{Board, EnPassant, Move, Moves, Piece, Player, Position, Rank, Role, Side, Square},
     variant::Variant,
 };
 
@@ -19,7 +19,7 @@ impl<V: Variant> Position<V> {
             return self.evasion_moves();
         }
 
-        let shields = self.board.king_shields(self.turn);
+        let shields = self.board().king_shields(self.turn());
 
         let mut moves = self.pseudo_piece_moves();
         moves.retain(|m| self.piece_move_is_safe(*m, shields));
@@ -45,7 +45,7 @@ impl<V: Variant> Position<V> {
 impl<V: Variant> Position<V> {
     fn evasion_moves(&self) -> Moves {
         let checkers = self.checkers();
-        let Some(king) = self.board.king_of(self.turn) else {
+        let Some(king) = self.board().king_of(self.turn()) else {
             return Moves::new();
         };
 
@@ -58,7 +58,7 @@ impl<V: Variant> Position<V> {
             return moves;
         };
 
-        let shields = self.board.king_shields(self.turn);
+        let shields = self.board().king_shields(self.turn());
         let target = king.between(checker).with(checker);
         let mut piece_moves = self.pseudo_piece_moves_to(target);
         piece_moves.retain(|m| self.piece_move_is_safe(*m, shields));
@@ -69,7 +69,7 @@ impl<V: Variant> Position<V> {
     }
 
     pub fn pseudo_piece_moves(&self) -> Moves {
-        let target = !self.board.player(self.turn);
+        let target = !self.board().player(self.turn());
         self.pseudo_piece_moves_to(target)
     }
 
@@ -92,7 +92,7 @@ impl<V: Variant> Position<V> {
     }
 
     fn legal_king_evasion_moves(&self, king: Square, checkers: Bitboard) -> Moves {
-        let sliders = checkers.intersection_const(self.board.sliders());
+        let sliders = checkers.intersection_const(self.board().sliders());
         let mut attacked = Bitboard::EMPTY;
         let mut sliders = sliders;
         while let Some(checker) = sliders.pop_first() {
@@ -105,7 +105,7 @@ impl<V: Variant> Position<V> {
         }
 
         let mut moves = Moves::new();
-        let target = self.board.player(self.turn).union_const(attacked);
+        let target = self.board().player(self.turn()).union_const(attacked);
 
         self.pseudo_role_moves(Role::King, !target, &mut moves);
         moves.retain(|m| self.king_move_is_safe(*m));
@@ -115,7 +115,7 @@ impl<V: Variant> Position<V> {
 
     pub fn legal_king_moves(&self) -> Moves {
         let mut moves = Moves::new();
-        let target = !self.board.player(self.turn);
+        let target = !self.board().player(self.turn());
 
         self.pseudo_role_moves(Role::King, target, &mut moves);
         moves.retain(|m| self.king_move_is_safe(*m));
@@ -124,33 +124,34 @@ impl<V: Variant> Position<V> {
     }
 
     fn king_move_is_safe(&self, play: Move) -> bool {
-        let occupied = self.board.occupied().difference_const(Bitboard::from_square(play.from));
-        self.board.attacks_on(play.to, self.turn.other(), occupied).is_empty()
+        let occupied = self.board().occupied().difference_const(Bitboard::from_square(play.from));
+        self.board().attacks_on(play.to, self.turn().other(), occupied).is_empty()
     }
 
     fn king_square_is_safe(&self, square: Square) -> bool {
-        self.board.attacks_on(square, self.turn.other(), self.board.occupied()).is_empty()
+        self.board().attacks_on(square, self.turn().other(), self.board().occupied()).is_empty()
     }
 
     fn pseudo_role_moves(&self, role: Role, target: Bitboard, moves: &mut Moves) {
-        let occupied = self.board.occupied();
-        let mut pieces = self.board.role(role).intersection_const(self.board.player(self.turn));
+        let occupied = self.board().occupied();
+        let mut pieces =
+            self.board().role(role).intersection_const(self.board().player(self.turn()));
 
         while let Some(from) = pieces.pop_first() {
-            let piece = role.of(self.turn);
+            let piece = role.of(self.turn());
             let mut targets = from.attacks(piece, occupied).intersection_const(target);
             while let Some(to) = targets.pop_first() {
-                moves.push(Move::capture(role, from, to, self.board.role_at(to)));
+                moves.push(Move::capture(role, from, to, self.board().role_at(to)));
             }
         }
     }
 
     fn pseudo_pawn_moves(&self, target: Bitboard, moves: &mut Moves) {
-        let occupied = self.board.occupied();
-        let them = self.board.player(self.turn.other());
-        let pawns = self.board.pawns().intersection_const(self.board.player(self.turn));
+        let occupied = self.board().occupied();
+        let them = self.board().player(self.turn().other());
+        let pawns = self.board().pawns().intersection_const(self.board().player(self.turn()));
         let empty = !occupied;
-        let (push, double_push, left, right, double_rank) = pawn_directions(self.turn);
+        let (push, double_push, left, right, double_rank) = pawn_directions(self.turn());
 
         let single = pawns.checked_shift(push).intersection_const(empty);
         let double =
@@ -161,7 +162,7 @@ impl<V: Variant> Position<V> {
         let mut targets = single.intersection_const(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add_const(push.reverse()).expect("valid pawn source");
-            moves.extend(Move::pawn(self.turn, from, to, None));
+            moves.extend(Move::pawn(self.turn(), from, to, None));
         }
 
         let mut targets = double.intersection_const(target);
@@ -173,27 +174,27 @@ impl<V: Variant> Position<V> {
         let mut targets = captures_left.intersection_const(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add_const(left.reverse()).expect("valid pawn source");
-            moves.extend(Move::pawn(self.turn, from, to, self.board.role_at(to)));
+            moves.extend(Move::pawn(self.turn(), from, to, self.board().role_at(to)));
         }
 
         let mut targets = captures_right.intersection_const(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add_const(right.reverse()).expect("valid pawn source");
-            moves.extend(Move::pawn(self.turn, from, to, self.board.role_at(to)));
+            moves.extend(Move::pawn(self.turn(), from, to, self.board().role_at(to)));
         }
     }
 
     fn legal_en_passant_moves(&self) -> Moves {
         let mut moves = Moves::new();
 
-        if let Some(to) = self.en_passant {
+        if let Some(to) = self.en_passant() {
             let to = to.square();
 
             let mut pawns = self
-                .board
+                .board()
                 .pawns()
-                .intersection_const(self.board.player(self.turn))
-                .intersection_const(to.pawn_attack_moves(self.turn.other()));
+                .intersection_const(self.board().player(self.turn()))
+                .intersection_const(to.pawn_attack_moves(self.turn().other()));
 
             while let Some(from) = pawns.pop_first() {
                 let m = Move::en_passant(from, to);
@@ -213,7 +214,7 @@ impl<V: Variant> Position<V> {
             return true;
         }
 
-        match self.board.king_of(self.turn) {
+        match self.board().king_of(self.turn()) {
             // A shielding piece remains safe if it stays on the full ray
             // through the king and its original square. This does not need to
             // be only the segment between king and attacker: ordinary move
@@ -226,33 +227,33 @@ impl<V: Variant> Position<V> {
     }
 
     fn en_passant_move_is_safe(&self, play: Move) -> bool {
-        let Some(king) = self.board.king_of(self.turn) else {
+        let Some(king) = self.board().king_of(self.turn()) else {
             return false;
         };
 
         let captured = Square::new(play.to.file(), play.from.rank());
         let occupied = self
-            .board
+            .board()
             .occupied()
             .difference_const(Bitboard::from_square(play.from))
             .difference_const(Bitboard::from_square(captured))
             .union_const(Bitboard::from_square(play.to));
 
-        self.board.attacks_on(king, self.turn.other(), occupied).is_empty()
+        self.board().attacks_on(king, self.turn().other(), occupied).is_empty()
     }
 }
 
 impl<V: Variant> Position<V> {
     pub fn can_castle(&self, side: Side) -> Option<Move> {
-        let rook_file = self.castles.get(self.turn, side)?;
-        let king_from = self.board.king_of(self.turn)?;
-        let empty_path = self.turn.castle_empty_path(king_from, rook_file);
-        if !self.board.occupied().intersection_const(empty_path).is_empty() {
+        let rook_file = self.castles().get(self.turn(), side)?;
+        let king_from = self.board().king_of(self.turn())?;
+        let empty_path = self.turn().castle_empty_path(king_from, rook_file);
+        if !self.board().occupied().intersection_const(empty_path).is_empty() {
             return None;
         }
 
         if self
-            .turn
+            .turn()
             .castle_king_path(king_from, side)
             .iter()
             .any(|square| !self.king_square_is_safe(square))
@@ -260,33 +261,36 @@ impl<V: Variant> Position<V> {
             return None;
         }
 
-        Some(Move::castle(self.turn, king_from, rook_file))
+        Some(Move::castle(self.turn(), king_from, rook_file))
     }
 }
 
-impl<V: Variant> Position<V> {
-    pub const fn effective_en_passant(self) -> Option<crate::position::EnPassant> {
-        let Some(en_passant) = self.en_passant else {
+impl<V> Position<V> {
+    pub const fn effective_en_passant(self) -> Option<EnPassant> {
+        let Some(en_passant) = self.en_passant() else {
             return None;
         };
 
         let to = en_passant.square();
 
-        // If say d6 is the en passant square, check that d5 actually contains a pawn
-        // This can go away if we do more validation on e.p in `validate`
-        let Some(captured) = to.checked_add_const(self.turn.other().pawn_push()) else {
+        // If say d6 is the en passant square, check that d5 actually contains a pawn.
+        let Some(captured) = to.checked_add_const(self.turn().other().pawn_push()) else {
             return None;
         };
-        let Some(piece) = self.board.piece_at(captured) else {
+        let Some(piece) = self.board().piece_at(captured) else {
             return None;
         };
-        if !piece.eq(self.turn.other().pawn()) {
+        if !piece.eq(self.turn().other().pawn()) {
             return None;
         }
 
-        // Is there a pawn that can capture the en passant square?
-        let pawns = self.board.pawns().intersection_const(self.board.player(self.turn));
-        if pawns.intersection_const(to.pawn_attack_moves(self.turn.other())).is_empty() {
+        self.attacked_en_passant(en_passant)
+    }
+
+    pub const fn attacked_en_passant(self, en_passant: EnPassant) -> Option<EnPassant> {
+        let to = en_passant.square();
+        let pawns = self.board().pawns().intersection_const(self.board().player(self.turn()));
+        if pawns.intersection_const(to.pawn_attack_moves(self.turn().other())).is_empty() {
             None
         } else {
             Some(en_passant)
@@ -486,6 +490,39 @@ impl Square {
     //    a b c d e f g h
     const fn index_range(self, other: Square) -> Bitboard {
         Bitboard((!0 << self as u32) ^ (!0 << other as u32))
+    }
+
+    // The row-major squares after this one, excluding self..
+    // For d2, this includes e2..h8 and excludes a1..d2.
+    //
+    // For d2:
+    //
+    // 8  x x x x x x x x
+    // 7  x x x x x x x x
+    // 6  x x x x x x x x
+    // 5  x x x x x x x x
+    // 4  x x x x x x x x
+    // 3  x x x x x x x x
+    // 2  . . . . x x x x
+    // 1  . . . . . . . .
+    //
+    //    a b c d e f g h
+    pub const fn index_after(self) -> Bitboard {
+        Bitboard(!0 << (self as u32 + 1))
+    }
+
+    // The row-major squares before this one, excluding self.
+    // For d2, this includes a1..c2 and excludes d2..h8.
+    pub const fn index_before(self) -> Bitboard {
+        Bitboard((1 << self as u32) - 1)
+    }
+
+    pub const fn east(self) -> Bitboard {
+        self.index_after().intersection_const(Bitboard::from_rank(self.rank()))
+    }
+
+    pub const fn west(self) -> Bitboard {
+        self.index_before().intersection_const(Bitboard::from_rank(self.rank()))
     }
 
     pub const fn between(self, other: Square) -> Bitboard {
@@ -907,12 +944,13 @@ mod tests {
         position.set_piece(C8, Black.king());
         position.set_piece(A8, Black.rook());
         position.set_piece(H8, Black.rook());
-        position.castles = Castles::empty();
-        position.castles.set(White, Side::Queen, A);
-        position.castles.set(White, Side::King, H);
-        position.castles.set(Black, Side::Queen, A);
-        position.castles.set(Black, Side::King, H);
-        position.validate().unwrap()
+        let mut parts = position.parts();
+        parts.castles = Castles::empty();
+        parts.castles.set(White, Side::Queen, A);
+        parts.castles.set(White, Side::King, H);
+        parts.castles.set(Black, Side::Queen, A);
+        parts.castles.set(Black, Side::King, H);
+        parts.position().validate().unwrap()
     }
 
     #[test]

@@ -22,10 +22,40 @@ pub trait FiniteSet<const N: usize>: Copy + Sized {
 
 pub trait Empty {
     const EMPTY: Self;
+
+    fn is_empty(&self) -> bool;
+}
+
+impl Empty for u8 {
+    const EMPTY: Self = 0;
+
+    fn is_empty(&self) -> bool {
+        *self == Self::EMPTY
+    }
 }
 
 impl Empty for u128 {
     const EMPTY: Self = 0;
+
+    fn is_empty(&self) -> bool {
+        *self == Self::EMPTY
+    }
+}
+
+impl<T> Empty for Option<T> {
+    const EMPTY: Self = None;
+
+    fn is_empty(&self) -> bool {
+        self.is_none()
+    }
+}
+
+impl<T> Empty for Vec<T> {
+    const EMPTY: Self = Vec::new();
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
 }
 
 /// "Full" table, containing an element of `T` for every value of `X`.
@@ -49,14 +79,18 @@ impl<X, T: Copy, const N: usize> Table<X, T, N> {
     }
 }
 
-impl<X, T: Copy + Empty, const N: usize> Empty for Table<X, T, N> {
-    const EMPTY: Self = Self::filled(T::EMPTY);
+impl<X, T: Empty, const N: usize> Empty for Table<X, T, N> {
+    const EMPTY: Self = Self::new([const { T::EMPTY }; N]);
+
+    fn is_empty(&self) -> bool {
+        self.all.iter().all(Empty::is_empty)
+    }
 }
 
-impl<X, T: Copy + Empty, const N: usize> Table<X, T, N> {
+impl<X, T: Empty, const N: usize> Table<X, T, N> {
     #[inline]
     pub const fn empty() -> Self {
-        Self::filled(T::EMPTY)
+        Self::EMPTY
     }
 }
 
@@ -114,6 +148,19 @@ where
 ///         A1 = 0 as a1,
 ///         B1 = 1 as b1,
 ///     }
+/// );
+/// ```
+///
+/// Table-only form with cursor:
+///
+/// ```ignore
+/// finite_set!(
+///     File,
+///     FileTable {
+///         A = 0 as a,
+///         B = 1 as b,
+///     },
+///     FileCursor
 /// );
 /// ```
 ///
@@ -182,6 +229,35 @@ macro_rules! finite_set {
             $table {
                 $($(#[$variant_meta])* $variant $(= $value)? as $field),+
             }
+        }
+    };
+
+    (
+        $(#[$name_meta:meta])*
+        $name:ident,
+        $(#[$table_meta:meta])*
+        $table:ident {
+            $($(#[$variant_meta:meta])* $variant:ident $(= $value:tt)? as $field:tt),+ $(,)?
+        },
+        $cursor:ident
+    ) => {
+        $crate::finite_set! {
+            @table
+            { $crate::finite_set!(@count $($variant),+) },
+            { $(#[$name_meta])* },
+            $name,
+            { $(#[$table_meta])* },
+            $table,
+            $table {
+                $($(#[$variant_meta])* $variant $(= $value)? as $field),+
+            }
+        }
+
+        $crate::finite_set! {
+            @cursor
+            { $crate::finite_set!(@count $($variant),+) },
+            $name,
+            $cursor
         }
     };
 
@@ -401,6 +477,16 @@ macro_rules! finite_set {
             }
         }
 
+        impl<T: $crate::finite::Empty> $crate::finite::Empty for $record<T> {
+            const EMPTY: Self = Self {
+                $( $field: T::EMPTY ),+
+            };
+
+            fn is_empty(&self) -> bool {
+                $( self.$field.is_empty() )&&+
+            }
+        }
+
         impl<T> core::ops::Index<$name> for $record<T> {
             type Output = T;
 
@@ -414,6 +500,55 @@ macro_rules! finite_set {
             #[inline]
             fn index_mut(&mut self, key: $name) -> &mut T {
                 self.get_mut(key)
+            }
+        }
+    };
+
+    (
+        @cursor
+        $len:expr,
+        $name:ident,
+        $cursor:ident
+    ) => {
+        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+        pub struct $cursor {
+            next: u8,
+        }
+
+        impl $name {
+            #[inline]
+            pub const fn cursor() -> $cursor {
+                $cursor { next: 0 }
+            }
+        }
+
+        impl $cursor {
+            #[inline]
+            pub const fn next(&mut self) -> Option<$name> {
+                if self.done() {
+                    None
+                } else {
+                    let value = $name::panicky_from_index(self.next);
+                    self.next += 1;
+                    Some(value)
+                }
+            }
+
+            #[inline]
+            pub const fn skip(&mut self, n: u8) -> bool {
+                let Some(next) = self.next.checked_add(n) else {
+                    return false;
+                };
+                if next > $len as u8 {
+                    return false;
+                }
+                self.next = next;
+                true
+            }
+
+            #[inline]
+            pub const fn done(self) -> bool {
+                self.next >= $len as u8
             }
         }
     };

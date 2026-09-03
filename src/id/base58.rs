@@ -18,6 +18,10 @@ pub struct Base58 {
 
 impl Empty for Id {
     const EMPTY: Self = Id(0);
+
+    fn is_empty(&self) -> bool {
+        *self == Self::EMPTY
+    }
 }
 
 impl fmt::Display for Id {

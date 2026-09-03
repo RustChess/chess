@@ -12,12 +12,12 @@ pub type StrInput<'a> = &'a str;
 pub(crate) mod prelude {
     pub use winnow::{
         ModalResult,
-        Parser as _,
+        Parser,
         ascii::{dec_uint, multispace0, multispace1, space0, space1},
         binary::{be_u16, be_u24, be_u32, i8, le_i32, le_u16, le_u24, le_u32, u8},
         combinator::{
-            alt, cut_err, delimited, opt, preceded, repeat, separated, separated_pair, seq,
-            terminated,
+            alt, backtrack_err, cut_err, delimited, opt, preceded, repeat, separated,
+            separated_pair, seq, terminated,
         },
         error::{ContextError, ErrMode, StrContext},
         // stream::Bytes,
