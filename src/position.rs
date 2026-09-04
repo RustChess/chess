@@ -25,6 +25,7 @@ use Role::*;
 
 pub use variant::{Chess, Freestyle, SupportedEnum, Unvalidated, Variant, VariantEnum};
 
+mod moves;
 mod play;
 mod rights;
 mod validate;

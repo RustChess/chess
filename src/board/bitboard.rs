@@ -188,6 +188,35 @@ impl Bitboard {
         !self.without_first().is_empty()
     }
 
+    /// Returns the next subset of `self` after `set`, wrapping back to empty.
+    ///
+    /// `set` is expected to be a subset of `self`.
+    #[inline]
+    pub const fn next_subset(self, set: Bitboard) -> Bitboard {
+        // This numerical trick cycles through the powerset of m:
+        //
+        // s := 0
+        // s -> s.wrapping_sub(m) & m
+        //
+        // The operation is conjugate to ordinary increment on a dense counter.
+        // Let the set bits of m be at positions:
+        // p0 < p1 < ... < p(n-1)
+        //
+        // Define pack(s) as taking a subset s and compressing the mask bits into an n-bit integer:
+        // bit(i) of pack(s) = bit(p_i) of s
+        //
+        // Then pack(next(s)) = pack(s) + 1 mod 2^n.
+        //
+        // Example:
+        // m bits:      positions 1,2,4
+        // s bitboard:  00000 00010 00100 00110 10000 ...
+        // pack(s):     000   001   010   011   100 ...
+        //
+        // So this walks through dense counter values 0, 1, 2, ..., 2^n - 1,
+        // embedded into the sparse positions of m.
+        Bitboard(set.0.wrapping_sub(self.0) & self.0)
+    }
+
     #[inline]
     // Non-standard
     pub const fn set(&mut self, square: Square, set: bool) {

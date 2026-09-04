@@ -1,13 +1,12 @@
-use crate::{
-    board::{Bitboard, Player, Role},
-    position::{EnPassant, Move, Position, Side},
-    square::{Direction, Rank, Square},
-    variant::Variant,
-};
+use crate::{Role, Square, board::Bitboard, variant::Variant};
+
+use super::{EnPassant, Move, Position, Side};
+
+use Role::*;
 
 type Moves = Vec<Move>;
 
-// move generation
+/// Position Move API.
 impl<V: Variant> Position<V> {
     pub fn legal_moves(&self) -> Moves {
         if self.is_check() {
@@ -35,9 +34,6 @@ impl<V: Variant> Position<V> {
 
         moves
     }
-}
-
-impl<V: Variant> Position<V> {
     fn evasion_moves(&self) -> Moves {
         let checkers = self.checkers();
         let Some(king) = self.board().king_of(self.turn()) else {
@@ -74,8 +70,6 @@ impl<V: Variant> Position<V> {
     /// In non-check positions `target` is every square not occupied by us. In
     /// single-check evasions it is the checker square plus blocking squares.
     fn pseudo_piece_moves_to(&self, target: Bitboard) -> Moves {
-        use Role::*;
-
         let mut moves = Moves::new();
 
         self.pseudo_pawn_moves(target, &mut moves);
@@ -100,7 +94,7 @@ impl<V: Variant> Position<V> {
         let mut moves = Moves::new();
         let target = self.board().player(self.turn()).union(attacked);
 
-        self.pseudo_role_moves(Role::King, !target, &mut moves);
+        self.pseudo_role_moves(King, !target, &mut moves);
         moves.retain(|m| self.king_move_is_safe(*m));
 
         moves
@@ -110,7 +104,7 @@ impl<V: Variant> Position<V> {
         let mut moves = Moves::new();
         let target = !self.board().player(self.turn());
 
-        self.pseudo_role_moves(Role::King, target, &mut moves);
+        self.pseudo_role_moves(King, target, &mut moves);
         moves.retain(|m| self.king_move_is_safe(*m));
 
         moves
@@ -143,7 +137,10 @@ impl<V: Variant> Position<V> {
         let them = self.board().player(self.turn().other());
         let pawns = self.board().pawns().intersection(self.board().player(self.turn()));
         let empty = !occupied;
-        let (push, double_push, left, right, double_rank) = pawn_directions(self.turn());
+        let push = self.turn().pawn_push();
+        let double_push = self.turn().pawn_double_push();
+        let [left, right] = self.turn().pawn_capture_directions();
+        let double_rank = Bitboard::from_rank(self.turn().pawn_double_push_rank());
 
         let single = pawns.checked_shift(push).intersection(empty);
         let double = single.intersection(double_rank).checked_shift(push).intersection(empty);
@@ -159,7 +156,7 @@ impl<V: Variant> Position<V> {
         let mut targets = double.intersection(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add(double_push.reverse()).expect("valid pawn source");
-            moves.push(Move::normal(Role::Pawn, from, to));
+            moves.push(Move::normal(Pawn, from, to));
         }
 
         let mut targets = captures_left.intersection(target);
@@ -232,9 +229,6 @@ impl<V: Variant> Position<V> {
 
         self.board().attacks_on(king, self.turn().other(), occupied).is_empty()
     }
-}
-
-impl<V: Variant> Position<V> {
     pub fn can_castle(&self, side: Side) -> Option<Move> {
         let rook_file = self.castles().get(self.turn(), side)?;
         let king_from = self.board().king_of(self.turn())?;
@@ -289,34 +283,16 @@ impl<V> Position<V> {
     }
 }
 
-impl Player {
-    const fn pawn_push(self) -> Direction {
-        use {Direction::*, Player::*};
-
-        match self {
-            White => North,
-            Black => South,
-        }
-    }
-}
-
-const fn pawn_directions(player: Player) -> (Direction, Direction, Direction, Direction, Bitboard) {
-    use {Direction::*, Player::*};
-
-    match player {
-        White => (North, NorthNorth, NorthWest, NorthEast, Bitboard::from_rank(Rank::Three)),
-        Black => (South, SouthSouth, SouthWest, SouthEast, Bitboard::from_rank(Rank::Six)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{
         Player::*,
-        position::{Castles, Position, Side},
+        position::Castles,
         square::{File::*, Square::*},
         variant::Freestyle,
     };
+
+    use super::{Move, Position, Side};
 
     fn freestyle_position() -> Position<Freestyle> {
         let mut position = Position::empty();
@@ -339,8 +315,8 @@ mod tests {
     fn generates_freestyle_castle_moves() {
         let moves = freestyle_position().legal_castle_moves();
 
-        assert!(moves.contains(&crate::Move::castle(White, C1, A)));
-        assert!(moves.contains(&crate::Move::castle(White, C1, H)));
+        assert!(moves.contains(&Move::castle(White, C1, A)));
+        assert!(moves.contains(&Move::castle(White, C1, H)));
     }
 
     #[test]
@@ -349,6 +325,6 @@ mod tests {
         position.set_piece(E1, White.knight());
         let position: Position<Freestyle> = position.validate().unwrap();
 
-        assert!(!position.legal_castle_moves().contains(&crate::Move::castle(White, C1, H)));
+        assert!(!position.legal_castle_moves().contains(&Move::castle(White, C1, H)));
     }
 }

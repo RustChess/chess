@@ -8,67 +8,8 @@ use Rank::*;
 mod geometry;
 mod moves;
 
+pub use geometry::Direction;
 pub use moves::SliderSights;
-
-#[derive(Clone, Copy)]
-#[repr(i8)]
-// This is an enum and not e.g. Direction(i8) for two reasons
-// - implementing shift
-// - matching in const contexts
-pub enum Direction {
-    North = direction(0, 1),
-    East = direction(1, 0),
-    South = direction(0, -1),
-    West = direction(-1, 0),
-    NorthNorth = direction(0, 2),
-    SouthSouth = direction(0, -2),
-
-    NorthEast = direction(1, 1),
-    NorthWest = direction(-1, 1),
-    SouthEast = direction(1, -1),
-    SouthWest = direction(-1, -1),
-
-    KnightNorthEast = direction(1, 2),
-    KnightNorthWest = direction(-1, 2),
-    KnightEastNorth = direction(2, 1),
-    KnightEastSouth = direction(2, -1),
-    KnightSouthEast = direction(1, -2),
-    KnightSouthWest = direction(-1, -2),
-    KnightWestNorth = direction(-2, 1),
-    KnightWestSouth = direction(-2, -1),
-}
-
-const fn direction(file: i8, rank: i8) -> i8 {
-    rank * 8 + file
-}
-
-impl Direction {
-    #[inline]
-    pub const fn reverse(self) -> Direction {
-        use Direction::*;
-
-        match self {
-            North => South,
-            East => West,
-            South => North,
-            West => East,
-            NorthNorth => SouthSouth,
-            SouthSouth => NorthNorth,
-            NorthEast => SouthWest,
-            NorthWest => SouthEast,
-            SouthEast => NorthWest,
-            SouthWest => NorthEast,
-            KnightNorthEast => KnightSouthWest,
-            KnightNorthWest => KnightSouthEast,
-            KnightEastNorth => KnightWestSouth,
-            KnightEastSouth => KnightWestNorth,
-            KnightSouthEast => KnightNorthWest,
-            KnightSouthWest => KnightNorthEast,
-            KnightWestNorth => KnightEastSouth,
-            KnightWestSouth => KnightEastNorth,
-        }
-    }
-}
 
 crate::finite_set!(
     File,

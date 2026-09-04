@@ -1,6 +1,6 @@
 use crate::{
     Side, Square,
-    square::{File, Rank},
+    square::{Direction, File, Rank},
 };
 
 use super::Bitboard;
@@ -108,6 +108,44 @@ impl Player {
         match self {
             Black => Seven,
             White => Two,
+        }
+    }
+
+    #[inline]
+    pub const fn pawn_push(self) -> Direction {
+        use Direction::*;
+
+        match self {
+            Black => South,
+            White => North,
+        }
+    }
+
+    #[inline]
+    pub const fn pawn_double_push(self) -> Direction {
+        use Direction::*;
+
+        match self {
+            Black => SouthSouth,
+            White => NorthNorth,
+        }
+    }
+
+    #[inline]
+    pub const fn pawn_capture_directions(self) -> [Direction; 2] {
+        use Direction::*;
+
+        match self {
+            Black => [SouthWest, SouthEast],
+            White => [NorthWest, NorthEast],
+        }
+    }
+
+    #[inline]
+    pub const fn pawn_double_push_rank(self) -> Rank {
+        match self {
+            Black => Six,
+            White => Three,
         }
     }
 

@@ -15,7 +15,6 @@ pub mod finite;
 pub mod formats;
 pub mod game;
 pub mod id;
-pub mod moves;
 pub mod position;
 pub mod square;
 pub mod variant;

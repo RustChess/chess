@@ -13,8 +13,8 @@ impl Square {
         match piece.role {
             Pawn => self.pawn_attack_moves(piece.player),
             Knight => self.knight_moves(),
-            Role::Bishop => self.bishop_sight(occupied),
-            Role::Rook => self.rook_sight(occupied),
+            Bishop => self.bishop_sight(occupied),
+            Rook => self.rook_sight(occupied),
             Queen => self.queen_sight(occupied),
             King => self.king_moves(),
         }
@@ -76,8 +76,9 @@ impl Square {
     }
 }
 
-struct Bishop;
-impl Bishop {
+mod bishop {
+    use super::*;
+
     pub const DIRECTIONS: [Direction; 4] = {
         use Direction::*;
         [NorthEast, SouthEast, SouthWest, NorthWest]
@@ -88,14 +89,15 @@ impl Bishop {
     }
 
     pub const fn blockers(square: Square) -> Bitboard {
-        const BLOCKERS: SliderBlockers = SliderBlockers::new(&Bishop::DIRECTIONS);
+        const BLOCKERS: SliderBlockers = SliderBlockers::new(&DIRECTIONS);
 
         BLOCKERS.get(square)
     }
 }
 
-struct Rook;
-impl Rook {
+mod rook {
+    use super::*;
+
     pub const DIRECTIONS: [Direction; 4] = {
         use Direction::*;
         [North, East, South, West]
@@ -106,7 +108,7 @@ impl Rook {
     }
 
     pub const fn blockers(square: Square) -> Bitboard {
-        const BLOCKERS: SliderBlockers = SliderBlockers::new(&Rook::DIRECTIONS);
+        const BLOCKERS: SliderBlockers = SliderBlockers::new(&DIRECTIONS);
 
         BLOCKERS.get(square)
     }
@@ -150,32 +152,32 @@ impl SliderSights {
     // All the squares a bishop in square "sees", assuming the given occupied squares.
     // Includes the first occupied squarie blocking further sight
     pub const fn bishop_sight(&self, square: Square, occupied: Bitboard) -> Bitboard {
-        let blockers = Bishop::blockers(square);
-        let index = Bishop::projector(square).index(occupied.intersection(blockers));
+        let blockers = bishop::blockers(square);
+        let index = bishop::projector(square).index(occupied.intersection(blockers));
         self.0[index]
     }
 
     pub const fn rook_sight(&self, square: Square, occupied: Bitboard) -> Bitboard {
-        let blockers = Rook::blockers(square);
-        let index = Rook::projector(square).index(occupied.intersection(blockers));
+        let blockers = rook::blockers(square);
+        let index = rook::projector(square).index(occupied.intersection(blockers));
         self.0[index]
     }
 
     const fn project_bishop_sights(&mut self, square: Square) {
         self.project_slider_sights(
             square,
-            &Bishop::DIRECTIONS,
-            Bishop::blockers(square),
-            Bishop::projector(square),
+            &bishop::DIRECTIONS,
+            bishop::blockers(square),
+            bishop::projector(square),
         );
     }
 
     const fn project_rook_sights(&mut self, square: Square) {
         self.project_slider_sights(
             square,
-            &Rook::DIRECTIONS,
-            Rook::blockers(square),
-            Rook::projector(square),
+            &rook::DIRECTIONS,
+            rook::blockers(square),
+            rook::projector(square),
         );
     }
 
@@ -194,31 +196,6 @@ impl SliderSights {
         blockers: Bitboard,
         projector: &Projector<B>,
     ) {
-        // It's a numerical trick that
-        // s := 0
-        // s -> s.wrapping_sub(m) & m
-        // cycles through the powerset of m (all 2^popcount(m) subsets).
-        //
-        // The operation is conjugate to ordinary increment on a dense counter.
-        // Let the set bits of m be at positions:
-        // p0 < p1 < ... < p(n-1)
-        //
-        // Define pack(s) as taking a subset s and compressing the mask bits into an n-bit integer:
-        // bit(i) of pack(s) = bit(p_i) of s
-        //
-        // Then for: next(s) = s.wrapping_sub(m) & m
-        // We have: pack(next(s)) = pack(s) + 1 mod 2^n
-        //
-        // Example:
-        // m bits: positions 1,2,4
-        // s bitboard: 00000 00010 00100 00110 10000 ...
-        // pack(s):      000   001   010   011   100 ...
-        //
-        // So next walks through dense counter values 0, 1, 2, ..., 2^n - 1, just embedded into the sparse positions of m.
-        const fn next(s: Bitboard, m: Bitboard) -> Bitboard {
-            Bitboard(s.0.wrapping_sub(m.0) & m.0)
-        }
-
         let mut occupied = Bitboard::EMPTY;
         loop {
             let index = projector.index(occupied);
@@ -227,7 +204,7 @@ impl SliderSights {
             // due to hash / magic index failing by clashing.
             assert!(self.get(index).is_empty() || self.get(index).eq(sight));
             self.set(index, sight);
-            occupied = next(occupied, blockers);
+            occupied = blockers.next_subset(occupied);
             if occupied.is_empty() {
                 break;
             }
