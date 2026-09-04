@@ -110,6 +110,12 @@ impl Position<Chess> {
 impl Position<variant::Freestyle> {
     pub fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
         for player in Player::ALL {
+            let queen_rook = position.castles.get(player, Side::Queen);
+            let king_rook = position.castles.get(player, Side::King);
+            if queen_rook.is_none() && king_rook.is_none() {
+                continue;
+            }
+
             let Some(king) = position.board.king_of(player) else {
                 return Err(Error::KingCount(player));
             };
@@ -117,8 +123,6 @@ impl Position<variant::Freestyle> {
                 return Err(Error::Castling(player, Side::King));
             }
 
-            let queen_rook = position.castles.get(player, Side::Queen);
-            let king_rook = position.castles.get(player, Side::King);
             if queen_rook.is_some() && queen_rook == king_rook {
                 return Err(Error::Castling(player, Side::King));
             }
@@ -215,6 +219,15 @@ mod tests {
     #[test]
     fn validates_freestyle_castling() {
         freestyle_position(File::C, File::A, File::H).validate::<Freestyle>().unwrap();
+    }
+
+    #[test]
+    fn validates_freestyle_position_without_castling_after_king_moved() {
+        parse_position
+            .parse("2r5/1pb2rkp/6p1/3p1p2/3P1P2/n1PB1R2/P5PP/3RB1K1 w - - 4 26")
+            .unwrap()
+            .validate::<Freestyle>()
+            .unwrap();
     }
 
     #[test]
