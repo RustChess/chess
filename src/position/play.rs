@@ -1,6 +1,14 @@
 use core::fmt;
 
-use super::{File, Player, Role, Side, Square};
+use crate::{Player, Role, Square, square::File};
+
+use super::Side;
+
+use File::*;
+use Role::*;
+
+#[cfg(test)]
+use Player::*;
 
 // Since `move` is a keyword, can use `play: Move` as a synonym.
 // At least this is the most useful suggestion by Google AI Overview ;)
@@ -123,7 +131,7 @@ impl Move {
 
     #[inline]
     pub const fn chess_castle(player: Player, side: Side) -> Move {
-        Move::castle(player, Square::new(File::E, player.backrank()), side.chess_rook())
+        Move::castle(player, Square::new(E, player.backrank()), side.chess_rook())
     }
 
     #[inline]
@@ -131,7 +139,7 @@ impl Move {
         let side = Side::of_rook(from, file);
         Move {
             kind: Kind::Special(Special::Castle(file)),
-            role: Role::King,
+            role: King,
             from,
             to: player.castle_king_to(side),
             capture: None,
@@ -140,7 +148,7 @@ impl Move {
 
     #[inline]
     pub const fn en_passant(from: Square, to: Square) -> Move {
-        Move { role: Role::Pawn, from, to, capture: None, kind: Kind::Special(Special::EnPassant) }
+        Move { role: Pawn, from, to, capture: None, kind: Kind::Special(Special::EnPassant) }
     }
 
     #[inline]
@@ -155,18 +163,18 @@ impl Move {
         role: Role,
         capture: Option<Role>,
     ) -> Move {
-        Move { role: Role::Pawn, from, to, capture, kind: Kind::Special(Special::Promote(role)) }
+        Move { role: Pawn, from, to, capture, kind: Kind::Special(Special::Promote(role)) }
     }
 
     pub fn pawn(player: Player, from: Square, to: Square, capture: Option<Role>) -> Vec<Move> {
         let mut moves = Vec::new();
 
         if to.rank() as u8 == player.promotion_rank() as u8 {
-            for role in [Role::Queen, Role::Rook, Role::Bishop, Role::Knight] {
+            for role in [Queen, Rook, Bishop, Knight] {
                 moves.push(Move::promote_capture(from, to, role, capture));
             }
         } else {
-            moves.push(Move::capture(Role::Pawn, from, to, capture));
+            moves.push(Move::capture(Pawn, from, to, capture));
         }
 
         moves
@@ -280,10 +288,10 @@ impl Move {
     #[inline]
     const fn promotion_code(self) -> u16 {
         match self.promotes() {
-            Some(Role::Knight) => 0,
-            Some(Role::Bishop) => 1,
-            Some(Role::Rook) => 2,
-            Some(Role::Queen) => 3,
+            Some(Knight) => 0,
+            Some(Bishop) => 1,
+            Some(Rook) => 2,
+            Some(Queen) => 3,
             _ => 0,
         }
     }
@@ -307,7 +315,7 @@ impl Move {
         if let Some(side) = self.castle_side() {
             f.write_str(if side == Side::King { SHORT_CASTLE } else { LONG_CASTLE })
         } else {
-            if role != Role::Pawn {
+            if role != Pawn {
                 f.write_char(role.upper())?;
             }
             let does = if capture.is_some() { CAPTURE } else { MOVE };
@@ -395,7 +403,7 @@ pub mod algebraic {
 
 #[test]
 fn display_move() {
-    use {Player::*, Role::*, Square::*};
+    use Square::*;
 
     let mut play = Move::promote(A2, H7, Queen);
 
@@ -418,7 +426,7 @@ fn display_move() {
     assert_eq!(play.to_string(), algebraic::LONG_CASTLE);
     assert_eq!(play.uci_chess().to_string(), "e8c8");
 
-    let play = Move::castle(White, G1, File::F);
+    let play = Move::castle(White, G1, F);
     assert_eq!(play.to_string(), algebraic::LONG_CASTLE);
     assert_eq!(play.uci_chess().to_string(), "g1c1");
     assert_eq!(play.uci_freestyle().to_string(), "g1f1");

@@ -10,21 +10,29 @@ extern crate serde;
 #[macro_use(DeserializeFromStr, SerializeDisplay)]
 extern crate serde_with;
 
-pub mod bitboard;
+pub mod board;
 pub mod finite;
 pub mod formats;
 pub mod game;
-#[doc(inline)]
-pub use game::{Game, Node};
 pub mod id;
-#[doc(inline)]
-pub use id::Id;
+pub mod moves;
+pub mod position;
+pub mod square;
+pub mod variant;
+
 #[cfg(feature = "lichess")]
 pub mod lichess;
-pub mod moves;
+
 #[cfg(test)]
 mod perft;
-pub mod position;
+
 #[doc(inline)]
-pub use position::{Board, Move, Piece, Player, Position, Role, Scharnagl, Side, Square};
-pub mod variant;
+pub use board::{Board, Piece, Player, Role, Scharnagl};
+#[doc(inline)]
+pub use game::{Game, Node};
+#[doc(inline)]
+pub use id::Id;
+#[doc(inline)]
+pub use position::{Move, Position, Side};
+#[doc(inline)]
+pub use square::Square;

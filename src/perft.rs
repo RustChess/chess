@@ -1,6 +1,7 @@
 use crate::{
+    Scharnagl,
     formats::{Parser as _, fen::parse_position},
-    position::{Position, Scharnagl},
+    position::Position,
     variant::{Chess, Freestyle, Variant},
 };
 

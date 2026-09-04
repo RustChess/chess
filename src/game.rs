@@ -6,7 +6,8 @@ use std::{
 use crate::{
     Move, Position,
     formats::san::Check,
-    position::{Chess, File, Rank, Unvalidated},
+    position::{Chess, Unvalidated},
+    square::{File, Rank},
     variant::Variant,
 };
 
@@ -298,7 +299,7 @@ impl Short {
     pub fn new(legal: &[Move], play: Move) -> Self {
         let mut short = Short::default();
 
-        if play.role == crate::position::Role::Pawn || play.is_castle() {
+        if play.role == crate::Role::Pawn || play.is_castle() {
             return short;
         }
 

@@ -4,7 +4,10 @@
 // Records: variable length
 //
 
-use crate::position::{File, Role, Square};
+use crate::{
+    board::Role,
+    square::{File, Square},
+};
 
 use super::{ByteInput as Input, prelude::*};
 

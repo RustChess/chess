@@ -316,6 +316,7 @@ macro_rules! finite_set {
             const ALL: [Self; $len] = [$(Self::$variant),+];
         }
 
+        #[doc = concat!(stringify!($name), " Finite Set API.")]
         impl $name {
             pub const LEN: usize = $len;
 
@@ -585,3 +586,5 @@ macro_rules! finite_for {
         }
     }};
 }
+
+// TODO: If we ever need it, add a finite_map! and finite_find! etc.

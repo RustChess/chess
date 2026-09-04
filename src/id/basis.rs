@@ -1,4 +1,11 @@
-use crate::{finite::Empty as _, finite_for, position::*};
+use crate::{
+    board::*,
+    finite::Empty as _,
+    finite_for,
+    position::{EnPassant, EnPassantTable},
+    square::*,
+    variant::{VariantEnum, VariantTable},
+};
 
 use super::{Id, fold};
 

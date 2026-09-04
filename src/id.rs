@@ -17,9 +17,10 @@ pub use basis::{Basis, POLYGLOT, STANDARD};
 // We set zeros/repeat to achieve compatibility.
 
 use crate::{
+    board::{Board, Player, Role},
     finite_for,
     game::Game,
-    position::{Board, Castles, EnPassant, Player, Position, Role, Side, VariantEnum},
+    position::{Castles, EnPassant, Position, Side, VariantEnum},
     variant::{Unvalidated, Validate, Variant},
 };
 
@@ -162,7 +163,7 @@ impl Board {
 
         finite_for!(player in Player {
             finite_for!(role in Role {
-                let mut squares = self.players.get(player).intersection_const(self.roles.get(role));
+                let mut squares = self.player(player).intersection(self.role(role));
                 while let Some(square) = squares.pop_first() {
                     id = id.xor(basis.board.get(square).get(player).get(role));
                 }
@@ -209,12 +210,7 @@ const fn castle_id(basis: &Basis, castles: Castles) -> Id {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Move,
-        game::Cursor,
-        position::{Role::*, Square::*},
-        variant::Chess,
-    };
+    use crate::{Move, board::Role::*, game::Cursor, square::Square::*, variant::Chess};
 
     const COLLISION_FEN: &str = "2b1kqr1/p2p3p/3p4/p2PpP2/PpP2p2/6P1/8/RRB1KQ1N w - - 21 32";
     const COLLISION_GAME: &str = "

@@ -13,24 +13,26 @@
 //! chess variants, and implement for "freestyle" (aka Fisher Random aka Chess960) chess - to exercise our generality mindedness
 //!
 //! Compared to `shakmaty` our position is a concrete `struct`
-use core::{fmt, marker::PhantomData, num::NonZeroU32};
+#[cfg(test)]
+extern crate alloc;
 
-use crate::{bitboard::Bitboard, variant};
+use core::{marker::PhantomData, num::NonZeroU32};
 
-pub use variant::{Chess, Freestyle, Unvalidated, Variant};
+use crate::{Board, Piece, Player, Role, Scharnagl, Square, board::Bitboard, variant};
 
-mod board;
-mod finite;
+use Player::*;
+use Role::*;
+
+pub use variant::{Chess, Freestyle, SupportedEnum, Unvalidated, Variant, VariantEnum};
+
 mod play;
-pub mod validate;
+mod rights;
+mod validate;
 
-pub use board::{Board, Placement, scharnagl_by_id};
-pub use finite::*;
 pub use play::*;
+pub use rights::*;
 
 pub use Kind::Normal;
-pub use Player::*;
-pub use Role::*;
 pub use Special::{Castle, Promote};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -157,31 +159,11 @@ pub const fn unvalidated(board: Board, turn: Player) -> Position<Unvalidated> {
     }
 }
 
-/// Reinhard Scharnagl's enumeration of all 960 starting positions.
-///
-/// Standard chess is position 518.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Scharnagl(u16);
-
-impl Scharnagl {
-    pub const CHESS: Self = Self(518);
-
-    pub const fn new(i: u16) -> Option<Self> {
-        if i < 960 { Some(Self(i)) } else { None }
-    }
-}
-
-impl fmt::Display for Scharnagl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
 impl Position<Chess> {
     pub const fn start() -> Position<Chess> {
         Position {
             board: Board::standard(),
-            turn: Player::White,
+            turn: White,
             castles: Castles::chess(),
             en_passant: None,
             reversible: 0,
@@ -193,9 +175,6 @@ impl Position<Chess> {
 
 impl Position<Freestyle> {
     pub const fn freestyle(i: Scharnagl) -> Position<Freestyle> {
-        use Player::*;
-        use Side::*;
-
         // Construct board
         let board = Board::freestyle(i);
 
@@ -208,8 +187,8 @@ impl Position<Freestyle> {
         let mut castles = Castles::empty();
         castles.set(White, Side::of_rook(king, queen_rook), queen_rook);
         castles.set(White, Side::of_rook(king, king_rook), king_rook);
-        castles.set(Black, Queen, queen_rook);
-        castles.set(Black, King, king_rook);
+        castles.set(Black, Side::Queen, queen_rook);
+        castles.set(Black, Side::King, king_rook);
 
         Position {
             board,
@@ -227,7 +206,7 @@ impl Position<Unvalidated> {
     pub const fn chess() -> Position<Unvalidated> {
         Position {
             board: Board::standard(),
-            turn: Player::White,
+            turn: White,
             castles: Castles::chess(),
             en_passant: None,
             reversible: 0,
@@ -237,13 +216,11 @@ impl Position<Unvalidated> {
     }
 
     pub const fn empty() -> Position<Unvalidated> {
-        unvalidated(Board::empty(), Player::White)
+        unvalidated(Board::EMPTY, White)
     }
 
     pub fn set_piece(&mut self, square: Square, piece: Piece) -> Option<Piece> {
-        let previous = self.board.remove(square);
-        self.board.add(square, piece);
-        previous
+        self.board.insert(square, piece)
     }
 
     pub fn remove_piece(&mut self, square: Square) -> Option<Piece> {
@@ -254,8 +231,7 @@ impl Position<Unvalidated> {
         let Some(piece) = self.board.remove(from) else {
             return Err(Error::MissingPiece(from));
         };
-        let captured = self.board.remove(to);
-        self.board.add(to, piece);
+        let captured = self.board.insert(to, piece);
         Ok(captured)
     }
 }
@@ -355,7 +331,7 @@ impl<V> Position<V> {
 
     pub fn first_ply(&self) -> usize {
         let round = self.round.get() as usize - 1;
-        round * 2 + usize::from(self.turn == Player::Black)
+        round * 2 + usize::from(self.turn == Black)
     }
 
     pub const fn unvalidated(self) -> Position<Unvalidated> {
@@ -388,11 +364,11 @@ impl<V: Variant> Position<V> {
             None
         };
 
-        if play.role == Role::King {
+        if play.role == King {
             self.castles.clear_player(player);
         }
 
-        if play.role == Role::Rook {
+        if play.role == Rook {
             self.clear_castle_rook(player, play.from);
         }
 
@@ -403,7 +379,7 @@ impl<V: Variant> Position<V> {
         self.board.play_unchecked(player, play);
 
         let mut en_passant = None;
-        if play.role == Role::Pawn {
+        if play.role == Pawn {
             let from = play.from as u8;
             let to = play.to as u8;
             if from.abs_diff(to) == 16 {
@@ -411,13 +387,13 @@ impl<V: Variant> Position<V> {
             }
         }
 
-        if play.role == Role::Pawn || play.capture.is_some() || play.is_en_passant() {
+        if play.role == Pawn || play.capture.is_some() || play.is_en_passant() {
             self.reversible = 0;
         } else {
             self.reversible += 1;
         }
 
-        if player == Player::Black {
+        if player == Black {
             self.round = self.round.saturating_add(1);
         }
 
@@ -444,7 +420,7 @@ impl<V: Variant> Position<V> {
 
 #[test]
 fn all_random() {
-    use std::collections::BTreeSet as Set;
+    use alloc::collections::BTreeSet as Set;
 
     let mut positions = Vec::new();
     let all = Set::from_iter(1usize..=8);

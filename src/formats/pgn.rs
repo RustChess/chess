@@ -5,8 +5,9 @@ use std::{fmt, str};
 use winnow::Parser as _;
 
 use crate::{
+    Scharnagl,
     game::{Command, Nag, Outcome, Slot, Tag as OtherTag, Text},
-    position::{Position, Scharnagl, SupportedEnum, Unvalidated},
+    position::{Position, SupportedEnum, Unvalidated},
 };
 
 use super::san;
@@ -458,8 +459,10 @@ impl Move {
 mod tests {
     use crate::{
         Position,
+        board::{Role::*, Scharnagl},
         formats::san,
-        position::{Chess, File::*, Freestyle, Role::*, Scharnagl, Square::*},
+        position::{Chess, Freestyle},
+        square::{File::*, Square::*},
     };
 
     use super::*;

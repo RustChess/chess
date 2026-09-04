@@ -1,8 +1,9 @@
 use crate::game::{self, Node, Roster};
-use crate::position::{
-    self, Chess, Freestyle, Position, SupportedEnum, Unvalidated, scharnagl_by_id,
-};
 use crate::variant::{self, Supported, Variant};
+use crate::{
+    board::scharnagl_by_id,
+    position::{self, Chess, Freestyle, Position, SupportedEnum, Unvalidated},
+};
 
 use super::*;
 

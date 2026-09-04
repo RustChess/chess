@@ -3,8 +3,10 @@
 use core::{fmt, str::FromStr};
 
 use crate::{
+    board::Role,
     game,
-    position::{File, Rank, Role, Side, Square},
+    position::Side,
+    square::{File, Rank, Square},
 };
 
 use super::{StrInput as Input, prelude::*};
@@ -337,7 +339,10 @@ fn err<T>() -> ModalResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::position::{File::*, Role::*, Square::*};
+    use crate::{
+        board::Role::*,
+        square::{File::*, Square::*},
+    };
 
     #[test]
     fn parses_pawn_move() {

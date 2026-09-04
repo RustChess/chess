@@ -4,7 +4,7 @@ use core::{fmt, str::FromStr};
 
 use crate::{
     Game, Role, game,
-    position::{File, Rank, Square},
+    square::{File, Rank, Square},
     variant::{Chess, Supported},
 };
 
@@ -308,11 +308,7 @@ fn promotion(input: &mut Input<'_>) -> ModalResult<Role> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        Position,
-        position::{Role::*, Square::*},
-        variant::Chess,
-    };
+    use crate::{Position, board::Role::*, square::Square::*, variant::Chess};
 
     use super::*;
 

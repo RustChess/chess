@@ -1,12 +1,10 @@
 use core::num::NonZeroU32;
 
 use crate::{
-    bitboard::Bitboard,
+    board::{self, Bitboard, Board, Piece, Player, PlayerTable},
     finite::Empty as _,
-    position::{
-        Board, Castles, Chess, EnPassant, File, Freestyle, Parts, Piece, Placement, Player,
-        PlayerTable, Position, Rank, Side, Square, VariantEnum,
-    },
+    position::{Castles, Chess, EnPassant, Freestyle, Parts, Position, Side, VariantEnum},
+    square::{File, Rank, Square},
     variant::{Unvalidated, Variant},
 };
 
@@ -118,7 +116,7 @@ impl Board {
             let mut empty = 0;
             for file in File::iter() {
                 let square = Square::new(file, rank);
-                if let Some(piece) = self.piece_at(square) {
+                if let Some(piece) = self.get(square) {
                     if empty > 0 {
                         fen.push(char::from_digit(empty, 10).unwrap());
                         empty = 0;
@@ -198,20 +196,20 @@ impl Castles {
 }
 
 pub fn board(input: &mut Input<'_>) -> ModalResult<Board> {
-    let mut placement = Placement::default();
+    let mut parts = board::Parts::default();
     for rank in Rank::iter_rev() {
         if rank != Rank::Eight {
             '/'.parse_next(input)?;
         }
 
-        placement |= board_row(rank).parse_next(input)?;
+        parts |= board_row(rank).parse_next(input)?;
     }
-    Ok(placement.board())
+    Board::new(parts).map_err(|_| backtrack())
 }
 
-fn board_row(rank: Rank) -> impl FnMut(&mut Input<'_>) -> ModalResult<Placement> {
+fn board_row(rank: Rank) -> impl FnMut(&mut Input<'_>) -> ModalResult<board::Parts> {
     move |input| {
-        let mut row = Placement::default();
+        let mut row = board::Parts::default();
         let mut files = File::cursor();
         loop {
             if files.done() {
@@ -584,7 +582,7 @@ fn castle_resolves_x_fen_castling() {
     use Player::*;
     use Side::*;
 
-    let board = Board::freestyle(crate::position::Scharnagl::new(0).unwrap());
+    let board = Board::freestyle(crate::Scharnagl::new(0).unwrap());
     let rights = castle_rights.parse("KQkq").unwrap();
     let castles = resolve_castles(board, rights).unwrap();
 
@@ -600,7 +598,7 @@ fn castle_resolves_shredder_castling() {
     use Player::*;
     use Side::*;
 
-    let board = Board::freestyle(crate::position::Scharnagl::new(0).unwrap());
+    let board = Board::freestyle(crate::Scharnagl::new(0).unwrap());
     let rights = castle_rights.parse("HFhf").unwrap();
     let castles = resolve_castles(board, rights).unwrap();
 

@@ -161,10 +161,7 @@ impl<'a, V> Iterator for Mainline<'a, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        Position,
-        position::{Role::*, Square::*},
-    };
+    use crate::{Position, board::Role::*, square::Square::*};
 
     use super::*;
 
