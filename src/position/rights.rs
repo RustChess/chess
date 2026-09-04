@@ -1,4 +1,4 @@
-use crate::{Player, Square, board::Players, finite::Empty as _, finite_for, square::File};
+use crate::{Player, Square, board::Players, finite::Empty as _, square::File};
 
 use File::*;
 

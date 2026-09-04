@@ -259,6 +259,12 @@ impl Board {
     }
 
     #[inline]
+    pub const fn unique_king_of(self, player: Player) -> Option<Square> {
+        let kings = self.roles.king.intersection(self.player(player));
+        if kings.more_than_one() { None } else { kings.first() }
+    }
+
+    #[inline]
     pub const fn white(self) -> Bitboard {
         self.players.white
     }

@@ -2,12 +2,11 @@ pub mod base58;
 pub mod basis;
 pub use basis::{Basis, POLYGLOT, STANDARD};
 
-// Our "standard basis" has 804 "consistent" Ids:
+// Our "standard basis" has 802 "consistent" Ids:
 // - board: 64 * 2 * 6 = 768
 // - turn: 2
 // - castle: 2 * 8 = 16
 // - en-passant: 16 squares
-// - variant: 2
 //
 // Polyglot basis has 781 "random" IDs:
 // - pieces: 12 * 64 = 768
@@ -18,10 +17,8 @@ pub use basis::{Basis, POLYGLOT, STANDARD};
 
 use crate::{
     board::{Board, Player, Role},
-    finite_for,
     game::Game,
-    position::{Castles, EnPassant, Position, Side, VariantEnum},
-    variant::{Unvalidated, Validate, Variant},
+    position::{Castles, EnPassant, Position, Side},
 };
 
 /// Type of globally unique identifiers.
@@ -76,18 +73,20 @@ const fn split(hash: U256) -> (u128, u128) {
     (u128::from_be_bytes(upper), u128::from_be_bytes(lower))
 }
 
-impl<V: crate::variant::Supported> Game<V> {
+impl Game {
     // Experimental: A globally unique ID for all games
     pub fn id(&self) -> Id {
         use crate::game::cursor::Mainline;
 
-        let mut id = hash(format!("game:{}", self.start().id()).as_bytes());
+        let mut hash = sha2_const::Sha256::new()
+            .update(b"game:")
+            .update(&self.start().id().u128().to_be_bytes());
 
         for play in Mainline::new(self) {
-            id = hash(format!("game:{id}:{}", play.play().uci::<V>()).as_bytes());
+            hash = hash.update(b":").update(play.play().uci_960().to_string().as_bytes());
         }
 
-        id
+        Id(fold(hash.finalize()))
     }
 
     // // TODO: This is probably a bad idea
@@ -105,13 +104,12 @@ impl<V: crate::variant::Supported> Game<V> {
     // }
 }
 
-impl<V: Validate> Position<V> {
-    // standard ID plus counters and explicit variant
+impl Position {
+    // standard ID plus counters
     pub fn id(self) -> Id {
         self.standard_id()
             .xor(counter_id("reversible", self.reversible()))
             .xor(counter_id("round", self.round().get()))
-            .xor(variant_id(&STANDARD, V::VARIANT))
     }
 
     // our 128-bit replacement of the classical Polyglot hash
@@ -130,22 +128,9 @@ impl<V: Validate> Position<V> {
             .xor(castle_id(basis, self.castles()))
             .xor(en_passant_id(basis, self.en_passant()))
     }
-}
-
-impl<V: Variant> Position<V> {
     // What one typically sees in a depicted position: The board, and the player to move
     pub const fn apparent_id(self, basis: &Basis) -> Id {
         self.board().id(basis).xor(turn_id(basis, self.turn()))
-    }
-}
-
-impl Position<Unvalidated> {
-    /// For unvalidated positions, there is no "only effective e.p"
-    /// invariant, so we normalize it.
-    pub const fn normalized_transposition_id(self, basis: &Basis) -> Id {
-        self.apparent_id(basis)
-            .xor(castle_id(basis, self.castles()))
-            .xor(en_passant_id(basis, self.effective_en_passant()))
     }
 }
 
@@ -182,10 +167,6 @@ const fn turn_id(basis: &Basis, turn: Player) -> Id {
     basis.turn.get(turn)
 }
 
-const fn variant_id(basis: &Basis, variant: VariantEnum) -> Id {
-    basis.variant.get(variant)
-}
-
 const fn en_passant_id(basis: &Basis, en_passant: Option<EnPassant>) -> Id {
     match en_passant {
         Some(square) => basis.en_passant.get(square),
@@ -210,7 +191,7 @@ const fn castle_id(basis: &Basis, castles: Castles) -> Id {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Move, board::Role::*, game::Cursor, square::Square::*, variant::Chess};
+    use crate::{Move, board::Role::*, game::Cursor, square::Square::*};
 
     const COLLISION_FEN: &str = "2b1kqr1/p2p3p/3p4/p2PpP2/PpP2p2/6P1/8/RRB1KQ1N w - - 21 32";
     const COLLISION_GAME: &str = "
@@ -220,30 +201,30 @@ mod tests {
         17. Nb7 Rh8 18. Nd6+ exd6 19. e5 fxe5 20. d5 Qf6 21. a4 Rg8
         22. Nd2 Qf7 23. Rb1 Qf6 24. Ne4 Qf7 25. Rh2 Qf6 26. Nf2 Qf7
         27. Nh1 Qf6 28. Qd3 Qf7 29. Qf1 Qf6 30. Ra2 Qf7 31. Raa1 Qf8 *";
-    const START: Position<Chess> = Position::start();
+    const START: Position = Position::start();
 
     #[test]
     fn documents_game_ids() {
         use crate::formats::{Parser as _, pgn};
 
         // start position, no moves
-        let game = Game::new(START);
+        let game = Game::chess(START).unwrap();
         let id = game.id();
-        assert_eq!(id.to_string(), "LJFnWri3B3piKdWLUSBGWo");
-        assert_eq!(id.u128(), 207725053367679635200992249076853996316);
+        assert_eq!(id.to_string(), "36MkWJmbeTWaYEDrfrGxNn");
+        assert_eq!(id.u128(), 22523061550585735571242541243028587795);
 
         // 1. e4 on start position
         let mut cursor = Cursor::new(game);
         cursor.push(Move::normal(Pawn, E2, E4)).unwrap();
         let e4 = cursor.into_inner();
-        assert_eq!(e4.id().to_string(), "4mU2d1B9K3Not73feSJdFo");
-        assert_eq!(e4.id().u128(), 40545599516303226419867082063332202050);
+        assert_eq!(e4.id().to_string(), "46osJVmEGh3XxSk2FKcFbr");
+        assert_eq!(e4.id().u128(), 33370984391190127392068542153345756661);
 
         // The weird game
         let pgn = pgn::game.parse(COLLISION_GAME).unwrap();
         let game: Game = pgn.try_into().unwrap();
-        assert_eq!(game.id().to_string(), "Pwh8p1hKRz1HWnZGm444GT");
-        assert_eq!(game.id().u128(), 246966137601676322552589085536778212564);
+        assert_eq!(game.id().to_string(), "DL7b2eDrC8LVtpBQFL9BYT");
+        assert_eq!(game.id().u128(), 132719545793121815798994835819316023416);
     }
 
     #[test]
@@ -257,7 +238,7 @@ mod tests {
         // https://talkchess.com/viewtopic.php?sid=19ffa9bbce9b0b8c00e176365ba29da6&start=20&t=57255
         // https://talkchess.com/viewtopic.php?start=40&t=57255
         let start = Position::start();
-        let position = Chess::from_fen(COLLISION_FEN).unwrap();
+        let position = Position::from_fen(COLLISION_FEN).unwrap();
 
         assert_eq!(position.polyglot_id(), start.polyglot_id());
         assert_ne!(position.standard_id(), start.standard_id());
@@ -276,7 +257,7 @@ mod tests {
         cursor.end();
         let constructed = cursor.position();
 
-        let expected = Chess::from_fen(COLLISION_FEN).unwrap();
+        let expected = Position::from_fen(COLLISION_FEN).unwrap();
 
         assert_eq!(constructed.fen(), expected.fen());
         assert_eq!(constructed.transposition_fen(), expected.transposition_fen());
@@ -290,7 +271,7 @@ mod tests {
         // https://talkchess.com/forum/viewtopic.php?p=482951
         // https://talkchess.com/viewtopic.php?sid=19ffa9bbce9b0b8c00e176365ba29da6&start=20&t=57255
         let position =
-            Chess::from_fen("2b1k3/4p3/3p1p2/p2P2p1/P2P4/2P2PP1/4P3/2NQKB2 b - - 0 1").unwrap();
+            Position::from_fen("2b1k3/4p3/3p1p2/p2P2p1/P2P4/2P2PP1/4P3/2NQKB2 b - - 0 1").unwrap();
 
         assert_eq!(position.polyglot_id(), Id(0));
         assert_ne!(position.transposition_id(&STANDARD), Id(0));

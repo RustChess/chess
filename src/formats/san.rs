@@ -157,7 +157,7 @@ impl From<(crate::Move, game::Short, Option<Check>)> for San {
     }
 }
 
-impl<V> game::Play<V> {
+impl game::Play {
     pub fn san(&self) -> San {
         San::from((self.play(), self.short(), self.check()))
     }

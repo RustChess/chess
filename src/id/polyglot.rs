@@ -1199,9 +1199,4 @@ pub const POLYGLOT: Basis = Basis {
         Id(0x77c6_21cc_9fb3_a483), // en-passant:g6
         Id(0x67a3_4dac_4356_550b), // en-passant:h6
     ]),
-    variant: VariantTable::new([
-        Id(0x0000_0000_0000_0000), // variant:unvalidated
-        Id(0x0000_0000_0000_0000), // variant:chess
-        Id(0x0000_0000_0000_0000), // variant:freestyle
-    ]),
 };

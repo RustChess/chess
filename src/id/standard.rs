@@ -1198,9 +1198,4 @@ pub const STANDARD: Basis = Basis {
         Id(0x2cf2_e423_591c_5d90_fe1a_e72e_96cc_20c7), // en-passant:g6
         Id(0xa4f9_c5dd_8670_7adb_f4af_18df_a5d3_faf1), // en-passant:h6
     ]),
-    variant: VariantTable::new([
-        Id(0x9124_6cad_0fe7_223e_bf81_c8a3_303f_0e93), // variant:unvalidated
-        Id(0x5dc5_6059_40db_1936_1955_9425_07cb_cf9a), // variant:chess
-        Id(0x8b30_2f4f_e807_5e47_a43b_6953_bbd8_3736), // variant:freestyle
-    ]),
 };

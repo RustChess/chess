@@ -1,135 +1,76 @@
-use core::marker::PhantomData;
-
 use crate::{
-    Board, Player, Role, Square,
-    board::Bitboard,
-    square::File,
-    variant::{self, Chess, Unvalidated, Validate},
+    Player,
+    board::{Bitboard, Players},
 };
 
-use super::{Error, Position, Result, Side};
+use super::{Error, Parts, Position, Result, Side};
 
-use File::*;
 use Player::*;
-use Role::*;
 
-impl Position<Unvalidated> {
-    // Note that this does not "just" validate, but also
-    // removes non-effective en passant rights.
-    pub fn validate<V: Validate>(self) -> Result<Position<V>> {
-        let board = self.board;
-        board.validate_kings(self.turn)?;
-        board.validate_pawns()?;
-        V::validate_castling(self)?;
+impl Position {
+    pub fn new(parts: Parts) -> Result<Self> {
+        let Parts { board, turn, castles, en_passant, reversible, round } = parts;
 
-        Ok(Position {
-            board: self.board,
-            turn: self.turn,
-            castles: self.castles,
-            en_passant: self.effective_en_passant(),
-            reversible: self.reversible,
-            round: self.round,
-            variant: PhantomData,
-        })
-    }
-}
+        // 1. Exactly one king for each player
+        let Some(white) = board.unique_king_of(White) else {
+            return Err(Error::KingCount(White));
+        };
+        let Some(black) = board.unique_king_of(Black) else {
+            return Err(Error::KingCount(Black));
+        };
+        let kings = Players { black, white };
 
-impl Board {
-    fn validate_kings(self, turn: Player) -> Result<()> {
-        for player in Player::ALL {
-            if self.role(King).intersection(self.player(player)).len() != 1 {
-                return Err(Error::KingCount(player));
-            }
-        }
-
-        let white = self.king_of(White).expect("validated king count");
-        let black = self.king_of(Black).expect("validated king count");
+        // 2. Kings not adjacent
         if white.king_moves().contains(black) {
             return Err(Error::AdjacentKings);
         }
 
-        let player = turn.other();
-        let king = match player {
-            Black => black,
-            White => white,
-        };
-        if !self.attacks_on(king, turn, self.occupied()).is_empty() {
-            return Err(Error::KingAttacked(player));
+        // 3. The player who just moved is not in check
+        let other = turn.other();
+        let king = kings.get(other);
+        if !board.attacks_on(king, turn, board.occupied()).is_empty() {
+            return Err(Error::KingAttacked(other));
         }
 
-        Ok(())
-    }
-
-    fn validate_pawns(self) -> Result<()> {
-        if !self.pawns().intersection(Bitboard::BACKRANKS).is_empty() {
+        // 4. No pawns are on either back rank
+        if !board.pawns().intersection(Bitboard::BACKRANKS).is_empty() {
             return Err(Error::PawnOnBackrank);
         }
 
-        Ok(())
-    }
-}
-
-impl Position<Chess> {
-    pub fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
         for player in Player::ALL {
-            for side in Side::ALL {
-                if !position.castles.has(player, side) {
-                    continue;
-                }
-
-                let king = player.king();
-                let rook = player.rook();
-                if position.board.get(Square::new(E, player.backrank())) != Some(king)
-                    || position.board.get(player.castle_rook_from(side.chess_rook())) != Some(rook)
-                {
-                    return Err(Error::Castling(player, side));
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl Position<variant::Freestyle> {
-    pub fn validate_castling(position: Position<Unvalidated>) -> Result<()> {
-        for player in Player::ALL {
-            let queen_rook = position.castles.get(player, Side::Queen);
-            let king_rook = position.castles.get(player, Side::King);
-            if queen_rook.is_none() && king_rook.is_none() {
+            if !castles.has(player, Side::Queen) && !castles.has(player, Side::King) {
                 continue;
             }
 
-            let Some(king) = position.board.king_of(player) else {
-                return Err(Error::KingCount(player));
-            };
+            // 5. A king with castling rights is on its back rank
+            let king = kings.get(player);
             if king.rank() != player.backrank() {
-                return Err(Error::Castling(player, Side::King));
-            }
-
-            if queen_rook.is_some() && queen_rook == king_rook {
-                return Err(Error::Castling(player, Side::King));
+                return Err(Error::CastleKing(player));
             }
 
             for side in Side::ALL {
-                let Some(rook_file) = position.castles.get(player, side) else {
+                let Some(rook_file) = castles.get(player, side) else {
                     continue;
                 };
-
-                let valid_side = match side {
-                    Side::Queen => rook_file < king.file(),
-                    Side::King => king.file() < rook_file,
-                };
-                let rook = player.rook();
-                if !valid_side
-                    || position.board.get(player.castle_rook_from(rook_file)) != Some(rook)
-                {
-                    return Err(Error::Castling(player, side));
+                // 6. Each castle right has player's rook on the indicated square
+                if board.get(player.castle_rook_from(rook_file)) != Some(player.rook()) {
+                    return Err(Error::CastleRook { player, side, file: rook_file });
+                }
+                // 7. This castling rook is on the indicated side of the king
+                if !Side::of_rook(king, rook_file).eq(side) {
+                    return Err(Error::CastleSide { player, side, file: rook_file });
                 }
             }
         }
 
-        Ok(())
+        let en_passant = board.effective_en_passant(en_passant, turn);
+        Ok(Position { board, turn, castles, en_passant, reversible, round })
+    }
+}
+
+impl Parts {
+    pub fn validate(self) -> Result<Position> {
+        Position::new(self)
     }
 }
 
@@ -138,16 +79,15 @@ mod tests {
     use crate::{
         Player, Position, Side, Square,
         formats::{Parser as _, fen::parse_position},
-        position::{Castles, Error},
+        position::{Error, Parts},
         square::{File, Square::*},
-        variant::{Chess, Freestyle, Unvalidated},
     };
 
     use File::*;
     use Player::*;
 
-    fn validate(fen: &str) -> Result<Position<Chess>, Error> {
-        parse_position.parse(fen).unwrap().validate()
+    fn validate(fen: &str) -> Result<Position, Error> {
+        Position::new(parse_position.parse(fen).unwrap())
     }
 
     #[test]
@@ -180,56 +120,52 @@ mod tests {
         );
     }
 
-    fn freestyle_position(
-        king_file: File,
-        queen_rook: File,
-        king_rook: File,
-    ) -> Position<Unvalidated> {
-        let mut position = Position::empty();
-        position.set_piece(Square::new(king_file, White.backrank()), White.king());
-        position.set_piece(Square::new(queen_rook, White.backrank()), White.rook());
-        position.set_piece(Square::new(king_rook, White.backrank()), White.rook());
-        position.set_piece(Square::new(king_file, Black.backrank()), Black.king());
-        position.set_piece(Square::new(queen_rook, Black.backrank()), Black.rook());
-        position.set_piece(Square::new(king_rook, Black.backrank()), Black.rook());
-        position.castles = Castles::empty();
-        position.castles.set(White, Side::Queen, queen_rook);
-        position.castles.set(White, Side::King, king_rook);
-        position.castles.set(Black, Side::Queen, queen_rook);
-        position.castles.set(Black, Side::King, king_rook);
-        position
+    fn freestyle_position(king_file: File, queen_rook: File, king_rook: File) -> Parts {
+        let mut parts = Parts::empty();
+        let board = &mut parts.board;
+        board.insert(Square::new(king_file, White.backrank()), White.king());
+        board.insert(Square::new(queen_rook, White.backrank()), White.rook());
+        board.insert(Square::new(king_rook, White.backrank()), White.rook());
+        board.insert(Square::new(king_file, Black.backrank()), Black.king());
+        board.insert(Square::new(queen_rook, Black.backrank()), Black.rook());
+        board.insert(Square::new(king_rook, Black.backrank()), Black.rook());
+
+        let castles = &mut parts.castles;
+        castles.set(White, Side::Queen, queen_rook);
+        castles.set(White, Side::King, king_rook);
+        castles.set(Black, Side::Queen, queen_rook);
+        castles.set(Black, Side::King, king_rook);
+        parts
     }
 
     #[test]
     fn validates_freestyle_castling() {
-        freestyle_position(C, A, H).validate::<Freestyle>().unwrap();
+        Position::new(freestyle_position(C, A, H)).unwrap();
     }
 
     #[test]
     fn validates_freestyle_position_without_castling_after_king_moved() {
         parse_position
             .parse("2r5/1pb2rkp/6p1/3p1p2/3P1P2/n1PB1R2/P5PP/3RB1K1 w - - 4 26")
+            .map(Position::new)
             .unwrap()
-            .validate::<Freestyle>()
             .unwrap();
     }
 
     #[test]
     fn rejects_freestyle_castling_without_backrank_king() {
         let mut position = freestyle_position(C, A, H);
-        position.move_piece(C1, C2).unwrap();
+        let king = position.board.remove(C1).unwrap();
+        position.board.insert(C2, king);
 
-        assert_eq!(
-            position.validate::<Freestyle>().unwrap_err(),
-            Error::Castling(White, Side::King)
-        );
+        assert_eq!(Position::new(position).unwrap_err(), Error::CastleKing(White));
     }
 
     #[test]
     fn rejects_freestyle_castling_with_rook_on_wrong_side() {
         assert_eq!(
-            freestyle_position(C, B, A).validate::<Freestyle>().unwrap_err(),
-            Error::Castling(Black, Side::King)
+            Position::new(freestyle_position(C, B, A)).unwrap_err(),
+            Error::CastleSide { player: Black, side: Side::King, file: A }
         );
     }
 }

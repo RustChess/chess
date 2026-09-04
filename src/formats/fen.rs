@@ -3,9 +3,8 @@ use core::num::NonZeroU32;
 use crate::{
     board::{self, Bitboard, Board, Piece, Player, PlayerTable},
     finite::Empty as _,
-    position::{Castles, Chess, EnPassant, Freestyle, Parts, Position, Side, VariantEnum},
+    position::{Castles, EnPassant, Parts, Position, Side},
     square::{File, Rank, Square},
-    variant::{Unvalidated, Variant},
 };
 
 use super::{StrInput as Input, prelude::*};
@@ -30,11 +29,11 @@ fn backtrack() -> ErrMode<ContextError> {
 
 // Lenient - missing suffix fields are filled with default values.
 // Missing castling rights are treated like "-", not inferred as KQkq.
-pub fn parse_position(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
+pub fn parse_position(input: &mut Input<'_>) -> ModalResult<Parts> {
     backtrack_err(preceded(multispace0, position)).parse_next(input)
 }
 
-fn position(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
+fn position(input: &mut Input<'_>) -> ModalResult<Parts> {
     let board = board.parse_next(input)?;
     let fields = fields.parse_next(input)?;
     let castles = resolve_castles(board, fields.castle_rights).ok_or_else(backtrack)?;
@@ -45,61 +44,85 @@ fn position(input: &mut Input<'_>) -> ModalResult<Position<Unvalidated>> {
         en_passant: fields.en_passant,
         reversible: fields.reversible,
         round: fields.round,
-    }
-    .position())
+    })
 }
 
-impl<V: Variant> Position<V> {
+impl Position {
     pub fn from_fen(fen: &str) -> Result<Self> {
-        let position = Unvalidated::from_fen(fen)?;
-        V::validate(position).map_err(|_| Error::Invalid(fen.to_string()))
+        Parts::from_fen(fen)?.validate().map_err(|_| Error::Invalid(fen.to_string()))
     }
 }
 
-impl Chess {
-    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
-        Position::from_fen(fen)
-    }
-}
-
-impl Freestyle {
-    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
-        Position::from_fen(fen)
-    }
-}
-
-impl Unvalidated {
-    // implementing on Unvalidated instead of Position<Unvalidated> on purpose,
-    // to avoid "duplicate from_fen" in natural call sites.
-    pub fn from_fen(fen: &str) -> Result<Position<Self>> {
+impl Parts {
+    pub fn from_fen(fen: &str) -> Result<Parts> {
         parse_position.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))
     }
 }
 
-impl<V> Position<V> {
+impl Parts {
     pub fn apparent_fen(&self) -> String {
-        format!("{} {}", self.board().fen(), self.turn().fen(),)
+        format!("{} {}", self.board.fen(), self.turn.fen())
     }
-}
 
-impl<V: Variant> Position<V> {
     pub fn fen(&self) -> String {
         format!(
             "{} {} {} {} {}",
             self.apparent_fen(),
-            self.castles().fen::<V>(),
-            en_passant_square(self.en_passant()),
-            self.reversible(),
-            self.round()
+            self.castles.fen(),
+            en_passant_square(self.en_passant),
+            self.reversible,
+            self.round
         )
+    }
+
+    pub fn chess_fen(&self) -> Option<String> {
+        self.castles.chess_compatible().then(|| {
+            format!(
+                "{} {} {} {} {}",
+                self.apparent_fen(),
+                self.castles.chess_fen(),
+                en_passant_square(self.en_passant),
+                self.reversible,
+                self.round
+            )
+        })
+    }
+
+    pub fn shredder_fen(&self) -> String {
+        format!(
+            "{} {} {} {} {}",
+            self.apparent_fen(),
+            self.castles.shredder_fen(),
+            en_passant_square(self.en_passant),
+            self.reversible,
+            self.round
+        )
+    }
+}
+
+impl Position {
+    pub fn apparent_fen(&self) -> String {
+        format!("{} {}", self.board().fen(), self.turn().fen(),)
+    }
+
+    pub fn fen(&self) -> String {
+        self.parts().fen()
+    }
+
+    pub fn chess_fen(&self) -> Option<String> {
+        self.parts().chess_fen()
+    }
+
+    pub fn shredder_fen(&self) -> String {
+        self.parts().shredder_fen()
     }
 
     pub fn transposition_fen(&self) -> String {
         format!(
             "{} {} {}",
             self.apparent_fen(),
-            self.castles().fen::<V>(),
-            en_passant_square(self.effective_en_passant()),
+            self.castles().fen(),
+            en_passant_square(self.en_passant()),
         )
     }
 }
@@ -145,6 +168,10 @@ impl Player {
 }
 
 impl Castles {
+    pub fn fen(self) -> String {
+        if self.chess_compatible() { self.chess_fen() } else { self.shredder_fen() }
+    }
+
     pub fn chess_fen(self) -> String {
         use Player::*;
         use Side::*;
@@ -183,15 +210,6 @@ impl Castles {
             fen.push('-');
         }
         fen
-    }
-
-    pub fn fen<V: Variant>(self) -> String {
-        match V::VARIANT {
-            VariantEnum::Chess => self.chess_fen(),
-            // Debatable for Unvalidated, but chess_fen can lose information,
-            // so if you want chess_fen, validate the file first.
-            VariantEnum::Freestyle | VariantEnum::Unvalidated => self.shredder_fen(),
-        }
     }
 }
 
@@ -465,58 +483,58 @@ fn board_fen_example() {
 
     let fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 1 3";
     let position = parse_position.parse(fen).unwrap();
-    assert_eq!(position.turn(), Black);
-    assert!(position.castles().has(Black, King));
-    assert!(position.castles().has(Black, Queen));
-    assert!(position.castles().has(White, King));
-    assert!(position.castles().has(White, Queen));
-    assert_eq!(position.en_passant().map(Into::into), Some(Square::new(E, Three)));
-    assert_eq!(position.reversible(), 1);
-    assert_eq!(u32::from(position.round()), 3);
+    assert_eq!(position.turn, Black);
+    assert!(position.castles.has(Black, King));
+    assert!(position.castles.has(Black, Queen));
+    assert!(position.castles.has(White, King));
+    assert!(position.castles.has(White, Queen));
+    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(E, Three)));
+    assert_eq!(position.reversible, 1);
+    assert_eq!(u32::from(position.round), 3);
     assert_eq!(
-        position.validate::<Chess>().unwrap().fen(),
+        position.validate().unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 1 3"
     );
     assert_eq!(
-        Chess::from_fen(fen).unwrap().fen(),
+        Position::from_fen(fen).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 1 3"
     );
 
     let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
     let position = parse_position.parse(partial_fen).unwrap();
-    assert_eq!(position.turn(), Black);
-    assert!(position.castles().has(Black, King));
-    assert!(position.castles().has(Black, Queen));
-    assert!(position.castles().has(White, King));
-    assert!(position.castles().has(White, Queen));
-    assert_eq!(position.en_passant().map(Into::into), Some(Square::new(E, Three)));
-    assert_eq!(position.reversible(), 0);
-    assert_eq!(u32::from(position.round()), 1);
+    assert_eq!(position.turn, Black);
+    assert!(position.castles.has(Black, King));
+    assert!(position.castles.has(Black, Queen));
+    assert!(position.castles.has(White, King));
+    assert!(position.castles.has(White, Queen));
+    assert_eq!(position.en_passant.map(Into::into), Some(Square::new(E, Three)));
+    assert_eq!(position.reversible, 0);
+    assert_eq!(u32::from(position.round), 1);
     assert_eq!(
-        position.validate::<Chess>().unwrap().fen(),
+        position.validate().unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
     );
     assert_eq!(
-        Chess::from_fen(partial_fen).unwrap().fen(),
+        Position::from_fen(partial_fen).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
     );
 
     let board_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR";
     let position = parse_position.parse(board_fen).unwrap();
-    assert_eq!(position.turn(), White);
-    assert!(!position.castles().has(Black, King));
-    assert!(!position.castles().has(Black, Queen));
-    assert!(!position.castles().has(White, King));
-    assert!(!position.castles().has(White, Queen));
-    assert_eq!(position.en_passant(), None);
-    assert_eq!(position.reversible(), 0);
-    assert_eq!(u32::from(position.round()), 1);
+    assert_eq!(position.turn, White);
+    assert!(!position.castles.has(Black, King));
+    assert!(!position.castles.has(Black, Queen));
+    assert!(!position.castles.has(White, King));
+    assert!(!position.castles.has(White, Queen));
+    assert_eq!(position.en_passant, None);
+    assert_eq!(position.reversible, 0);
+    assert_eq!(u32::from(position.round), 1);
     assert_eq!(
-        position.validate::<Chess>().unwrap().fen(),
+        position.validate().unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
     );
     assert_eq!(
-        Chess::from_fen(board_fen).unwrap().fen(),
+        Position::from_fen(board_fen).unwrap().fen(),
         "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR w - - 0 1"
     );
 }
@@ -528,7 +546,7 @@ fn parses_shredder_castling() {
     use Side::*;
 
     let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9";
-    let position = Freestyle::from_fen(fen).unwrap();
+    let position = Position::from_fen(fen).unwrap();
     assert_eq!(position.castles().get(White, King), Some(H));
     assert_eq!(position.castles().get(White, Queen), Some(F));
     assert_eq!(position.castles().get(Black, King), Some(H));
@@ -547,7 +565,7 @@ fn parses_x_fen_castling() {
     use Side::*;
 
     let fen = "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w KQkq - 0 1";
-    let position = Freestyle::from_fen(fen).unwrap();
+    let position = Position::from_fen(fen).unwrap();
 
     assert_eq!(position.castles().get(White, King), Some(H));
     assert_eq!(position.castles().get(White, Queen), Some(F));
@@ -570,10 +588,11 @@ fn writes_chess_and_shredder_castling() {
 
     assert_eq!(castles.chess_fen(), "KQkq");
     assert_eq!(castles.shredder_fen(), "HFhf");
-    assert_eq!(castles.fen::<Chess>(), "KQkq");
-    assert_eq!(castles.fen::<Freestyle>(), "HFhf");
-    assert_eq!(Castles::empty().fen::<Chess>(), "-");
-    assert_eq!(Castles::empty().fen::<Freestyle>(), "-");
+    assert_eq!(castles.fen(), "HFhf");
+    assert_eq!(Castles::chess().fen(), "KQkq");
+    assert_eq!(Castles::empty().fen(), "-");
+    assert_eq!(Castles::empty().chess_fen(), "-");
+    assert_eq!(Castles::empty().shredder_fen(), "-");
 }
 
 #[test]
@@ -611,13 +630,13 @@ fn castle_resolves_shredder_castling() {
 #[test]
 fn rejects_duplicate_castling_files() {
     let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HH - 2 9";
-    assert!(Unvalidated::from_fen(fen).is_err());
+    assert!(Parts::from_fen(fen).is_err());
 }
 
 #[test]
 fn rejects_more_than_two_castling_files_per_player() {
     let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFAh - 2 9";
-    assert!(Unvalidated::from_fen(fen).is_err());
+    assert!(Parts::from_fen(fen).is_err());
 }
 
 #[test]
@@ -636,8 +655,8 @@ fn board_row_rejects_invalid_rank_width() {
 
 #[test]
 fn rejects_invalid_board_rank_width() {
-    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/8 w - - 0 1").is_ok());
-    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/7 w - - 0 1").is_err());
-    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/9 w - - 0 1").is_err());
-    assert!(Unvalidated::from_fen("8/8/8/8/8/8/8/8r w - - 0 1").is_err());
+    assert!(Parts::from_fen("8/8/8/8/8/8/8/8 w - - 0 1").is_ok());
+    assert!(Parts::from_fen("8/8/8/8/8/8/8/7 w - - 0 1").is_err());
+    assert!(Parts::from_fen("8/8/8/8/8/8/8/9 w - - 0 1").is_err());
+    assert!(Parts::from_fen("8/8/8/8/8/8/8/8r w - - 0 1").is_err());
 }

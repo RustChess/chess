@@ -4,8 +4,8 @@ use core::{fmt, str::FromStr};
 
 use crate::{
     Game, Role, game,
+    game::Mode,
     square::{File, Rank, Square},
-    variant::{Chess, Supported},
 };
 
 use super::{StrInput as Input, prelude::*};
@@ -19,15 +19,18 @@ pub struct Move {
 }
 
 impl crate::Move {
-    pub fn uci<V: Supported>(self) -> Move {
-        if V::is_freestyle() { self.uci_freestyle() } else { self.uci_chess() }
+    pub fn uci(self, mode: Mode) -> Move {
+        match mode {
+            Mode::Chess => self.uci_chess(),
+            Mode::Freestyle => self.uci_960(),
+        }
     }
 
     pub fn uci_chess(self) -> Move {
         Move { from: self.from, to: self.to, promotion: self.promotes() }
     }
 
-    pub fn uci_freestyle(self) -> Move {
+    pub fn uci_960(self) -> Move {
         let to = match self.castle_rook_file() {
             Some(file) => Square::new(file, self.from.rank()),
             None => self.to,
@@ -37,41 +40,44 @@ impl crate::Move {
 }
 
 impl Move {
-    pub fn resolve<V: Supported>(self, legal: &[crate::Move]) -> Option<crate::Move> {
-        if V::is_freestyle() { self.resolve_freestyle(legal) } else { self.resolve_chess(legal) }
+    pub fn resolve(self, mode: Mode, legal: &[crate::Move]) -> Option<crate::Move> {
+        match mode {
+            Mode::Chess => self.resolve_chess(legal),
+            Mode::Freestyle => self.resolve_960(legal),
+        }
     }
 
     pub fn resolve_chess(self, legal: &[crate::Move]) -> Option<crate::Move> {
         legal.iter().copied().find(|play| play.uci_chess() == self)
     }
 
-    pub fn resolve_freestyle(self, legal: &[crate::Move]) -> Option<crate::Move> {
-        legal.iter().copied().find(|play| play.uci_freestyle() == self)
+    pub fn resolve_960(self, legal: &[crate::Move]) -> Option<crate::Move> {
+        legal.iter().copied().find(|play| play.uci_960() == self)
     }
 }
 
-impl<'a, V: Supported> game::OptionsMut<'a, V> {
-    pub fn push_uci(&mut self, uci: Move) -> Result<game::PlayMut<'_, V>, game::Error> {
+impl<'g> game::OptionsMut<'g> {
+    pub fn push_uci(&mut self, uci: Move) -> Result<game::PlayMut<'_>, game::Error> {
         let options = self.as_ref();
         let legal = options.legal();
-        let Some(play) = uci.resolve::<V>(legal) else {
+        let Some(play) = uci.resolve(options.mode(), legal) else {
             return Err(game::Error::Illegal);
         };
         self.push(play)
     }
-    pub fn into_push_uci(self, uci: Move) -> Result<game::PlayMut<'a, V>, game::Error> {
+    pub fn into_push_uci(self, uci: Move) -> Result<game::PlayMut<'g>, game::Error> {
         let options = self.as_ref();
         let legal = options.legal();
-        let Some(play) = uci.resolve::<V>(legal) else {
+        let Some(play) = uci.resolve(options.mode(), legal) else {
             return Err(game::Error::Illegal);
         };
         self.into_push(play)
     }
 }
 
-impl<V: Supported> crate::Position<V> {
-    pub fn resolve_uci(self, moves: &[Move]) -> Vec<crate::Move> {
-        let mut game = Game::new(self);
+impl crate::Position {
+    pub fn resolve_uci(self, mode: Mode, moves: &[Move]) -> Vec<crate::Move> {
+        let mut game = Game::new(self, mode);
         let mut options = game.start_options_mut();
         let mut resolved = Vec::with_capacity(moves.len());
 
@@ -86,8 +92,8 @@ impl<V: Supported> crate::Position<V> {
         resolved
     }
 
-    pub fn resolve_uci_san(self, moves: &[Move]) -> Vec<String> {
-        let mut game = Game::new(self);
+    pub fn resolve_uci_san(self, mode: Mode, moves: &[Move]) -> Vec<String> {
+        let mut game = Game::new(self, mode);
         let mut options = game.start_options_mut();
         let mut resolved = Vec::with_capacity(moves.len());
 
@@ -100,15 +106,6 @@ impl<V: Supported> crate::Position<V> {
         }
 
         resolved
-    }
-}
-
-impl crate::variant::Position {
-    pub fn resolve_uci_san(self, moves: &[Move]) -> Vec<String> {
-        match self {
-            Self::Chess(position) => position.resolve_uci_san(moves),
-            Self::Freestyle(position) => position.resolve_uci_san(moves),
-        }
     }
 }
 
@@ -181,15 +178,15 @@ pub enum Bound {
 
 /// Parse a UCI move and resolve it against legal moves.
 pub fn parse_move(text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
-    parse_move_as::<Chess>(text, legal)
+    parse_move_as(Mode::Chess, text, legal)
 }
 
-pub fn parse_move_as<V: Supported>(text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
+pub fn parse_move_as(mode: Mode, text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
     let mut input = text.trim();
     let play = uci_move(&mut input).ok()?;
     input.is_empty().then_some(())?;
 
-    play.resolve::<V>(legal)
+    play.resolve(mode, legal)
 }
 
 pub fn uci_move(input: &mut Input<'_>) -> ModalResult<Move> {
@@ -308,7 +305,7 @@ fn promotion(input: &mut Input<'_>) -> ModalResult<Role> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Position, board::Role::*, square::Square::*, variant::Chess};
+    use crate::{Position, board::Role::*, square::Square::*};
 
     use super::*;
 
@@ -322,7 +319,7 @@ mod tests {
 
     #[test]
     fn parses_promotion_move() {
-        let position = Chess::from_fen("8/P7/8/8/8/8/8/k6K w - - 0 1").unwrap();
+        let position = Position::from_fen("8/P7/8/8/8/8/8/k6K w - - 0 1").unwrap();
         let legal = position.legal_moves();
 
         assert_eq!(parse_move("a7a8q", &legal).unwrap().promotes(), Some(Queen));
@@ -332,10 +329,10 @@ mod tests {
 
     #[test]
     fn resolves_special_moves_from_legal_moves() {
-        let castle = Chess::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        let castle = Position::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         assert!(parse_move("e1g1", &castle.legal_moves()).is_some_and(crate::Move::is_castle));
 
-        let en_passant = Chess::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
+        let en_passant = Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
         assert!(
             parse_move("e5d6", &en_passant.legal_moves()).is_some_and(crate::Move::is_en_passant)
         );

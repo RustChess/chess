@@ -11,13 +11,13 @@ extern crate serde;
 extern crate serde_with;
 
 pub mod board;
+#[macro_use]
 pub mod finite;
 pub mod formats;
 pub mod game;
 pub mod id;
 pub mod position;
 pub mod square;
-pub mod variant;
 
 #[cfg(feature = "lichess")]
 pub mod lichess;

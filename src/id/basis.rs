@@ -1,10 +1,8 @@
 use crate::{
     board::*,
     finite::Empty as _,
-    finite_for,
     position::{EnPassant, EnPassantTable},
     square::*,
-    variant::{VariantEnum, VariantTable},
 };
 
 use super::{Id, fold};
@@ -30,7 +28,6 @@ pub struct Basis {
     pub turn: PlayerTable<Id>,
     pub castle: CastleTable<Id>,
     pub en_passant: EnPassantTable<Id>,
-    pub variant: VariantTable<Id>,
 }
 
 impl Basis {
@@ -40,7 +37,6 @@ impl Basis {
             turn: PlayerTable::EMPTY,
             castle: CastleTable::EMPTY,
             en_passant: EnPassantTable::EMPTY,
-            variant: VariantTable::EMPTY,
         }
     }
 
@@ -50,7 +46,6 @@ impl Basis {
             turn: turn_table(),
             castle: castle_table(),
             en_passant: en_passant_table(),
-            variant: variant_table(),
         }
     }
 }
@@ -102,15 +97,6 @@ const fn en_passant_table() -> EnPassantTable<Id> {
         squares.set(en_passant, entry);
     });
     squares
-}
-
-const fn variant_table() -> VariantTable<Id> {
-    let mut variants = VariantTable::empty();
-    finite_for!(variant in VariantEnum {
-        let entry = entry_2("variant", variant.name());
-        variants.set(variant, entry);
-    });
-    variants
 }
 
 const fn entry_2(a: &str, b: &str) -> Id {

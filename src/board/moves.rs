@@ -1,6 +1,11 @@
-use crate::Square;
+use crate::{
+    Player::{self, *},
+    Square,
+    position::EnPassant,
+    square::Rank::{Six, Three},
+};
 
-use super::{Bitboard, Board, Player};
+use super::{Bitboard, Board};
 
 /// Board Move API.
 impl Board {
@@ -35,6 +40,54 @@ impl Board {
         // The role filters above include both players' pieces. Intersecting
         // with `occupied` removes pieces that are gone in this occupancy view.
         self.player(attacker).intersection(occupied).intersection(attacks)
+    }
+
+    #[inline]
+    pub const fn attacked_en_passant(
+        self,
+        en_passant: EnPassant,
+        turn: Player,
+    ) -> Option<EnPassant> {
+        let to = en_passant.square();
+        let pawns = self.pawns().intersection(self.player(turn));
+        if pawns.intersection(to.pawn_attack_moves(turn.other())).is_empty() {
+            None
+        } else {
+            Some(en_passant)
+        }
+    }
+
+    #[inline]
+    pub const fn effective_en_passant(
+        self,
+        en_passant: Option<EnPassant>,
+        turn: Player,
+    ) -> Option<EnPassant> {
+        let Some(en_passant) = en_passant else {
+            return None;
+        };
+        let to = en_passant.square();
+        let expected = match to.rank() {
+            Three => Black,
+            Six => White,
+            _ => return None,
+        };
+        if !turn.eq(expected) {
+            return None;
+        }
+
+        // If say d6 is the en passant square, check that d5 actually contains a pawn.
+        let Some(captured) = to.checked_add(turn.other().pawn_push()) else {
+            return None;
+        };
+        let Some(piece) = self.get(captured) else {
+            return None;
+        };
+        if !piece.eq(turn.other().pawn()) {
+            return None;
+        }
+
+        self.attacked_en_passant(en_passant, turn)
     }
 
     pub fn king_shields(self, player: Player) -> Bitboard {

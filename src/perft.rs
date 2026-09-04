@@ -2,10 +2,9 @@ use crate::{
     Scharnagl,
     formats::{Parser as _, fen::parse_position},
     position::Position,
-    variant::{Chess, Freestyle, Variant},
 };
 
-pub(crate) fn perft<V: Variant>(position: Position<V>, depth: u32) -> u64 {
+pub(crate) fn perft(position: Position, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
     }
@@ -18,20 +17,20 @@ pub(crate) fn perft<V: Variant>(position: Position<V>, depth: u32) -> u64 {
 }
 
 fn assert_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = parse_position.parse(fen).unwrap().validate::<Chess>().unwrap();
+    let position = parse_position.parse(fen).unwrap().validate().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
 }
 
 fn assert_freestyle_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = parse_position.parse(fen).unwrap().validate::<Freestyle>().unwrap();
+    let position = parse_position.parse(fen).unwrap().validate().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
 }
 
-fn assert_position_perft<V: Variant>(name: &str, position: Position<V>, expected: &[(u32, u64)]) {
+fn assert_position_perft(name: &str, position: Position, expected: &[(u32, u64)]) {
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
@@ -39,7 +38,7 @@ fn assert_position_perft<V: Variant>(name: &str, position: Position<V>, expected
 
 // This corresponds to a divide reporting mode in e.g. Stockfish,
 // allowing to see the number of moves split count after first move
-fn divide<V: Variant>(position: Position<V>, depth: u32) {
+fn divide(position: Position, depth: u32) {
     for play in position.legal_moves() {
         println!("{}: {}", play.uci_chess(), perft(position.apply_unchecked(play), depth - 1));
     }
@@ -87,7 +86,7 @@ fn deep_freestyle_positions() {
     let position = parse_position
         .parse("b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9")
         .unwrap()
-        .validate::<Freestyle>()
+        .validate()
         .unwrap();
     divide(position, 5);
 

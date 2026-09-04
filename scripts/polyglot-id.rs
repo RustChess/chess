@@ -13,7 +13,7 @@ use chess::{
     id::{basis::Basis, Id},
     position::{
         EnPassant, EnPassantTable, File, FileTable, Player, PlayerTable, Role, RoleTable, Square,
-        SquareTable, VariantTable,
+        SquareTable,
     },
 };
 
@@ -247,7 +247,6 @@ fn polyglot() -> Basis {
         turn: PlayerTable::new([Id(0), id(random[780])]),
         castle: castle(&random),
         en_passant: en_passant(&random),
-        variant: VariantTable::empty(),
     }
 }
 
@@ -315,7 +314,6 @@ fn write_rust(basis: Basis) -> io::Result<()> {
     writer.field_table("en_passant", "EnPassantTable", |writer| {
         write_en_passant(writer, basis.en_passant)
     })?;
-    writer.field_table("variant", "VariantTable", |writer| write_variant(writer, basis.variant))?;
     writer.dedent();
     writer.line("};")
 }
@@ -353,12 +351,6 @@ fn write_en_passant<W: Write>(
 ) -> io::Result<()> {
     writer.table_values(EnPassant::ALL, |writer, square| {
         write_id(writer, &format!("en-passant:{}", square.square()), en_passant.get(square))
-    })
-}
-
-fn write_variant<W: Write>(writer: &mut Writer<W>, variant: VariantTable<Id>) -> io::Result<()> {
-    writer.table_values(chess::position::VariantEnum::ALL, |writer, variant_enum| {
-        write_id(writer, &format!("variant:{variant_enum}"), variant.get(variant_enum))
     })
 }
 

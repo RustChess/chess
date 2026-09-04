@@ -1,16 +1,14 @@
 use std::collections::BTreeMap as Map;
 
-use crate::position::{Chess, Unvalidated};
-
 use super::Play;
 
 /// A local index into the game's slot map, which actually stores the moves of the game.
 pub type Slot = u32;
 
 #[derive(Clone, PartialEq)]
-pub struct Tree<Variant = Chess> {
+pub struct Tree {
     next: Slot,
-    slots: Map<Slot, Play<Variant>>,
+    slots: Map<Slot, Play>,
     start: Vec<Slot>,
 }
 
@@ -22,13 +20,13 @@ pub enum Node {
     Play(Slot),
 }
 
-impl<V> Default for Tree<V> {
+impl Default for Tree {
     fn default() -> Self {
         Tree::new()
     }
 }
 
-impl<V> Tree<V> {
+impl Tree {
     pub const fn new() -> Self {
         Self { next: 0, slots: Map::new(), start: Vec::new() }
     }
@@ -37,11 +35,11 @@ impl<V> Tree<V> {
         self.slots.contains_key(&slot)
     }
 
-    pub fn play(&self, slot: Slot) -> Option<&Play<V>> {
+    pub fn play(&self, slot: Slot) -> Option<&Play> {
         self.slots.get(&slot)
     }
 
-    pub(super) fn play_mut(&mut self, slot: Slot) -> Option<&mut Play<V>> {
+    pub(super) fn play_mut(&mut self, slot: Slot) -> Option<&mut Play> {
         self.slots.get_mut(&slot)
     }
 
@@ -49,13 +47,13 @@ impl<V> Tree<V> {
         self.slots.keys().copied()
     }
 
-    pub fn plays(&self) -> impl Iterator<Item = &Play<V>> {
+    pub fn plays(&self) -> impl Iterator<Item = &Play> {
         self.slots.values()
     }
 
     // unused for now, added for consistency
     #[allow(dead_code)]
-    pub(super) fn plays_mut(&mut self) -> impl Iterator<Item = &mut Play<V>> {
+    pub(super) fn plays_mut(&mut self) -> impl Iterator<Item = &mut Play> {
         self.slots.values_mut()
     }
 
@@ -82,7 +80,7 @@ impl<V> Tree<V> {
     }
 
     // Non-public, Game controls play coherence and legality.
-    pub(super) fn insert(&mut self, f: impl FnOnce(Slot) -> Play<V>) -> Slot {
+    pub(super) fn insert(&mut self, f: impl FnOnce(Slot) -> Play) -> Slot {
         let slot = self.next;
         self.next += 1;
 
@@ -100,16 +98,6 @@ impl<V> Tree<V> {
             self.remove(*option);
         }
         true
-    }
-}
-
-impl<V> Tree<V> {
-    pub fn unvalidated(self) -> Tree<Unvalidated> {
-        Tree {
-            next: self.next,
-            slots: self.slots.into_iter().map(|(slot, play)| (slot, play.unvalidated())).collect(),
-            start: self.start,
-        }
     }
 }
 

@@ -1,13 +1,13 @@
-use crate::{Role, Square, board::Bitboard, variant::Variant};
+use crate::{Role, Square, board::Bitboard};
 
-use super::{EnPassant, Move, Position, Side};
+use super::{Move, Position, Side};
 
 use Role::*;
 
 type Moves = Vec<Move>;
 
 /// Position Move API.
-impl<V: Variant> Position<V> {
+impl Position {
     pub fn legal_moves(&self) -> Moves {
         if self.is_check() {
             return self.evasion_moves();
@@ -229,6 +229,7 @@ impl<V: Variant> Position<V> {
 
         self.board().attacks_on(king, self.turn().other(), occupied).is_empty()
     }
+
     pub fn can_castle(&self, side: Side) -> Option<Move> {
         let rook_file = self.castles().get(self.turn(), side)?;
         let king_from = self.board().king_of(self.turn())?;
@@ -250,65 +251,32 @@ impl<V: Variant> Position<V> {
     }
 }
 
-impl<V> Position<V> {
-    pub const fn effective_en_passant(self) -> Option<EnPassant> {
-        let Some(en_passant) = self.en_passant() else {
-            return None;
-        };
-
-        let to = en_passant.square();
-
-        // If say d6 is the en passant square, check that d5 actually contains a pawn.
-        let Some(captured) = to.checked_add(self.turn().other().pawn_push()) else {
-            return None;
-        };
-        let Some(piece) = self.board().get(captured) else {
-            return None;
-        };
-        if !piece.eq(self.turn().other().pawn()) {
-            return None;
-        }
-
-        self.attacked_en_passant(en_passant)
-    }
-
-    pub const fn attacked_en_passant(self, en_passant: EnPassant) -> Option<EnPassant> {
-        let to = en_passant.square();
-        let pawns = self.board().pawns().intersection(self.board().player(self.turn()));
-        if pawns.intersection(to.pawn_attack_moves(self.turn().other())).is_empty() {
-            None
-        } else {
-            Some(en_passant)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{
         Player::*,
-        position::Castles,
+        position::Parts,
         square::{File::*, Square::*},
-        variant::Freestyle,
     };
 
     use super::{Move, Position, Side};
 
-    fn freestyle_position() -> Position<Freestyle> {
-        let mut position = Position::empty();
-        position.set_piece(C1, White.king());
-        position.set_piece(A1, White.rook());
-        position.set_piece(H1, White.rook());
-        position.set_piece(C8, Black.king());
-        position.set_piece(A8, Black.rook());
-        position.set_piece(H8, Black.rook());
-        let mut parts = position.parts();
-        parts.castles = Castles::empty();
-        parts.castles.set(White, Side::Queen, A);
-        parts.castles.set(White, Side::King, H);
-        parts.castles.set(Black, Side::Queen, A);
-        parts.castles.set(Black, Side::King, H);
-        parts.position().validate().unwrap()
+    fn freestyle_position() -> Position {
+        let mut parts = Parts::empty();
+        let board = &mut parts.board;
+        board.insert(C1, White.king());
+        board.insert(A1, White.rook());
+        board.insert(H1, White.rook());
+        board.insert(C8, Black.king());
+        board.insert(A8, Black.rook());
+        board.insert(H8, Black.rook());
+
+        let castles = &mut parts.castles;
+        castles.set(White, Side::Queen, A);
+        castles.set(White, Side::King, H);
+        castles.set(Black, Side::Queen, A);
+        castles.set(Black, Side::King, H);
+        parts.validate().unwrap()
     }
 
     #[test]
@@ -321,9 +289,9 @@ mod tests {
 
     #[test]
     fn blocks_freestyle_castle_move() {
-        let mut position = freestyle_position().unvalidated();
-        position.set_piece(E1, White.knight());
-        let position: Position<Freestyle> = position.validate().unwrap();
+        let mut parts = freestyle_position().parts();
+        parts.board.insert(E1, White.knight());
+        let position = parts.validate().unwrap();
 
         assert!(!position.legal_castle_moves().contains(&Move::castle(White, C1, H)));
     }

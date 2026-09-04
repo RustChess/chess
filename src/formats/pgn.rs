@@ -5,9 +5,9 @@ use std::{fmt, str};
 use winnow::Parser as _;
 
 use crate::{
-    Scharnagl,
-    game::{Command, Nag, Outcome, Slot, Tag as OtherTag, Text},
-    position::{Position, SupportedEnum, Unvalidated},
+    Position, Scharnagl,
+    game::{Command, Mode, Nag, Outcome, Slot, Tag as OtherTag, Text},
+    position::Parts,
 };
 
 use super::san;
@@ -33,7 +33,7 @@ pub use parse::game;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     pub tags: Vec<Tag>,
-    pub start: Position<Unvalidated>,
+    pub start: Parts,
     pub intro: Option<Comment>,
     pub moves: Vec<Move>,
     pub outcome: Outcome,
@@ -48,7 +48,7 @@ pub enum Tag {
     White(String),
     Black(String),
     Outcome(Outcome),
-    Fen(Position<Unvalidated>),
+    Fen(Parts),
     SetUp(bool),
     Variant(String),
     Chess960Id(Scharnagl),
@@ -77,8 +77,15 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 impl fmt::Display for Game {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let shredder = self.mode().is_freestyle();
         for tag in &self.tags {
-            writeln!(f, "{tag}")?;
+            if let Tag::Fen(position) = tag {
+                let fen = if shredder { position.shredder_fen() } else { position.fen() };
+                write_tag(f, "FEN", &fen)?;
+                writeln!(f)?;
+            } else {
+                writeln!(f, "{tag}")?;
+            }
         }
         if !self.tags.is_empty() {
             writeln!(f)?;
@@ -87,7 +94,7 @@ impl fmt::Display for Game {
         if let Some(intro) = &self.intro {
             wrap.token(intro)?;
         }
-        write_moves(&self.moves, &mut wrap, self.start.first_ply(), Notation::San)?;
+        write_moves(&self.moves, &mut wrap, self.start.ply(), Notation::San)?;
         wrap.token(self.outcome)
     }
 }
@@ -139,44 +146,23 @@ impl Game {
         if let Some(intro) = &self.intro {
             wrap.token(intro).expect("writing PGN movetext to string");
         }
-        write_moves(&self.moves, &mut wrap, self.start.first_ply(), notation)
+        write_moves(&self.moves, &mut wrap, self.start.ply(), notation)
             .expect("writing PGN movetext to string");
         movetext
     }
 
-    pub fn supported(&self) -> Result<SupportedEnum, String> {
-        for tag in self.tags.iter().rev() {
+    pub fn mode(&self) -> Mode {
+        for tag in &self.tags {
             let Some(variant) = tag.variant() else { continue };
-            let supported = SupportedEnum::from_tag(variant)?;
-            return Ok(supported);
+            if Mode::from_tag(variant) == Some(Mode::Freestyle) {
+                return Mode::Freestyle;
+            }
         }
 
-        // Possible alternative:
-        // - last SUPPORTED variant tag wins
-        // - else last UNSUPPORTED variant tag errors
-        // - else sniff board
-
-        // let variants = || self.tags.iter().filter_map(Tag::variant);
-        // let from_tag = SupportedEnum::from_tag;
-
-        // let supported = |variant| from_tag(variant).ok();
-        // let unsupported = |variant| from_tag(variant).is_err().then_some(variant);
-
-        // // If there are supported tags, use the last one.
-        // if let Some(supported) = variants().filter_map(supported).next_back() {
-        //     return Ok(supported);
-        // }
-
-        // // If there are unsupported tags, use the last one.
-        // if let Some(unsupported) = variants().filter_map(unsupported).next_back() {
-        //     return Err(unsupported.to_string());
-        // }
-
-        // No variant tags: look at the board for compatibility.
-        if self.start.castles().chess_compatible() {
-            Ok(SupportedEnum::Chess)
+        if self.start.castles.chess_compatible() {
+            Mode::Chess
         } else {
-            Ok(SupportedEnum::Freestyle)
+            Mode::Freestyle
         }
     }
 }
@@ -200,12 +186,14 @@ impl fmt::Display for Tag {
     }
 }
 
-impl SupportedEnum {
-    fn from_tag(value: &str) -> Result<Self, String> {
+impl Mode {
+    fn from_tag(value: &str) -> Option<Self> {
         match value.to_ascii_lowercase().as_str() {
-            "chess" | "standard" => Ok(Self::Chess),
-            "chess960" | "fischerandom" | "fischer random" | "freestyle" => Ok(Self::Freestyle),
-            _ => Err(value.to_string()),
+            "chess" | "standard" => Some(Self::Chess),
+            "chess960" | "fischerandom" | "fischer random" | "freestyle" => {
+                Some(Self::Freestyle)
+            }
+            _ => None,
         }
     }
 }
@@ -218,14 +206,14 @@ fn write_tag(f: &mut fmt::Formatter<'_>, key: &str, value: &str) -> fmt::Result 
     write!(f, "[{} \"{}\"]", key, escape_tag_value(value))
 }
 
-fn start_position(tags: &[Tag]) -> Position<Unvalidated> {
+fn start_position(tags: &[Tag]) -> Parts {
     tags.iter()
         .rev()
         .find_map(|tag| match tag {
             Tag::Fen(position) => Some(*position),
             _ => None,
         })
-        .unwrap_or_else(Position::chess)
+        .unwrap_or_else(|| Position::start().parts())
 }
 
 impl fmt::Display for Annotation {
@@ -461,7 +449,7 @@ mod tests {
         Position,
         board::{Role::*, Scharnagl},
         formats::san,
-        position::{Chess, Freestyle},
+        game::Mode,
         square::{File::*, Square::*},
     };
 
@@ -536,7 +524,7 @@ mod tests {
 "#,
             )
             .unwrap();
-        let game = Chess::from_pgn(pgn).unwrap();
+        let game = crate::Game::from_pgn(pgn).unwrap();
 
         assert_eq!(game.roster.event, Some(text("x")));
         assert_eq!(game.tags.len(), 0);
@@ -568,7 +556,7 @@ mod tests {
 "#,
             )
             .unwrap();
-        let game = Chess::from_pgn(pgn).unwrap();
+        let game = crate::Game::from_pgn(pgn).unwrap();
 
         let options = game.start_options();
         let e4 = options.first().unwrap();
@@ -600,12 +588,12 @@ mod tests {
         let pgn = game.parse(pgn).unwrap();
 
         assert_eq!(pgn.tags, vec![Tag::Variant("Fischer Random".to_string())]);
-        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Freestyle);
+        assert_eq!(pgn.mode(), Mode::Freestyle);
         assert!(pgn.to_string().contains("[Variant \"Fischer Random\"]"));
     }
 
     #[test]
-    fn variant_folds_over_tags() {
+    fn freestyle_variant_wins() {
         let pgn = r#"
             [Variant "Chess960"]
             [Variant "Standard"]
@@ -613,11 +601,11 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Chess);
+        assert_eq!(pgn.mode(), Mode::Freestyle);
     }
 
     #[test]
-    fn last_variant_tag_wins() {
+    fn freestyle_variant_overrides_unsupported() {
         let pgn = r#"
             [Variant "Antichess"]
             [Variant "Chess960"]
@@ -625,7 +613,7 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Freestyle);
+        assert_eq!(pgn.mode(), Mode::Freestyle);
 
         let pgn = r#"
             [Variant "Chess960"]
@@ -634,44 +622,46 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.supported().unwrap_err(), "Antichess");
+        assert_eq!(pgn.mode(), Mode::Freestyle);
     }
 
     #[test]
-    fn supported_rejects_unsupported_tags() {
+    fn mode_ignores_unsupported_tags() {
         let pgn = r#"
             [Variant "Antichess"]
             *
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.supported().unwrap_err(), "Antichess");
+        assert_eq!(pgn.mode(), Mode::Chess);
     }
 
     #[test]
-    fn supported_falls_back_to_position_castling() {
+    fn mode_falls_back_to_position_castling() {
         let fen = r#"
             [FEN "8/8/8/8/8/8/8/8 w - - 0 1"]
             *
         "#;
         let pgn = game.parse(fen).unwrap();
 
-        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Chess);
+        assert_eq!(pgn.mode(), Mode::Chess);
 
         let fen = r#"
+            [Variant "Standard"]
             [FEN "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9"]
             *
         "#;
         let pgn = game.parse(fen).unwrap();
 
-        assert_eq!(pgn.supported().unwrap(), SupportedEnum::Freestyle);
+        assert_eq!(pgn.mode(), Mode::Freestyle);
+        assert!(pgn.to_string().contains(" w HFhf - 2 9\"]"));
     }
 
     #[test]
-    fn converts_to_variant_game() {
+    fn converts_to_game_mode() {
         let pgn = game.parse(r#"[Event "x"] 1. e4 *"#).unwrap();
-        let variant_game = crate::variant::Game::try_from(pgn).unwrap();
-        assert!(variant_game.is_chess());
+        let chess = crate::Game::try_from(pgn).unwrap();
+        assert_eq!(chess.mode(), Mode::Chess);
 
         let pgn = game
             .parse(
@@ -680,39 +670,35 @@ mod tests {
 9. e4 *"#,
             )
             .unwrap();
-        let game = crate::variant::Game::try_from(pgn).unwrap();
-        assert!(game.is_freestyle());
+        let freestyle = crate::Game::try_from(pgn).unwrap();
+        assert_eq!(freestyle.mode(), Mode::Freestyle);
     }
 
     #[test]
-    fn unsupported_variant_downgrades_to_unvalidated_game() {
+    fn converts_unsupported_variant_as_chess() {
         let pgn = game.parse(r#"[Variant "Antichess"] *"#).unwrap();
-        let game = crate::variant::Game::try_from(pgn).unwrap();
+        let game = crate::Game::try_from(pgn).unwrap();
 
-        assert!(game.is_unvalidated());
-        assert!(
-            matches!(game.error(), Some(convert::Downgrade::Variant(variant)) if variant == "Antichess")
-        );
+        assert_eq!(game.mode(), Mode::Chess);
     }
 
     #[test]
-    fn invalid_start_downgrades_to_unvalidated_game() {
+    fn rejects_invalid_start() {
         let pgn =
             game.parse(r#"[Variant "Standard"] [FEN "4k3/8/8/8/8/8/8/4K2P w - - 0 1"] *"#).unwrap();
-        let game = crate::variant::Game::try_from(pgn).unwrap();
+        let error = crate::Game::try_from(pgn).err().unwrap();
 
-        assert!(game.is_unvalidated());
         assert!(matches!(
-            game.error(),
-            Some(convert::Downgrade::Start { variant: Some(SupportedEnum::Chess), .. })
+            error,
+            convert::Error::Start { mode: Mode::Chess, .. }
         ));
     }
 
     #[test]
     fn displays_fen_game_from_its_start_ply() {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
-        let position = Chess::from_fen(fen).unwrap();
-        let mut game = crate::Game::new(position);
+        let position = Position::from_fen(fen).unwrap();
+        let mut game = crate::Game::chess(position).unwrap();
         game.start_options_mut().push(crate::Move::normal(King, E8, D8)).unwrap();
 
         let pgn = Game::from(game);
@@ -724,7 +710,7 @@ mod tests {
 
     #[test]
     fn displays_figurine_movetext() {
-        let mut game = crate::Game::new(Position::start());
+        let mut game = crate::Game::chess(Position::start()).unwrap();
         let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.play_mut(e4).unwrap().options_mut().push(crate::Move::normal(Knight, G8, F6)).unwrap();
 
@@ -735,7 +721,7 @@ mod tests {
 
     #[test]
     fn converts_from_game() {
-        let mut game = crate::Game::new(Position::start());
+        let mut game = crate::Game::chess(Position::start()).unwrap();
         game.roster.event = Some(text("x"));
 
         let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
@@ -761,7 +747,7 @@ mod tests {
 
     #[test]
     fn converts_from_freestyle_game() {
-        let game = crate::Game::new(Position::<Freestyle>::freestyle(Scharnagl::CHESS));
+        let game = crate::Game::freestyle(Position::freestyle(Scharnagl::CHESS));
 
         let pgn = Game::from(game);
 
@@ -779,8 +765,8 @@ mod tests {
     #[test]
     fn roundtrips_kiwipete_game_tree() {
         let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
-        let position = Chess::from_fen(fen).unwrap();
-        let mut game = crate::Game::new(position);
+        let position = Position::from_fen(fen).unwrap();
+        let mut game = crate::Game::chess(position).unwrap();
 
         for play in position.legal_moves() {
             let id = game.start_options_mut().push(play).unwrap().slot();
@@ -792,7 +778,7 @@ mod tests {
         }
 
         let pgn = Game::from(game);
-        let game = Chess::from_pgn(pgn.clone()).unwrap();
+        let game = crate::Game::from_pgn(pgn.clone()).unwrap();
         let roundtrip = Game::from(game);
 
         assert_eq!(roundtrip, pgn);

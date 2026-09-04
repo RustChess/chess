@@ -429,5 +429,5 @@ fn display_move() {
     let play = Move::castle(White, G1, F);
     assert_eq!(play.to_string(), algebraic::LONG_CASTLE);
     assert_eq!(play.uci_chess().to_string(), "g1c1");
-    assert_eq!(play.uci_freestyle().to_string(), "g1f1");
+    assert_eq!(play.uci_960().to_string(), "g1f1");
 }

@@ -9,21 +9,20 @@
 //! - counter for "reversible" turns since last "non-reversible" (aka pawn moves + captures) [`Move`], aka "halfmoves"
 //! - counter of full rounds, aka "fullmoves"
 //!
-//! We are only interested in "classical" Chess, but keep positions generic over
-//! chess variants, and implement for "freestyle" (aka Fisher Random aka Chess960) chess - to exercise our generality mindedness
-//!
 //! Compared to `shakmaty` our position is a concrete `struct`
 #[cfg(test)]
 extern crate alloc;
 
-use core::{marker::PhantomData, num::NonZeroU32};
+use core::num::NonZeroU32;
 
-use crate::{Board, Piece, Player, Role, Scharnagl, Square, board::Bitboard, variant};
+use crate::{
+    Board, Player, Role, Scharnagl, Square,
+    board::Bitboard,
+    square::File,
+};
 
 use Player::*;
 use Role::*;
-
-pub use variant::{Chess, Freestyle, SupportedEnum, Unvalidated, Variant, VariantEnum};
 
 mod moves;
 mod play;
@@ -48,8 +47,12 @@ pub enum Error {
     AdjacentKings,
     #[error("{0} king is attacked")]
     KingAttacked(Player),
-    #[error("invalid {0} {1:?}-side castling right")]
-    Castling(Player, Side),
+    #[error("{0} king with castling rights is not on its back rank")]
+    CastleKing(Player),
+    #[error("no {player} rook for {side:?}-side castling on {file}")]
+    CastleRook { player: Player, side: Side, file: File },
+    #[error("{player} castling rook on {file} is not on the {side:?} side")]
+    CastleSide { player: Player, side: Side, file: File },
     #[error("no piece on {0}")]
     MissingPiece(Square),
 }
@@ -81,8 +84,8 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 /// - counters
 ///
 /// [cql]: https://en.wikipedia.org/wiki/Chess_Query_Language
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Position<Variant = Chess> {
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Position {
     /// location of the pieces on the board
     board: Board,
     /// player to move
@@ -95,23 +98,9 @@ pub struct Position<Variant = Chess> {
     reversible: u32,
     /// starts at 1 and increments after every Black move
     round: NonZeroU32,
-
-    pub(crate) variant: PhantomData<Variant>,
 }
 
-// Here and elsewhere, a #[derive(Clone, Copy)] won't work due to
-// derive macro limitations - Position is in fact Copy
-impl<V> Copy for Position<V> {}
-
-impl<V> Clone for Position<V> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-/// Equivalent to [`Position<Unvalidated>`].
-///
-/// We want to keep `V: Validate` position fields private,
-/// so we can uphold the validated invariants.
+/// The raw parts from which a position can be constructed.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Parts {
     /// location of the pieces on the board
@@ -129,39 +118,36 @@ pub struct Parts {
 }
 
 impl Parts {
-    pub const fn position(self) -> Position<Unvalidated> {
-        Position {
-            board: self.board,
-            turn: self.turn,
-            castles: self.castles,
-            en_passant: self.en_passant,
-            reversible: self.reversible,
-            round: self.round,
-            variant: PhantomData,
+    pub const fn new(board: Board, turn: Player) -> Self {
+        Self {
+            board,
+            turn,
+            castles: Castles::empty(),
+            en_passant: None,
+            reversible: 0,
+            round: NonZeroU32::MIN,
         }
     }
+
+    pub const fn empty() -> Self {
+        Self::new(Board::EMPTY, White)
+    }
+
+    pub const fn ply(&self) -> usize {
+        let round = self.round.get() as usize - 1;
+        round * 2 + self.turn.eq(Black) as usize
+    }
+
 }
 
-impl From<Parts> for Position<Unvalidated> {
-    fn from(parts: Parts) -> Self {
-        parts.position()
+impl Default for Parts {
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
-pub const fn unvalidated(board: Board, turn: Player) -> Position<Unvalidated> {
-    Position {
-        board,
-        turn,
-        castles: Castles::empty(),
-        en_passant: None,
-        reversible: 0,
-        round: NonZeroU32::MIN,
-        variant: PhantomData,
-    }
-}
-
-impl Position<Chess> {
-    pub const fn start() -> Position<Chess> {
+impl Position {
+    pub const fn start() -> Position {
         Position {
             board: Board::standard(),
             turn: White,
@@ -169,13 +155,10 @@ impl Position<Chess> {
             en_passant: None,
             reversible: 0,
             round: NonZeroU32::MIN,
-            variant: PhantomData,
         }
     }
-}
 
-impl Position<Freestyle> {
-    pub const fn freestyle(i: Scharnagl) -> Position<Freestyle> {
+    pub const fn freestyle(i: Scharnagl) -> Position {
         // Construct board
         let board = Board::freestyle(i);
 
@@ -198,70 +181,11 @@ impl Position<Freestyle> {
             en_passant: None,
             reversible: 0,
             round: NonZeroU32::MIN,
-            variant: PhantomData,
         }
     }
 }
 
-impl Position<Unvalidated> {
-    pub const fn chess() -> Position<Unvalidated> {
-        Position {
-            board: Board::standard(),
-            turn: White,
-            castles: Castles::chess(),
-            en_passant: None,
-            reversible: 0,
-            round: NonZeroU32::MIN,
-            variant: PhantomData,
-        }
-    }
-
-    pub const fn empty() -> Position<Unvalidated> {
-        unvalidated(Board::EMPTY, White)
-    }
-
-    pub fn set_piece(&mut self, square: Square, piece: Piece) -> Option<Piece> {
-        self.board.insert(square, piece)
-    }
-
-    pub fn remove_piece(&mut self, square: Square) -> Option<Piece> {
-        self.board.remove(square)
-    }
-
-    pub fn move_piece(&mut self, from: Square, to: Square) -> Result<Option<Piece>> {
-        let Some(piece) = self.board.remove(from) else {
-            return Err(Error::MissingPiece(from));
-        };
-        let captured = self.board.insert(to, piece);
-        Ok(captured)
-    }
-}
-
-impl Default for Position<Unvalidated> {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-impl From<Position<Chess>> for Position<Unvalidated> {
-    fn from(position: Position<Chess>) -> Self {
-        position.unvalidated()
-    }
-}
-
-impl From<Position<Freestyle>> for Position<Unvalidated> {
-    fn from(position: Position<Freestyle>) -> Self {
-        position.unvalidated()
-    }
-}
-
-// impl<V: Validate> Position<V> {
-//     pub fn new(position: Unvalidated) -> Result<Self> {
-//         position.validate()
-//     }
-// }
-
-impl<V> Position<V> {
+impl Position {
     #[inline]
     pub const fn board(&self) -> Board {
         self.board
@@ -304,7 +228,7 @@ impl<V> Position<V> {
     }
 }
 
-impl<V: Variant> Position<V> {
+impl Position {
     pub fn capture_moves(&self) -> Vec<Move> {
         self.legal_moves().into_iter().filter(|m| m.is_capture()).collect()
     }
@@ -318,7 +242,7 @@ impl<V: Variant> Position<V> {
     }
 }
 
-impl<V> Position<V> {
+impl Position {
     pub const fn parts(self) -> Parts {
         Parts {
             board: self.board,
@@ -335,27 +259,16 @@ impl<V> Position<V> {
         round * 2 + usize::from(self.turn == Black)
     }
 
-    pub const fn unvalidated(self) -> Position<Unvalidated> {
-        Position {
-            board: self.board,
-            turn: self.turn,
-            castles: self.castles,
-            en_passant: self.en_passant,
-            reversible: self.reversible,
-            round: self.round,
-            variant: PhantomData,
-        }
-    }
 }
 
-impl<V> From<Position<V>> for Parts {
-    fn from(position: Position<V>) -> Self {
+impl From<Position> for Parts {
+    fn from(position: Position) -> Self {
         position.parts()
     }
 }
 
-impl<V: Variant> Position<V> {
-    pub(crate) fn apply_unchecked(mut self, play: Move) -> Position<V> {
+impl Position {
+    pub(crate) fn apply_unchecked(mut self, play: Move) -> Position {
         let player = self.turn;
         let captured = if play.is_en_passant() {
             Some(Square::new(play.to.file(), play.from.rank()))
@@ -400,7 +313,7 @@ impl<V: Variant> Position<V> {
 
         self.turn = player.other();
         self.en_passant = match en_passant {
-            Some(en_passant) => self.attacked_en_passant(en_passant),
+            Some(en_passant) => self.board.attacked_en_passant(en_passant, self.turn),
             None => None,
         };
         self

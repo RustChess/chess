@@ -2,13 +2,13 @@ use super::*;
 
 /// Cursor over the main line of a linear game.
 #[derive(Clone, PartialEq)]
-pub struct Cursor<Variant = Chess> {
-    game: Game<Variant>,
+pub struct Cursor {
+    game: Game,
     node: Node,
 }
 
-pub struct Mainline<'a, Variant = Chess> {
-    game: &'a Game<Variant>,
+pub struct Mainline<'a> {
+    game: &'a Game,
     node: Node,
 }
 
@@ -20,20 +20,20 @@ pub enum Error {
     Nonlinear(Node),
 }
 
-impl<V> Cursor<V> {
-    pub fn new(game: Game<V>) -> Self {
+impl Cursor {
+    pub fn new(game: Game) -> Self {
         Self { game, node: Node::Start }
     }
 
-    pub fn into_inner(self) -> Game<V> {
+    pub fn into_inner(self) -> Game {
         self.game
     }
 
-    pub fn game(&self) -> &Game<V> {
+    pub fn game(&self) -> &Game {
         &self.game
     }
 
-    pub fn into_game(self) -> Game<V> {
+    pub fn into_game(self) -> Game {
         self.game
     }
 
@@ -41,7 +41,7 @@ impl<V> Cursor<V> {
         self.node
     }
 
-    pub fn state(&self) -> &State<V> {
+    pub fn state(&self) -> &State {
         self.game.state(self.node)
     }
 
@@ -55,14 +55,14 @@ impl<V> Cursor<V> {
         true
     }
 
-    pub fn play(&self) -> Option<PlayRef<'_, V>> {
+    pub fn play(&self) -> Option<PlayRef<'_>> {
         match self.node {
             Node::Start => None,
             Node::Play(slot) => self.game.play(slot),
         }
     }
 
-    pub fn options(&self) -> OptionsRef<'_, V> {
+    pub fn options(&self) -> OptionsRef<'_> {
         self.game.options_ref(self.node)
     }
 
@@ -111,13 +111,13 @@ impl<V> Cursor<V> {
     }
 }
 
-impl<V> Cursor<V> {
-    pub fn position(&self) -> Position<V> {
+impl Cursor {
+    pub fn position(&self) -> Position {
         self.game.position(self.node)
     }
 }
 
-impl<V: Variant> Cursor<V> {
+impl Cursor {
     #[must_use]
     pub fn take_back(&mut self) -> bool {
         let Node::Play(slot) = self.node else {
@@ -143,14 +143,14 @@ impl<V: Variant> Cursor<V> {
     }
 }
 
-impl<'a, V> Mainline<'a, V> {
-    pub fn new(game: &'a Game<V>) -> Self {
+impl<'a> Mainline<'a> {
+    pub fn new(game: &'a Game) -> Self {
         Self { game, node: Node::Start }
     }
 }
 
-impl<'a, V> Iterator for Mainline<'a, V> {
-    type Item = &'a Play<V>;
+impl<'a> Iterator for Mainline<'a> {
+    type Item = &'a Play;
 
     fn next(&mut self) -> Option<Self::Item> {
         let slot = self.game.tree.options(self.node).first().copied()?;
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn walks_main_line() {
-        let mut cursor = Game::new(Position::start()).cursor();
+        let mut cursor = Game::chess(Position::start()).unwrap().cursor();
         let play = cursor.position().legal_moves()[0];
         let slot = cursor.push(play).unwrap();
 
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn takes_back_current_play() {
-        let mut cursor = Game::new(Position::start()).cursor();
+        let mut cursor = Game::chess(Position::start()).unwrap().cursor();
         let e4 = cursor.push(crate::Move::normal(Pawn, E2, E4)).unwrap();
         cursor.push(crate::Move::normal(Pawn, E7, E5)).unwrap();
 
