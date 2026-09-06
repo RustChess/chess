@@ -238,11 +238,7 @@ fn pgn_moves<'g>(game: &'g crate::Game, options: game::OptionsRef<'g>) -> Vec<Mo
     moves
 }
 
-fn pgn_move(
-    game: &crate::Game,
-    play: &game::Play,
-    variations: game::OptionsRef<'_>,
-) -> Move {
+fn pgn_move(game: &crate::Game, play: &game::Play, variations: game::OptionsRef<'_>) -> Move {
     Move {
         san: san::San::from((play.play(), play.short(), play.check())),
         comment: play.meta.comment.clone().map(Comment),

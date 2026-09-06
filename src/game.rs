@@ -20,6 +20,8 @@ pub type Duplicate = usize;
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Mode {
     #[default]
     Chess,

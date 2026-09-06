@@ -18,6 +18,8 @@ pub mod stream;
 
 pub use parse::game;
 
+use Mode::*;
+
 // https://www.chessprogramming.org/Portable_Game_Notation
 // https://www.saremba.de/chessgml/standards/pgn/pgn-complete.htm
 // https://github.com/mliebelt/pgn-spec-commented
@@ -31,6 +33,7 @@ pub use parse::game;
 //
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
 pub struct Game {
     pub tags: Vec<Tag>,
     pub start: Parts,
@@ -57,7 +60,7 @@ pub enum Tag {
 
 impl Tag {
     pub fn freestyle() -> Self {
-        Tag::Variant("Chess960".to_string())
+        Tag::Variant("Fischerandom".to_string())
     }
 
     pub fn variant(&self) -> Option<&str> {
@@ -154,16 +157,12 @@ impl Game {
     pub fn mode(&self) -> Mode {
         for tag in &self.tags {
             let Some(variant) = tag.variant() else { continue };
-            if Mode::from_tag(variant) == Some(Mode::Freestyle) {
-                return Mode::Freestyle;
+            if Mode::from_tag(variant) == Some(Freestyle) {
+                return Freestyle;
             }
         }
 
-        if self.start.castles.chess_compatible() {
-            Mode::Chess
-        } else {
-            Mode::Freestyle
-        }
+        if self.start.castles.chess_compatible() { Chess } else { Freestyle }
     }
 }
 
@@ -189,10 +188,8 @@ impl fmt::Display for Tag {
 impl Mode {
     fn from_tag(value: &str) -> Option<Self> {
         match value.to_ascii_lowercase().as_str() {
-            "chess" | "standard" => Some(Self::Chess),
-            "chess960" | "fischerandom" | "fischer random" | "freestyle" => {
-                Some(Self::Freestyle)
-            }
+            "chess" | "standard" => Some(Chess),
+            "chess960" | "fischerandom" | "fischer random" | "freestyle" => Some(Freestyle),
             _ => None,
         }
     }
@@ -449,7 +446,6 @@ mod tests {
         Position,
         board::{Role::*, Scharnagl},
         formats::san,
-        game::Mode,
         square::{File::*, Square::*},
     };
 
@@ -588,7 +584,7 @@ mod tests {
         let pgn = game.parse(pgn).unwrap();
 
         assert_eq!(pgn.tags, vec![Tag::Variant("Fischer Random".to_string())]);
-        assert_eq!(pgn.mode(), Mode::Freestyle);
+        assert_eq!(pgn.mode(), Freestyle);
         assert!(pgn.to_string().contains("[Variant \"Fischer Random\"]"));
     }
 
@@ -601,7 +597,7 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.mode(), Mode::Freestyle);
+        assert_eq!(pgn.mode(), Freestyle);
     }
 
     #[test]
@@ -613,7 +609,7 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.mode(), Mode::Freestyle);
+        assert_eq!(pgn.mode(), Freestyle);
 
         let pgn = r#"
             [Variant "Chess960"]
@@ -622,7 +618,7 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.mode(), Mode::Freestyle);
+        assert_eq!(pgn.mode(), Freestyle);
     }
 
     #[test]
@@ -633,7 +629,7 @@ mod tests {
         "#;
         let pgn = game.parse(pgn).unwrap();
 
-        assert_eq!(pgn.mode(), Mode::Chess);
+        assert_eq!(pgn.mode(), Chess);
     }
 
     #[test]
@@ -644,7 +640,7 @@ mod tests {
         "#;
         let pgn = game.parse(fen).unwrap();
 
-        assert_eq!(pgn.mode(), Mode::Chess);
+        assert_eq!(pgn.mode(), Chess);
 
         let fen = r#"
             [Variant "Standard"]
@@ -653,7 +649,7 @@ mod tests {
         "#;
         let pgn = game.parse(fen).unwrap();
 
-        assert_eq!(pgn.mode(), Mode::Freestyle);
+        assert_eq!(pgn.mode(), Freestyle);
         assert!(pgn.to_string().contains(" w HFhf - 2 9\"]"));
     }
 
@@ -661,7 +657,7 @@ mod tests {
     fn converts_to_game_mode() {
         let pgn = game.parse(r#"[Event "x"] 1. e4 *"#).unwrap();
         let chess = crate::Game::try_from(pgn).unwrap();
-        assert_eq!(chess.mode(), Mode::Chess);
+        assert_eq!(chess.mode(), Chess);
 
         let pgn = game
             .parse(
@@ -671,7 +667,7 @@ mod tests {
             )
             .unwrap();
         let freestyle = crate::Game::try_from(pgn).unwrap();
-        assert_eq!(freestyle.mode(), Mode::Freestyle);
+        assert_eq!(freestyle.mode(), Freestyle);
     }
 
     #[test]
@@ -679,7 +675,7 @@ mod tests {
         let pgn = game.parse(r#"[Variant "Antichess"] *"#).unwrap();
         let game = crate::Game::try_from(pgn).unwrap();
 
-        assert_eq!(game.mode(), Mode::Chess);
+        assert_eq!(game.mode(), Chess);
     }
 
     #[test]
@@ -688,10 +684,7 @@ mod tests {
             game.parse(r#"[Variant "Standard"] [FEN "4k3/8/8/8/8/8/8/4K2P w - - 0 1"] *"#).unwrap();
         let error = crate::Game::try_from(pgn).err().unwrap();
 
-        assert!(matches!(
-            error,
-            convert::Error::Start { mode: Mode::Chess, .. }
-        ));
+        assert!(matches!(error, convert::Error::Start { mode: Chess, .. }));
     }
 
     #[test]
@@ -751,7 +744,7 @@ mod tests {
 
         let pgn = Game::from(game);
 
-        assert!(pgn.to_string().contains("[Variant \"Chess960\"]"), "{}", pgn);
+        assert!(pgn.to_string().contains("[Variant \"Fischerandom\"]"), "{}", pgn);
         assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
         assert!(pgn.to_string().contains("[Chess960Id \"518\"]"), "{}", pgn);
         assert!(

@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{fmt, str};
 
 use crate::{
     Id, Square, finite_for,
@@ -99,6 +99,15 @@ impl Scharnagl {
 impl fmt::Display for Scharnagl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl str::FromStr for Scharnagl {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let i = s.parse().map_err(|_| "Scharnagl index must be an integer from 0 to 959")?;
+        Self::new(i).ok_or("Scharnagl index must be an integer from 0 to 959")
     }
 }
 

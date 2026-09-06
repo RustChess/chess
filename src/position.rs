@@ -15,11 +15,7 @@ extern crate alloc;
 
 use core::num::NonZeroU32;
 
-use crate::{
-    Board, Player, Role, Scharnagl, Square,
-    board::Bitboard,
-    square::File,
-};
+use crate::{Board, Player, Role, Scharnagl, Square, board::Bitboard, square::File};
 
 use Player::*;
 use Role::*;
@@ -137,7 +133,6 @@ impl Parts {
         let round = self.round.get() as usize - 1;
         round * 2 + self.turn.eq(Black) as usize
     }
-
 }
 
 impl Default for Parts {
@@ -258,7 +253,6 @@ impl Position {
         let round = self.round.get() as usize - 1;
         round * 2 + usize::from(self.turn == Black)
     }
-
 }
 
 impl From<Position> for Parts {
