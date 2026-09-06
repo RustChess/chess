@@ -14,13 +14,13 @@ pub struct Error {
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
-    delimited(multispace0, (tags, comments, repeat(0.., parse_move), outcome), multispace0)
+    delimited(multispace0, (tags, comments, repeat(0.., parse_move), opt(outcome)), multispace0)
         .map(|(tags, intro, moves, outcome)| Game {
             start: start_position(&tags),
             tags,
             intro,
             moves,
-            outcome,
+            outcome: outcome.unwrap_or(Outcome::Unknown),
         })
         .context(StrContext::Label("PGN game"))
         .parse_next(input)

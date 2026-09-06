@@ -482,6 +482,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_game_without_termination_marker() {
+        let game = game.parse("1. e4 e5").unwrap();
+
+        assert_eq!(game.moves.len(), 2);
+        assert_eq!(game.outcome, Outcome::Unknown);
+    }
+
+    #[test]
     fn parses_variation_and_nags() {
         let pgn = r#"[Event "x"]
 
