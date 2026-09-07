@@ -1,25 +1,31 @@
-set shell := ["bash", "-c"]
+package := "rust-chess"
+import "common.just"
 
-fmt:
-    cargo fmt --all
+build: common-build
+
+check: common-check
+
+depcheck: common-depcheck
+
+fmt: common-fmt
+    just --justfile common.just --fmt
     rustfmt scripts/{polyglot,scharnagl,standard}-id.rs
     rustfmt src/id/{polyglot,standard}.rs
     rustfmt src/board/scharnagl-id.rs
-    just --fmt --unstable
 
-lint:
-    cargo fmt --check --all
-    just --fmt --check --unstable
-    cargo clippy --all --tests -- -D warnings
+install: common-install
 
-lint-more: lint
-    cargo shear
-    cargo upgrades
+lint: common-lint
+    just --justfile common.just --fmt --check
+    rustfmt --check scripts/{polyglot,scharnagl,standard}-id.rs
+    rustfmt --check src/id/{polyglot,standard}.rs
+    rustfmt --check src/board/scharnagl-id.rs
 
-test:
-    # TODO: figure out how to disable the docstests for the generated lichess crate
-    # cargo test --doc --workspace
-    cargo nextest run --workspace
+test: common-test
+
+uninstall: common-uninstall
+
+update: common-update
 
 recommit:
     git add -u && git commit --amend --no-edit

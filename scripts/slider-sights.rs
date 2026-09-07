@@ -1,7 +1,7 @@
 #!/usr/bin/env rust-script
 //! ```cargo
 //! [dependencies]
-//! rustchess = { path = ".." }
+//! chess = { package = "rust-chess", path = ".." }
 //! ```
 
 use std::{

@@ -9,5 +9,4 @@ chess-lichess-client.workspace = true
 
 oauth2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 url.workspace = true

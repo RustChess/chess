@@ -1,5 +1,5 @@
 [package]
-name = "chess-cli"
+name = "rust-chess-bin"
 authors.workspace = true
 edition.workspace = true
 version.workspace = true
@@ -9,9 +9,10 @@ name = "chess"
 path = "chess.rs"
 
 [lib]
+name = "chess_cli"
 
 [dependencies]
-rustchess = { workspace = true, features = ["serde"] }
+chess = { workspace = true, features = ["serde"] }
 anyhow.workspace = true
 ciborium.workspace = true
 clap.workspace = true
