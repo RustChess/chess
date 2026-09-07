@@ -78,6 +78,21 @@ pub struct State {
     check: Option<Check>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Meta {
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub intro: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub outro: Option<Text>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    pub nags: Vec<Nag>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    pub commands: Vec<Command>,
+}
+
 impl Game {
     pub fn start_options(&self) -> OptionsRef<'_> {
         self.options_ref(Node::Start)
@@ -131,13 +146,12 @@ impl Game {
 
 impl Game {
     pub fn new(position: Position, mode: Mode) -> Self {
-        let legal = position.legal_moves();
         Self {
             roster: Default::default(),
             tags: Default::default(),
             intro: None,
             outcome: Default::default(),
-            start: State { position, legal, check: None },
+            start: State::new(position),
             tree: Tree::new(),
             mode,
         }
@@ -188,22 +202,13 @@ impl Game {
         // apply
         let position = state.position().apply_unchecked(play);
 
-        // compute legal moves for the new position
-        let legal = position.legal_moves();
-
-        // update derived state
-        let check = if position.is_check() {
-            Some(if legal.is_empty() { Check::Checkmate } else { Check::Check })
-        } else {
-            None
-        };
         let short = Short::new(state.legal(), play);
 
         let slot = self.tree.insert(|slot| Play {
             slot,
             previous: node,
             meta: Default::default(),
-            state: State { position, legal, check },
+            state: State::new(position),
             play,
             short,
             options: Default::default(),
@@ -254,6 +259,17 @@ impl Play {
 }
 
 impl State {
+    fn new(position: Position) -> Self {
+        let legal = position.legal_moves();
+        let check = if position.is_check() {
+            Some(if legal.is_empty() { Check::Checkmate } else { Check::Check })
+        } else {
+            None
+        };
+
+        Self { position, legal, check }
+    }
+
     #[inline]
     pub fn legal(&self) -> &[Move] {
         &self.legal
@@ -270,21 +286,6 @@ impl State {
     pub fn position(&self) -> Position {
         self.position
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Meta {
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub intro: Option<Text>,
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub comment: Option<Text>,
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub outro: Option<Text>,
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
-    pub nags: Vec<Nag>,
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
-    pub commands: Vec<Command>,
 }
 
 impl Meta {
@@ -789,4 +790,18 @@ impl<'g> OptionsMut<'g> {
     //         f(self.game.slots.get_mut(&slot).expect("option slot must reference an existing play"));
     //     }
     // }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_check_for_start_position() {
+        let check = Position::from_fen("4k3/8/8/8/8/8/8/K3R3 b - - 0 1").unwrap();
+        let checkmate = Position::from_fen("k7/1Q6/2K5/8/8/8/8/8 b - - 0 1").unwrap();
+
+        assert_eq!(Game::from(check).start_options().state().check(), Some(Check::Check));
+        assert_eq!(Game::from(checkmate).start_options().state().check(), Some(Check::Checkmate));
+    }
 }
