@@ -132,8 +132,14 @@ impl Cursor {
     }
 
     pub fn push(&mut self, play: Move) -> Result<Slot, Error> {
-        if let Some(next) = self.next() {
-            return Err(Error::Nonlinear(next));
+        if let Some(Node::Play(slot)) = self.next() {
+            let next = self.game.play(slot).expect("cursor slot must exist");
+            if next.play() != play {
+                return Err(Error::Nonlinear(Node::Play(slot)));
+            }
+
+            self.node = Node::Play(slot);
+            return Ok(slot);
         }
 
         let slot =
@@ -179,8 +185,12 @@ mod tests {
         assert_eq!(cursor.node(), Node::Play(slot));
 
         cursor.start();
+        assert_eq!(cursor.push(play).unwrap(), slot);
+        assert_eq!(cursor.node(), Node::Play(slot));
+
+        cursor.start();
         assert!(matches!(
-            cursor.push(cursor.position().legal_moves()[0]),
+            cursor.push(crate::Move::normal(Pawn, D2, D4)),
             Err(Error::Nonlinear(existing)) if existing == Node::Play(slot)
         ));
     }
