@@ -16,8 +16,6 @@ pub struct Mainline<'a> {
 pub enum Error {
     #[error(transparent)]
     Game(#[from] super::Error),
-    #[error("position already has main play {0:?}")]
-    Nonlinear(Node),
 }
 
 impl Cursor {
@@ -132,12 +130,8 @@ impl Cursor {
     }
 
     pub fn push(&mut self, play: Move) -> Result<Slot, Error> {
-        if let Some(Node::Play(slot)) = self.next() {
-            let next = self.game.play(slot).expect("cursor slot must exist");
-            if next.play() != play {
-                return Err(Error::Nonlinear(Node::Play(slot)));
-            }
-
+        if let Some(next) = self.options().get(play) {
+            let slot = next.slot();
             self.node = Node::Play(slot);
             return Ok(slot);
         }
@@ -189,10 +183,12 @@ mod tests {
         assert_eq!(cursor.node(), Node::Play(slot));
 
         cursor.start();
-        assert!(matches!(
-            cursor.push(crate::Move::normal(Pawn, D2, D4)),
-            Err(Error::Nonlinear(existing)) if existing == Node::Play(slot)
-        ));
+        let d4 = cursor.push(crate::Move::normal(Pawn, D2, D4)).unwrap();
+        assert_ne!(d4, slot);
+        assert_eq!(cursor.game().start_options().len(), 2);
+
+        cursor.start();
+        assert_eq!(cursor.push(play).unwrap(), slot);
     }
 
     #[test]

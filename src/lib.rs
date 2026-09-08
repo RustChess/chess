@@ -17,6 +17,7 @@ pub mod formats;
 pub mod game;
 pub mod id;
 pub mod position;
+pub mod puzzle;
 pub mod square;
 
 #[cfg(feature = "lichess")]
