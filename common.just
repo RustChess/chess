@@ -20,7 +20,7 @@ common-depcheck:
 common-fmt:
     just --fmt
     cargo fmt {{ cargo_spec }}
-    cargo clippy {{ cargo_spec }} --tests --fix --allow-dirty --allow-staged
+    cargo clippy {{ cargo_spec }} --tests --fix --allow-dirty --allow-staged -- -D warnings
 
 common-install:
     {{ if binary != "" { "cargo install --frozen --path bin" } else { ":" } }}
