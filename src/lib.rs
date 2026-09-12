@@ -29,7 +29,7 @@ mod perft;
 #[doc(inline)]
 pub use board::{Board, Piece, Player, Role, Scharnagl};
 #[doc(inline)]
-pub use game::{Game, Node};
+pub use game::{Game, PositionId};
 #[doc(inline)]
 pub use id::Id;
 #[doc(inline)]

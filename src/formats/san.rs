@@ -37,6 +37,16 @@ pub enum Check {
     Checkmate,
 }
 
+impl Check {
+    pub const fn new(is_check: bool, no_moves: bool) -> Option<Self> {
+        if !is_check {
+            return None;
+        }
+        let check = if no_moves { Self::Checkmate } else { Self::Check };
+        Some(check)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid SAN move")]

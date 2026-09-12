@@ -4,12 +4,12 @@ use super::*;
 #[derive(Clone, PartialEq)]
 pub struct Cursor {
     game: Game,
-    node: Node,
+    id: PositionId,
 }
 
 pub struct Mainline<'a> {
     game: &'a Game,
-    node: Node,
+    id: PositionId,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -20,7 +20,7 @@ pub enum Error {
 
 impl Cursor {
     pub fn new(game: Game) -> Self {
-        Self { game, node: Node::Start }
+        Self { game, id: PositionId::Start }
     }
 
     pub fn into_inner(self) -> Game {
@@ -39,18 +39,18 @@ impl Cursor {
         self.game
     }
 
-    pub fn node(&self) -> Node {
-        self.node
+    pub fn position_id(&self) -> PositionId {
+        self.id
     }
 
     pub fn state(&self) -> &State {
-        self.game.state(self.node)
+        self.game.state(self.id)
     }
 
-    /// Sets whether the options at `node` are expanded.
+    /// Sets whether the options at `id` are expanded.
     #[must_use]
-    pub fn set_expanded(&mut self, node: Node, expanded: bool) -> bool {
-        let Some(mut options) = self.game.options_mut(node) else {
+    pub fn set_expanded(&mut self, id: PositionId, expanded: bool) -> bool {
+        let Some(mut options) = self.game.options_mut(id) else {
             return false;
         };
         options.set_expanded(expanded);
@@ -58,32 +58,32 @@ impl Cursor {
     }
 
     #[must_use]
-    pub fn set(&mut self, node: Node) -> bool {
-        if !self.game.contains(node) {
+    pub fn set(&mut self, id: PositionId) -> bool {
+        if !self.game.contains(id) {
             return false;
         }
 
-        self.node = node;
+        self.id = id;
         true
     }
 
     pub fn play(&self) -> Option<PlayRef<'_>> {
-        match self.node {
-            Node::Start => None,
-            Node::Play(slot) => self.game.play(slot),
+        match self.id {
+            PositionId::Start => None,
+            PositionId::Play(id) => self.game.play(id),
         }
     }
 
     pub fn play_mut(&mut self) -> Option<PlayMut<'_>> {
-        match self.node {
-            Node::Start => None,
-            Node::Play(slot) => self.game.play_mut(slot),
+        match self.id {
+            PositionId::Start => None,
+            PositionId::Play(id) => self.game.play_mut(id),
         }
     }
 
     pub fn set_comment(&mut self, comment: Option<Text>) -> Option<bool> {
-        match self.node {
-            Node::Start => {
+        match self.id {
+            PositionId::Start => {
                 if self.game.intro == comment {
                     Some(false)
                 } else {
@@ -91,8 +91,8 @@ impl Cursor {
                     Some(true)
                 }
             }
-            Node::Play(slot) => {
-                let mut play = self.game.play_mut(slot)?;
+            PositionId::Play(id) => {
+                let mut play = self.game.play_mut(id)?;
                 if play.meta.comment == comment {
                     Some(false)
                 } else {
@@ -104,40 +104,40 @@ impl Cursor {
     }
 
     pub fn set_evaluation(&mut self, evaluation: Option<Evaluation>) -> bool {
-        self.game.state_mut(self.node).set_evaluation(evaluation)
+        self.game.state_mut(self.id).set_evaluation(evaluation)
     }
 
     pub fn update_evaluation(&mut self, evaluation: Evaluation) -> bool {
-        self.game.state_mut(self.node).update_evaluation(evaluation)
+        self.game.state_mut(self.id).update_evaluation(evaluation)
     }
 
     pub fn options(&self) -> OptionsRef<'_> {
-        self.game.options_ref(self.node)
+        self.game.options_ref(self.id)
     }
 
-    pub fn previous(&self) -> Node {
-        match self.node {
-            Node::Start => Node::Start,
-            Node::Play(slot) => self
+    pub fn previous(&self) -> PositionId {
+        match self.id {
+            PositionId::Start => PositionId::Start,
+            PositionId::Play(id) => self
                 .game
                 .tree
-                .play(slot)
-                .expect("cursor slot must reference an existing play")
+                .play(id)
+                .expect("cursor ID must reference an existing play")
                 .previous(),
         }
     }
 
-    pub fn next(&self) -> Option<Node> {
-        self.game.tree.options(self.node).first().copied().map(Node::Play)
+    pub fn next(&self) -> Option<PositionId> {
+        self.game.tree.options(self.id).first().copied().map(PositionId::Play)
     }
 
     #[must_use]
     pub fn back(&mut self) -> bool {
         let previous = self.previous();
-        if self.node == previous {
+        if self.id == previous {
             false
         } else {
-            self.node = previous;
+            self.id = previous;
             true
         }
     }
@@ -147,12 +147,12 @@ impl Cursor {
         let Some(next) = self.next() else {
             return false;
         };
-        self.node = next;
+        self.id = next;
         true
     }
 
     pub fn start(&mut self) {
-        self.node = Node::Start;
+        self.id = PositionId::Start;
     }
 
     pub fn end(&mut self) {
@@ -162,62 +162,62 @@ impl Cursor {
 
 impl Cursor {
     pub fn position(&self) -> Position {
-        self.game.position(self.node)
+        self.game.position(self.id)
     }
 }
 
 impl Cursor {
     #[must_use]
     pub fn take_back(&mut self) -> bool {
-        let Node::Play(slot) = self.node else {
+        let PositionId::Play(id) = self.id else {
             return false;
         };
         let previous = self.previous();
-        let play = self.game.play(slot).expect("cursor slot must exist").play();
+        let play = self.game.play(id).expect("cursor play must exist").play();
 
         self.game
             .options_mut(previous)
             .expect("previous options must exist")
             .remove(play)
             .expect("current play must be an option of its predecessor");
-        self.node = previous;
+        self.id = previous;
         true
     }
 
-    pub fn push(&mut self, play: Move) -> Result<Slot, Error> {
+    pub fn push(&mut self, play: Move) -> Result<PlayId, Error> {
         if let Some(next) = self.options().get(play) {
-            let slot = next.slot();
-            self.node = Node::Play(slot);
-            return Ok(slot);
+            let id = next.id();
+            self.id = PositionId::Play(id);
+            return Ok(id);
         }
 
-        let slot =
-            self.game.options_mut(self.node).expect("cursor node must exist").push(play)?.slot();
-        self.node = Node::Play(slot);
-        Ok(slot)
+        let id =
+            self.game.options_mut(self.id).expect("cursor position must exist").push(play)?.id();
+        self.id = PositionId::Play(id);
+        Ok(id)
     }
 
-    pub fn insert_after(&mut self, after: Slot, play: Move) -> Result<Slot, Error> {
+    pub fn insert_after(&mut self, after: PlayId, play: Move) -> Result<PlayId, Error> {
         if let Some(next) = self.options().get(play) {
-            let slot = next.slot();
-            self.node = Node::Play(slot);
-            return Ok(slot);
+            let id = next.id();
+            self.id = PositionId::Play(id);
+            return Ok(id);
         }
 
         let index = self
             .options()
             .iter()
-            .position(|option| option.slot() == after)
+            .position(|option| option.id() == after)
             .ok_or(super::Error::Illegal)?
             + 1;
-        let slot = self
+        let id = self
             .game
-            .options_mut(self.node)
-            .expect("cursor node must exist")
+            .options_mut(self.id)
+            .expect("cursor position must exist")
             .into_insert(index, play)?
-            .slot();
-        self.node = Node::Play(slot);
-        Ok(slot)
+            .id();
+        self.id = PositionId::Play(id);
+        Ok(id)
     }
 
     #[must_use]
@@ -255,7 +255,7 @@ impl Cursor {
 
 impl<'a> Mainline<'a> {
     pub fn new(game: &'a Game) -> Self {
-        Self { game, node: Node::Start }
+        Self { game, id: PositionId::Start }
     }
 }
 
@@ -263,9 +263,9 @@ impl<'a> Iterator for Mainline<'a> {
     type Item = &'a Play;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let slot = self.game.tree.options(self.node).first().copied()?;
-        self.node = Node::Play(slot);
-        Some(self.game.tree.play(slot).expect("mainline slot must exist"))
+        let id = self.game.tree.options(self.id).first().copied()?;
+        self.id = PositionId::Play(id);
+        Some(self.game.tree.play(id).expect("mainline play must exist"))
     }
 }
 
@@ -279,26 +279,26 @@ mod tests {
     fn walk_main_line() {
         let mut cursor = Game::chess(Position::start()).unwrap().cursor();
         let play = cursor.position().legal_moves()[0];
-        let slot = cursor.push(play).unwrap();
+        let id = cursor.push(play).unwrap();
 
-        assert_eq!(cursor.node(), Node::Play(slot));
+        assert_eq!(cursor.position_id(), PositionId::Play(id));
         assert!(!cursor.forward());
         assert!(cursor.back());
-        assert_eq!(cursor.node(), Node::Start);
+        assert_eq!(cursor.position_id(), PositionId::Start);
         assert!(cursor.forward());
-        assert_eq!(cursor.node(), Node::Play(slot));
+        assert_eq!(cursor.position_id(), PositionId::Play(id));
 
         cursor.start();
-        assert_eq!(cursor.push(play).unwrap(), slot);
-        assert_eq!(cursor.node(), Node::Play(slot));
+        assert_eq!(cursor.push(play).unwrap(), id);
+        assert_eq!(cursor.position_id(), PositionId::Play(id));
 
         cursor.start();
         let d4 = cursor.push(crate::Move::normal(Pawn, D2, D4)).unwrap();
-        assert_ne!(d4, slot);
+        assert_ne!(d4, id);
         assert_eq!(cursor.game().start_options().len(), 2);
 
         cursor.start();
-        assert_eq!(cursor.push(play).unwrap(), slot);
+        assert_eq!(cursor.push(play).unwrap(), id);
     }
 
     #[test]
@@ -308,11 +308,11 @@ mod tests {
         cursor.push(crate::Move::normal(Pawn, E7, E5)).unwrap();
 
         assert!(cursor.take_back());
-        assert_eq!(cursor.node(), Node::Play(e4));
+        assert_eq!(cursor.position_id(), PositionId::Play(e4));
         assert!(cursor.next().is_none());
 
         assert!(cursor.take_back());
-        assert_eq!(cursor.node(), Node::Start);
+        assert_eq!(cursor.position_id(), PositionId::Start);
         assert!(cursor.next().is_none());
         assert!(!cursor.take_back());
     }

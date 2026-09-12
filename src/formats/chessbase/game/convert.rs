@@ -1,7 +1,7 @@
 use crate::{
     Player, Side,
     board::{Board, Role},
-    game::Node,
+    game::PositionId,
     position::{Castles as ChessCastles, EnPassant, Parts, Special},
     square::{File, Rank, Square},
 };
@@ -39,7 +39,7 @@ impl crate::Game {
         let Game { position, tokens } = encoded;
         let mut pieces = position.pieces;
         let mut game = Self::from(crate::Position::try_from(position)?);
-        game.decode_tokens(&mut tokens.into_iter(), &mut pieces, Node::Start)?;
+        game.decode_tokens(&mut tokens.into_iter(), &mut pieces, PositionId::Start)?;
         Ok(game)
     }
 
@@ -47,24 +47,24 @@ impl crate::Game {
         &mut self,
         tokens: &mut impl Iterator<Item = Token>,
         pieces: &mut Pieces,
-        mut previous: Node,
+        mut previous: PositionId,
     ) -> Result<()> {
         while let Some(token) = tokens.next() {
             match token {
                 Token::Move(encoded) => {
                     let position = match previous {
-                        Node::Start => self.start(),
-                        Node::Play(slot) => {
-                            self.play(slot).expect("decoded predecessor exists").position()
+                        PositionId::Start => self.start(),
+                        PositionId::Play(id) => {
+                            self.play(id).expect("decoded predecessor exists").position()
                         }
                     };
                     let play = pieces.resolve(position, encoded)?;
                     pieces.apply(position, play);
-                    previous = Node::Play(
+                    previous = PositionId::Play(
                         self.options_mut(previous)
                             .expect("decoded predecessor exists")
                             .push(play)?
-                            .slot(),
+                            .id(),
                     );
                 }
                 Token::Push => {

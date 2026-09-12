@@ -6,7 +6,7 @@ use winnow::Parser as _;
 
 use crate::{
     Player, Position, Scharnagl,
-    game::{self, Command, Mode, Nag, Outcome, Slot, Tag as OtherTag},
+    game::{self, Command, Mode, Nag, Outcome, PlayId, Tag as OtherTag},
     position::Parts,
 };
 
@@ -600,7 +600,7 @@ mod tests {
         assert_eq!(game.tags.len(), 0);
         assert_eq!(game.start_options().len(), 1);
 
-        let e4_id = game.start_options().first().unwrap().slot();
+        let e4_id = game.start_options().first().unwrap().id();
         let e4 = game.play(e4_id).unwrap();
         assert_eq!(e4.play().to, E4);
         assert_eq!(e4.meta.nags, vec![Nag::Symbol("!".to_string())]);
@@ -814,7 +814,7 @@ mod tests {
     #[test]
     fn display_figurine_movetext() {
         let mut game = crate::Game::chess(Position::start()).unwrap();
-        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
+        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
         game.play_mut(e4).unwrap().options_mut().push(crate::Move::normal(Knight, G8, F6)).unwrap();
 
         let pgn = Pgn::from(game);
@@ -827,14 +827,14 @@ mod tests {
         let mut game = crate::Game::chess(Position::start()).unwrap();
         game.roster.event = Some(text("x"));
 
-        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
+        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
         game.start_options_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap();
 
         {
             let mut e4 = game.play_mut(e4).unwrap();
             e4.meta.nags.push(Nag::Symbol("!".to_string()));
             e4.options_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
-            let c5 = e4.options_mut().push(crate::Move::normal(Pawn, C7, C5)).unwrap().slot();
+            let c5 = e4.options_mut().push(crate::Move::normal(Pawn, C7, C5)).unwrap().id();
             game.play_mut(c5).unwrap().meta.comment = Some(text("Sicilian"));
         }
 
@@ -873,7 +873,7 @@ mod tests {
         let mut game = crate::Game::chess(position).unwrap();
 
         for play in position.legal_moves() {
-            let id = game.start_options_mut().push(play).unwrap().slot();
+            let id = game.start_options_mut().push(play).unwrap().id();
             let replies = game.play(id).unwrap().legal().to_vec();
             let mut play = game.play_mut(id).unwrap();
             for reply in replies {

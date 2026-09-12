@@ -1,6 +1,6 @@
 use crate::{
     formats::{Text, uci},
-    game::{self, Node, Slot},
+    game::{self, PlayId, PositionId},
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -25,21 +25,21 @@ pub struct Game {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<game::Evaluation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<Slot>,
+    pub options: Vec<PlayId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Play {
-    pub slot: Slot,
-    #[serde(default, skip_serializing_if = "Node::is_start")]
-    pub previous: Node,
+    pub id: PlayId,
+    #[serde(default, skip_serializing_if = "PositionId::is_start")]
+    pub previous: PositionId,
     #[serde(default, skip_serializing_if = "game::Meta::is_empty")]
     pub meta: game::Meta,
     pub play: uci::Move,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<game::Evaluation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<Slot>,
+    pub options: Vec<PlayId>,
 }
 
 impl game::Outcome {
@@ -78,7 +78,7 @@ impl From<&game::Game> for Game {
 impl From<&game::Play> for Play {
     fn from(play: &game::Play) -> Self {
         Self {
-            slot: play.slot(),
+            id: play.id(),
             previous: play.previous(),
             meta: play.meta.clone(),
             play: uci::Move {

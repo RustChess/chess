@@ -57,9 +57,15 @@ clean:
 perft:
     cargo nextest run --release perft
 
+gossimit := "http://web.archive.org/web/20060710121413/http://www.uni-klu.ac.at/~gossimit/c"
+theweekinchess := "https://theweekinchess.com/zips"
+
 twic:
     mkdir -p twic
-    wget -qrP twic https://theweekinchess.com/zips/twic16{16,32}{g,c6}.zip
-    unzip -oqqd twic 'twic/twic*.zip'
+    wget -qrP twic {{ theweekinchess }}/twic16{16,32}{g,c6}.zip
+    curl -fLso twic/magictal.zip {{ gossimit }}/magictal.zip
+    curl -fLso twic/best_less.zip {{ gossimit }}/best_less.zip
+    unzip -oqqd twic 'twic/*.zip'
     cargo run --release -qp rust-chess-bin -- convert -i twic/twic1616.cbv -o twic cb
     cargo run --release -qp rust-chess-bin -- convert -i twic/twic1632.cbv -o twic cb
+    cargo run --release -qp rust-chess-bin -- convert -i twic/best_less.cbv -o twic cb

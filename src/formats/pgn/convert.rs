@@ -1,7 +1,7 @@
 use crate::{
     Player,
     board::scharnagl_by_id,
-    game::{self, Mode, Node, Roster},
+    game::{self, Mode, PositionId, Roster},
     position::{self, Position},
 };
 
@@ -101,7 +101,7 @@ fn game_from_position(
     game.orientation = game_orientation(&pgn.tags);
     let start_evaluation = game_start_evaluation(&pgn.tags);
 
-    game_moves(&mut game, Node::Start, 0, pgn.moves)?;
+    game_moves(&mut game, PositionId::Start, 0, pgn.moves)?;
 
     if let Some(evaluation) = start_evaluation {
         let mut cursor = game.cursor();
@@ -114,7 +114,7 @@ fn game_from_position(
 
 fn game_moves(
     game: &mut crate::Game,
-    mut previous: Node,
+    mut previous: PositionId,
     mut ply: usize,
     moves: Vec<Move>,
 ) -> core::result::Result<(), Resolve> {
@@ -122,7 +122,7 @@ fn game_moves(
         let mut options = game.options_mut(previous).expect("previous play exists");
         let play = pgn_move.san.resolve(options.as_ref().legal())?;
         let mut play = options.push(play)?;
-        let slot = play.slot();
+        let id = play.id();
         play.meta.comment = pgn_move.comment.map(Into::into);
         let (expanded, evaluation) = game_annotations(&mut play.meta, pgn_move.annotations);
         play.set_evaluation(evaluation);
@@ -134,7 +134,7 @@ fn game_moves(
             game_variation(game, previous, ply, variation)?;
         }
 
-        previous = Node::Play(slot);
+        previous = PositionId::Play(id);
         ply += 1;
     }
 
@@ -143,7 +143,7 @@ fn game_moves(
 
 fn game_variation(
     game: &mut crate::Game,
-    previous: Node,
+    previous: PositionId,
     ply: usize,
     variation: Variation,
 ) -> core::result::Result<(), Resolve> {
@@ -154,7 +154,7 @@ fn game_variation(
     let mut options = game.options_mut(previous).expect("previous play exists");
     let play = first.san.resolve(options.as_ref().legal())?;
     let mut play = options.push(play)?;
-    let slot = play.slot();
+    let id = play.id();
     play.meta.intro = variation.intro.map(Into::into);
     play.meta.outro = variation.outro.map(Into::into);
     play.meta.comment = first.comment.clone().map(Into::into);
@@ -167,7 +167,7 @@ fn game_variation(
     for variation in &first.variations {
         game_variation(game, previous, ply, variation.clone())?;
     }
-    game_moves(game, Node::Play(slot), ply + 1, rest.to_vec())
+    game_moves(game, PositionId::Play(id), ply + 1, rest.to_vec())
 }
 
 //
@@ -309,12 +309,12 @@ fn pgn_move(
             play.state().evaluation,
             play.options().is_expanded(),
         ),
-        variations: variations.iter().map(|play| pgn_variation(game, play.slot())).collect(),
+        variations: variations.iter().map(|play| pgn_variation(game, play.id())).collect(),
     }
 }
 
-fn pgn_variation(game: &crate::Game, slot: Slot) -> Variation {
-    let play = game.play(slot).expect("option must reference an existing play");
+fn pgn_variation(game: &crate::Game, id: PlayId) -> Variation {
+    let play = game.play(id).expect("option must reference an existing play");
     Variation {
         intro: play.meta.intro.clone().map(Comment),
         moves: pgn_moves_from(game, &play),

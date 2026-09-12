@@ -211,6 +211,10 @@ impl Position {
         self.round
     }
 
+    pub const fn requires_freestyle(&self) -> bool {
+        !self.castles.chess_compatible()
+    }
+
     pub const fn checkers(&self) -> Bitboard {
         match self.board.king_of(self.turn) {
             Some(king) => self.board.attacks_on(king, self.turn.other(), self.board.occupied()),
