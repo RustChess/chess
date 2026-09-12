@@ -78,7 +78,7 @@ impl Parts {
 mod tests {
     use crate::{
         Player, Position, Side, Square,
-        formats::{Parser as _, fen::parse_position},
+        formats::{Parser as _, fen::parts},
         position::{Error, Parts},
         square::{File, Square::*},
     };
@@ -87,33 +87,33 @@ mod tests {
     use Player::*;
 
     fn validate(fen: &str) -> Result<Position, Error> {
-        Position::new(parse_position.parse(fen).unwrap())
+        Position::new(parts.parse(fen).unwrap())
     }
 
     #[test]
-    fn validates_standard_position() {
+    fn validate_standard_position() {
         validate("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
     }
 
     #[test]
-    fn rejects_missing_king() {
+    fn reject_missing_king() {
         assert_eq!(validate("8/8/8/8/8/8/4P3/4K3 w - - 0 1").unwrap_err(), Error::KingCount(Black));
     }
 
     #[test]
-    fn rejects_pawn_on_backrank() {
+    fn reject_pawn_on_backrank() {
         assert_eq!(validate("4k3/8/8/8/8/8/8/4K2P w - - 0 1").unwrap_err(), Error::PawnOnBackrank);
     }
 
     #[test]
-    fn drops_ineffective_en_passant() {
+    fn drop_ineffective_en_passant() {
         let position = validate("4k3/8/8/8/8/8/8/4K3 w - e3 0 1").unwrap();
 
         assert_eq!(position.en_passant, None);
     }
 
     #[test]
-    fn rejects_side_not_to_move_in_check() {
+    fn reject_side_not_to_move_in_check() {
         assert_eq!(
             validate("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1").unwrap_err(),
             Error::KingAttacked(Black)
@@ -139,13 +139,13 @@ mod tests {
     }
 
     #[test]
-    fn validates_freestyle_castling() {
+    fn validate_freestyle_castling() {
         Position::new(freestyle_position(C, A, H)).unwrap();
     }
 
     #[test]
-    fn validates_freestyle_position_without_castling_after_king_moved() {
-        parse_position
+    fn validate_freestyle_position_without_castling_after_king_moved() {
+        parts
             .parse("2r5/1pb2rkp/6p1/3p1p2/3P1P2/n1PB1R2/P5PP/3RB1K1 w - - 4 26")
             .map(Position::new)
             .unwrap()
@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_freestyle_castling_without_backrank_king() {
+    fn reject_freestyle_castling_without_backrank_king() {
         let mut position = freestyle_position(C, A, H);
         let king = position.board.remove(C1).unwrap();
         position.board.insert(C2, king);
@@ -162,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_freestyle_castling_with_rook_on_wrong_side() {
+    fn reject_freestyle_castling_with_rook_on_wrong_side() {
         assert_eq!(
             Position::new(freestyle_position(C, B, A)).unwrap_err(),
             Error::CastleSide { player: Black, side: Side::King, file: A }

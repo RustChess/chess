@@ -1,22 +1,22 @@
 //! PGN format
 
-use std::{fmt, str};
+use core::{fmt, str};
 
 use winnow::Parser as _;
 
 use crate::{
-    Position, Scharnagl,
-    game::{Command, Mode, Nag, Outcome, Slot, Tag as OtherTag, Text},
+    Player, Position, Scharnagl,
+    game::{self, Command, Mode, Nag, Outcome, Slot, Tag as OtherTag},
     position::Parts,
 };
 
-use super::san;
+use super::{Text, san};
 
 pub mod convert;
 pub mod parse;
 pub mod stream;
 
-pub use parse::game;
+pub use parse::pgn;
 
 use Mode::*;
 
@@ -34,7 +34,7 @@ use Mode::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
-pub struct Game {
+pub struct Pgn {
     pub tags: Vec<Tag>,
     pub start: Parts,
     pub intro: Option<Comment>,
@@ -55,6 +55,8 @@ pub enum Tag {
     SetUp(bool),
     Variant(String),
     Chess960Id(Scharnagl),
+    Orientation(Player),
+    StartEvaluation(Evaluation),
     Other(OtherTag),
 }
 
@@ -78,7 +80,7 @@ pub enum Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-impl fmt::Display for Game {
+impl fmt::Display for Pgn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let shredder = self.mode().is_freestyle();
         for tag in &self.tags {
@@ -102,11 +104,11 @@ impl fmt::Display for Game {
     }
 }
 
-impl str::FromStr for Game {
+impl str::FromStr for Pgn {
     type Err = Error;
 
     fn from_str(text: &str) -> Result<Self> {
-        parse::game.parse(text).map_err(|error| parse::Error::from(text, 1, error).into())
+        parse::pgn.parse(text).map_err(|error| parse::Error::from(text, 1, error).into())
     }
 }
 
@@ -128,13 +130,70 @@ pub struct Move {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Comment(Text);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Evaluation(pub game::Evaluation);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Annotation {
     Nag(Nag),
+    Evaluation(Evaluation),
     Command(Command),
 }
 
-impl Game {
+impl fmt::Display for Evaluation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.score {
+            game::Score::Centipawns(centipawns) => {
+                write!(f, "{:.2}", f64::from(centipawns) / 100.0)?;
+            }
+            game::Score::Mate(mate) => write!(f, "#{mate}")?,
+        }
+        if let Some(depth) = self.0.depth {
+            write!(f, ",{depth}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Evaluation {
+    fn command(self) -> Command {
+        Command {
+            command: Text::new("eval").expect("command name is non-empty"),
+            parameters: vec![self.to_string()],
+        }
+    }
+}
+
+impl str::FromStr for Evaluation {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (score, depth) = match value.trim().split_once(',') {
+            Some((score, depth)) => {
+                let depth = depth.trim().parse().map_err(|_| "invalid evaluation depth")?;
+                (score, Some(depth))
+            }
+            None => (value, None),
+        };
+        let score = score.trim();
+        let score = if let Some(mate) = score.strip_prefix('#') {
+            game::Score::Mate(mate.parse().map_err(|_| "invalid mate score")?)
+        } else {
+            let pawns: f64 = score.parse().map_err(|_| "invalid centipawn score")?;
+            let centipawns = (pawns * 100.0).round();
+            if !centipawns.is_finite()
+                || centipawns < f64::from(i32::MIN)
+                || centipawns > f64::from(i32::MAX)
+            {
+                return Err("centipawn score out of range");
+            }
+            game::Score::Centipawns(centipawns as i32)
+        };
+        Ok(Self(game::Evaluation { score, depth }))
+    }
+}
+
+impl Pgn {
     pub fn movetext(&self) -> String {
         self.write_movetext(Notation::San)
     }
@@ -180,6 +239,10 @@ impl fmt::Display for Tag {
             Tag::SetUp(setup) => write_tag(f, "SetUp", if *setup { "1" } else { "0" }),
             Tag::Variant(variant) => write_tag(f, "Variant", variant),
             Tag::Chess960Id(id) => write_tag(f, "Chess960Id", &id.to_string()),
+            Tag::Orientation(player) => write_tag(f, "Orientation", player.name()),
+            Tag::StartEvaluation(evaluation) => {
+                write_tag(f, "StartEvaluation", &evaluation.to_string())
+            }
             Tag::Other(tag) => write_tag(f, tag.key.as_ref(), &tag.value),
         }
     }
@@ -217,6 +280,7 @@ impl fmt::Display for Annotation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Annotation::Nag(nag) => write!(f, "{nag}"),
+            Annotation::Evaluation(evaluation) => evaluation.command().fmt(f),
             Annotation::Command(command) => write!(f, "{command}"),
         }
     }
@@ -288,6 +352,7 @@ impl Move {
             match annotation {
                 Annotation::Nag(Nag::Symbol(_)) => wrap.suffix(annotation)?,
                 Annotation::Nag(Nag::Numeric(_)) => wrap.token(annotation)?,
+                Annotation::Evaluation(evaluation) => commands.push(evaluation.command()),
                 Annotation::Command(command) => commands.push(command.clone()),
             }
         }
@@ -444,8 +509,9 @@ impl Move {
 mod tests {
     use crate::{
         Position,
-        board::{Role::*, Scharnagl},
+        board::{Player, Role::*, Scharnagl},
         formats::san,
+        game::{Evaluation, Score},
         square::{File::*, Square::*},
     };
 
@@ -460,8 +526,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_game() {
-        let pgn = r#"
+    fn parse_pgn() {
+        let text = r#"
             [Event "Casual Game"]
             [Site "Berlin GER"]
             [Date "1852.??.??"]
@@ -473,31 +539,31 @@ mod tests {
             1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 {Italian Game} 1-0
         "#;
 
-        let game = game.parse(pgn).unwrap();
-        assert_eq!(game.tags.len(), 7);
-        assert_eq!(game.tags[0], Tag::Event("Casual Game".to_string()));
-        assert_eq!(game.moves.len(), 6);
-        assert_eq!(game.outcome, Outcome::White);
-        assert_eq!(game.moves[5].comment, Some(comment("Italian Game")));
+        let pgn = parse::pgn.parse(text).unwrap();
+        assert_eq!(pgn.tags.len(), 7);
+        assert_eq!(pgn.tags[0], Tag::Event("Casual Game".to_string()));
+        assert_eq!(pgn.moves.len(), 6);
+        assert_eq!(pgn.outcome, Outcome::White);
+        assert_eq!(pgn.moves[5].comment, Some(comment("Italian Game")));
     }
 
     #[test]
-    fn parses_game_without_termination_marker() {
-        let game = game.parse("1. e4 e5").unwrap();
+    fn parse_pgn_without_termination_marker() {
+        let pgn = pgn.parse("1. e4 e5").unwrap();
 
-        assert_eq!(game.moves.len(), 2);
-        assert_eq!(game.outcome, Outcome::Unknown);
+        assert_eq!(pgn.moves.len(), 2);
+        assert_eq!(pgn.outcome, Outcome::Unknown);
     }
 
     #[test]
-    fn parses_variation_and_nags() {
-        let pgn = r#"[Event "x"]
+    fn parse_variation_and_nags() {
+        let text = r#"[Event "x"]
 
 1. e4! e5 $1 (1... c5 {Sicilian}) 2. Nf3 *
 "#;
 
-        let game = game.parse(pgn).unwrap();
-        let e4 = &game.moves[0];
+        let pgn = pgn.parse(text).unwrap();
+        let e4 = &pgn.moves[0];
         assert_eq!(
             e4.san.play,
             san::Move::Normal {
@@ -511,16 +577,16 @@ mod tests {
         );
         assert_eq!(e4.annotations, vec![Annotation::Nag(Nag::Symbol("!".to_string()))]);
 
-        let e5 = &game.moves[1];
+        let e5 = &pgn.moves[1];
         assert_eq!(e5.annotations, vec![Annotation::Nag(Nag::Numeric(1))]);
         assert_eq!(e5.variations.len(), 1);
         assert_eq!(e5.variations[0].moves[0].comment, Some(comment("Sicilian")));
-        assert_eq!(game.outcome, Outcome::Unknown);
+        assert_eq!(pgn.outcome, Outcome::Unknown);
     }
 
     #[test]
-    fn converts_to_game() {
-        let pgn = game
+    fn convert_to_game() {
+        let pgn = pgn
             .parse(
                 r#"[Event "x"]
 
@@ -551,8 +617,44 @@ mod tests {
     }
 
     #[test]
-    fn converts_fen_game() {
-        let pgn = game
+    fn convert_orientation_and_commands() {
+        let pgn = pgn
+            .parse(
+                r#"[Orientation "BLACK"]
+
+1. e4 {[%foo bar][%cgexp true][%eval 0.205,18]} (1. d4) 1... e5 {[%eval #-3,22]} *
+"#,
+            )
+            .unwrap();
+        let game = crate::Game::from_pgn(pgn).unwrap();
+
+        assert_eq!(game.orientation, Player::Black);
+        let e4 = game.start_options().first().unwrap();
+        assert!(e4.options().is_expanded());
+        assert_eq!(
+            e4.state().evaluation,
+            Some(Evaluation { score: Score::Centipawns(21), depth: Some(18) })
+        );
+        assert_eq!(e4.meta.commands.len(), 1);
+        assert_eq!(e4.meta.commands[0].command.as_ref(), "foo");
+        let e5 = e4.options().first().unwrap();
+        assert_eq!(
+            e5.state().evaluation,
+            Some(Evaluation { score: Score::Mate(-3), depth: Some(22) })
+        );
+
+        let pgn = Pgn::from(game).to_string();
+        assert!(pgn.contains("[Orientation \"black\"]"), "{pgn}");
+        let eval = pgn.find("[%eval 0.21,18]").unwrap();
+        let expanded = pgn.find("[%cgexp true]").unwrap();
+        let command = pgn.find("[%foo bar]").unwrap();
+        assert!(eval < expanded && expanded < command, "{pgn}");
+        assert!(pgn.contains("[%eval #-3,22]"), "{pgn}");
+    }
+
+    #[test]
+    fn convert_fen_game() {
+        let pgn = pgn
             .parse(
                 r#"[FEN "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1"]
 
@@ -569,8 +671,8 @@ mod tests {
     }
 
     #[test]
-    fn start_uses_last_fen_tag() {
-        let pgn = game
+    fn use_last_fen_tag_for_start() {
+        let pgn = pgn
             .parse(
                 r#"[FEN "4k3/8/8/8/8/8/8/4K3 w - - 0 1"]
 [FEN "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1"]
@@ -584,12 +686,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_variant_tag() {
-        let pgn = r#"
+    fn parse_variant_tag() {
+        let text = r#"
             [Variant "Fischer Random"]
             *
         "#;
-        let pgn = game.parse(pgn).unwrap();
+        let pgn = pgn.parse(text).unwrap();
 
         assert_eq!(pgn.tags, vec![Tag::Variant("Fischer Random".to_string())]);
         assert_eq!(pgn.mode(), Freestyle);
@@ -597,56 +699,56 @@ mod tests {
     }
 
     #[test]
-    fn freestyle_variant_wins() {
-        let pgn = r#"
+    fn prefer_freestyle_variant() {
+        let text = r#"
             [Variant "Chess960"]
             [Variant "Standard"]
             *
         "#;
-        let pgn = game.parse(pgn).unwrap();
+        let pgn = pgn.parse(text).unwrap();
 
         assert_eq!(pgn.mode(), Freestyle);
     }
 
     #[test]
-    fn freestyle_variant_overrides_unsupported() {
-        let pgn = r#"
+    fn prefer_freestyle_over_unsupported_variant() {
+        let text = r#"
             [Variant "Antichess"]
             [Variant "Chess960"]
             *
         "#;
-        let pgn = game.parse(pgn).unwrap();
+        let pgn = pgn.parse(text).unwrap();
 
         assert_eq!(pgn.mode(), Freestyle);
 
-        let pgn = r#"
+        let text = r#"
             [Variant "Chess960"]
             [Variant "Antichess"]
             *
         "#;
-        let pgn = game.parse(pgn).unwrap();
+        let pgn = parse::pgn.parse(text).unwrap();
 
         assert_eq!(pgn.mode(), Freestyle);
     }
 
     #[test]
-    fn mode_ignores_unsupported_tags() {
-        let pgn = r#"
+    fn ignore_unsupported_variant_tags() {
+        let text = r#"
             [Variant "Antichess"]
             *
         "#;
-        let pgn = game.parse(pgn).unwrap();
+        let pgn = pgn.parse(text).unwrap();
 
         assert_eq!(pgn.mode(), Chess);
     }
 
     #[test]
-    fn mode_falls_back_to_position_castling() {
+    fn fall_back_to_position_castling() {
         let fen = r#"
             [FEN "8/8/8/8/8/8/8/8 w - - 0 1"]
             *
         "#;
-        let pgn = game.parse(fen).unwrap();
+        let pgn = parse::pgn.parse(fen).unwrap();
 
         assert_eq!(pgn.mode(), Chess);
 
@@ -655,19 +757,19 @@ mod tests {
             [FEN "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9"]
             *
         "#;
-        let pgn = game.parse(fen).unwrap();
+        let pgn = parse::pgn.parse(fen).unwrap();
 
         assert_eq!(pgn.mode(), Freestyle);
         assert!(pgn.to_string().contains(" w HFhf - 2 9\"]"));
     }
 
     #[test]
-    fn converts_to_game_mode() {
-        let pgn = game.parse(r#"[Event "x"] 1. e4 *"#).unwrap();
+    fn convert_to_game_mode() {
+        let pgn = pgn.parse(r#"[Event "x"] 1. e4 *"#).unwrap();
         let chess = crate::Game::try_from(pgn).unwrap();
         assert_eq!(chess.mode(), Chess);
 
-        let pgn = game
+        let pgn = parse::pgn
             .parse(
                 r#"[Variant "Chess960"]
 [FEN "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9"]
@@ -679,30 +781,30 @@ mod tests {
     }
 
     #[test]
-    fn converts_unsupported_variant_as_chess() {
-        let pgn = game.parse(r#"[Variant "Antichess"] *"#).unwrap();
+    fn convert_unsupported_variant_as_chess() {
+        let pgn = pgn.parse(r#"[Variant "Antichess"] *"#).unwrap();
         let game = crate::Game::try_from(pgn).unwrap();
 
         assert_eq!(game.mode(), Chess);
     }
 
     #[test]
-    fn rejects_invalid_start() {
+    fn reject_invalid_start() {
         let pgn =
-            game.parse(r#"[Variant "Standard"] [FEN "4k3/8/8/8/8/8/8/4K2P w - - 0 1"] *"#).unwrap();
+            pgn.parse(r#"[Variant "Standard"] [FEN "4k3/8/8/8/8/8/8/4K2P w - - 0 1"] *"#).unwrap();
         let error = crate::Game::try_from(pgn).err().unwrap();
 
         assert!(matches!(error, convert::Error::Start { mode: Chess, .. }));
     }
 
     #[test]
-    fn displays_fen_game_from_its_start_ply() {
+    fn display_fen_game_from_its_start_ply() {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
         let position = Position::from_fen(fen).unwrap();
         let mut game = crate::Game::chess(position).unwrap();
         game.start_options_mut().push(crate::Move::normal(King, E8, D8)).unwrap();
 
-        let pgn = Game::from(game);
+        let pgn = Pgn::from(game);
         assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
         assert!(pgn.to_string().contains(&format!("[FEN \"{fen}\"]")), "{}", pgn);
         assert!(pgn.to_string().contains("\n17... Kd8 *"), "{}", pgn);
@@ -710,18 +812,18 @@ mod tests {
     }
 
     #[test]
-    fn displays_figurine_movetext() {
+    fn display_figurine_movetext() {
         let mut game = crate::Game::chess(Position::start()).unwrap();
         let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.play_mut(e4).unwrap().options_mut().push(crate::Move::normal(Knight, G8, F6)).unwrap();
 
-        let pgn = Game::from(game);
+        let pgn = Pgn::from(game);
         assert_eq!(pgn.movetext(), "1. e4 Nf6");
         assert_eq!(pgn.figurine_movetext(), "1. e4 ♘f6");
     }
 
     #[test]
-    fn converts_from_game() {
+    fn convert_from_game() {
         let mut game = crate::Game::chess(Position::start()).unwrap();
         game.roster.event = Some(text("x"));
 
@@ -736,21 +838,22 @@ mod tests {
             game.play_mut(c5).unwrap().meta.comment = Some(text("Sicilian"));
         }
 
-        let pgn = Game::from(game);
+        let pgn = Pgn::from(game);
         assert_eq!(
             pgn.to_string(),
             r#"[Event "x"]
 [Result "*"]
+[Orientation "white"]
 
 1. e4! (1. d4) 1... e5 (1... c5 {Sicilian}) *"#
         );
     }
 
     #[test]
-    fn converts_from_freestyle_game() {
+    fn convert_from_freestyle_game() {
         let game = crate::Game::freestyle(Position::freestyle(Scharnagl::CHESS));
 
-        let pgn = Game::from(game);
+        let pgn = Pgn::from(game);
 
         assert!(pgn.to_string().contains("[Variant \"Fischerandom\"]"), "{}", pgn);
         assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
@@ -764,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrips_kiwipete_game_tree() {
+    fn roundtrip_kiwipete_game_tree() {
         let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
         let position = Position::from_fen(fen).unwrap();
         let mut game = crate::Game::chess(position).unwrap();
@@ -778,28 +881,28 @@ mod tests {
             }
         }
 
-        let pgn = Game::from(game);
+        let pgn = Pgn::from(game);
         let game = crate::Game::from_pgn(pgn.clone()).unwrap();
-        let roundtrip = Game::from(game);
+        let roundtrip = Pgn::from(game);
 
         assert_eq!(roundtrip, pgn);
     }
 
     #[test]
-    fn parses_annotations_between_variations() {
-        let pgn = r#"[Event "x"]
+    fn parse_annotations_between_variations() {
+        let text = r#"[Event "x"]
 
 1. e4 e5 {A} (1... c5) {B} (1... e6) {C} 2. Nf3 *
 "#;
 
-        let game = game.parse(pgn).unwrap();
-        let e5 = &game.moves[1];
+        let pgn = pgn.parse(text).unwrap();
+        let e5 = &pgn.moves[1];
         assert_eq!(e5.comment, Some(comment("A")));
         assert_eq!(e5.variations.len(), 2);
         assert_eq!(e5.variations[0].outro, Some(comment("B")));
         assert_eq!(e5.variations[1].outro, Some(comment("C")));
         assert_eq!(
-            game.to_string(),
+            pgn.to_string(),
             r#"[Event "x"]
 
 1. e4 e5 {A} (1... c5) {B} (1... e6) {C} 2. Nf3 *"#
@@ -807,10 +910,10 @@ mod tests {
     }
 
     #[test]
-    fn extracts_commands_from_move_comments() {
-        let game =
-            game.parse(r#"[Event "x"] 1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#).unwrap();
-        let e4 = &game.moves[0];
+    fn extract_commands_from_move_comments() {
+        let pgn =
+            pgn.parse(r#"[Event "x"] 1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#).unwrap();
+        let e4 = &pgn.moves[0];
         assert_eq!(
             e4.annotations,
             vec![
@@ -826,7 +929,7 @@ mod tests {
         );
         assert_eq!(e4.comment, Some(comment("Good move.")));
         assert_eq!(
-            game.to_string(),
+            pgn.to_string(),
             r#"[Event "x"]
 
 1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#
@@ -834,11 +937,11 @@ mod tests {
     }
 
     #[test]
-    fn extracts_multi_parameter_commands() {
-        let game = game
+    fn extract_multi_parameter_commands() {
+        let pgn = pgn
             .parse(r#"[Event "x"] 1. e4 {[%tqu "En","find the move","","","e2e4","",10]} *"#)
             .unwrap();
-        let e4 = &game.moves[0];
+        let e4 = &pgn.moves[0];
         assert_eq!(
             e4.annotations,
             vec![Annotation::Command(Command {
@@ -855,7 +958,7 @@ mod tests {
             })]
         );
         assert_eq!(
-            game.to_string(),
+            pgn.to_string(),
             r#"[Event "x"]
 
 1. e4 {[%tqu "En","find the move","","","e2e4","",10]} *"#
@@ -863,14 +966,14 @@ mod tests {
     }
 
     #[test]
-    fn extracts_commands_with_trailing_whitespace() {
-        let game = game.parse(r#"[Event "x"] 1. e4 {[%foo ]} *"#).unwrap();
+    fn extract_commands_with_trailing_whitespace() {
+        let pgn = pgn.parse(r#"[Event "x"] 1. e4 {[%foo ]} *"#).unwrap();
         assert_eq!(
-            game.moves[0].annotations,
+            pgn.moves[0].annotations,
             vec![Annotation::Command(Command { command: text("foo"), parameters: vec![] })]
         );
         assert_eq!(
-            game.to_string(),
+            pgn.to_string(),
             r#"[Event "x"]
 
 1. e4 {[%foo]} *"#
@@ -878,17 +981,17 @@ mod tests {
     }
 
     #[test]
-    fn ignores_empty_comments() {
-        let game = game.parse(r#"[Event "x"] 1. e4 {} {   } e5 *"#).unwrap();
-        assert_eq!(game.moves[0].comment, None);
-        assert_eq!(game.moves[1].comment, None);
+    fn ignore_empty_comments() {
+        let pgn = pgn.parse(r#"[Event "x"] 1. e4 {} {   } e5 *"#).unwrap();
+        assert_eq!(pgn.moves[0].comment, None);
+        assert_eq!(pgn.moves[1].comment, None);
     }
 
     #[test]
-    fn parses_san_in_moves() {
-        let game = game.parse(r#"[Event "x"] 1. exd8=Q# *"#).unwrap();
+    fn parse_san_in_moves() {
+        let pgn = pgn.parse(r#"[Event "x"] 1. exd8=Q# *"#).unwrap();
         assert_eq!(
-            game.moves[0].san,
+            pgn.moves[0].san,
             san::San {
                 play: san::Move::Normal {
                     role: Pawn,
@@ -904,45 +1007,42 @@ mod tests {
     }
 
     #[test]
-    fn displays_game() {
-        let game = game.parse(r#"[Event "x"] 1. e4! e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"#).unwrap();
+    fn display_game() {
+        let pgn = pgn.parse(r#"[Event "x"] 1. e4! e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"#).unwrap();
         assert_eq!(
-            game.to_string(),
+            pgn.to_string(),
             "[Event \"x\"]\n\n1. e4! 1... e5 $1 (1... c5 {Sicilian}) 2. Nf3 *"
         );
     }
 
     #[test]
-    fn reads_games_one_at_a_time() {
+    fn read_pgns_one_at_a_time() {
         let input = b"[Event \"a\"]\n1. e4 *\n\n[Event \"b\"]\n1. d4 *\n";
-        let games =
-            stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
-        assert_eq!(games.len(), 2);
-        assert_eq!(games[0].tags[0], Tag::Event("a".to_string()));
-        assert_eq!(games[1].tags[0], Tag::Event("b".to_string()));
+        let pgns = stream::pgns(&input[..]).map(|pgn| pgn.unwrap().unwrap()).collect::<Vec<_>>();
+        assert_eq!(pgns.len(), 2);
+        assert_eq!(pgns[0].tags[0], Tag::Event("a".to_string()));
+        assert_eq!(pgns[1].tags[0], Tag::Event("b".to_string()));
     }
 
     #[test]
-    fn reader_does_not_split_inside_comment() {
+    fn read_comment_without_splitting_pgn() {
         let input = b"[Event \"a\"]\n1. e4 {\n[not a tag]\n} *\n\n[Event \"b\"]\n1. d4 *\n";
-        let games =
-            stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        let games = stream::pgns(&input[..]).map(|pgn| pgn.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
         assert_eq!(games[0].moves[0].comment, Some(comment("[not a tag]")));
     }
 
     #[test]
-    fn reader_handles_movetext_after_tag_on_same_line() {
+    fn read_movetext_after_tag_on_same_line() {
         let input = b"[Event \"a\"] 1. e4 *\n\n[Event \"b\"] 1. d4 *\n";
-        let games =
-            stream::games(&input[..]).map(|game| game.unwrap().unwrap()).collect::<Vec<_>>();
+        let games = stream::pgns(&input[..]).map(|pgn| pgn.unwrap().unwrap()).collect::<Vec<_>>();
         assert_eq!(games.len(), 2);
         assert_eq!(games[0].tags[0], Tag::Event("a".to_string()));
         assert_eq!(games[1].tags[0], Tag::Event("b".to_string()));
     }
 
     #[test]
-    fn parses_line_wrapped_black_move_without_number() {
-        game.parse("[Event \"x\"]\n\n14. f3 b6\n15. Be2 *").unwrap();
+    fn parse_line_wrapped_black_move_without_number() {
+        pgn.parse("[Event \"x\"]\n\n14. f3 b6\n15. Be2 *").unwrap();
     }
 }

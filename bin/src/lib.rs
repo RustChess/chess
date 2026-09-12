@@ -1,5 +1,5 @@
-#[macro_use(anyhow)]
-extern crate anyhow;
+#[macro_use(info)]
+extern crate tracing;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory as _, Parser, Subcommand};

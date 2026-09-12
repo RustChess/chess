@@ -26,6 +26,14 @@ pub trait Empty {
     fn is_empty(&self) -> bool;
 }
 
+impl Empty for bool {
+    const EMPTY: Self = false;
+
+    fn is_empty(&self) -> bool {
+        !self
+    }
+}
+
 impl Empty for u8 {
     const EMPTY: Self = 0;
 
@@ -39,6 +47,14 @@ impl Empty for u128 {
 
     fn is_empty(&self) -> bool {
         *self == Self::EMPTY
+    }
+}
+
+impl<T: Empty, const N: usize> Empty for [T; N] {
+    const EMPTY: Self = [const { T::EMPTY }; N];
+
+    fn is_empty(&self) -> bool {
+        self.iter().all(Empty::is_empty)
     }
 }
 

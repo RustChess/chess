@@ -7,14 +7,18 @@ use std::{
 
 use anyhow::{Context as _, bail};
 use chess::{
-    formats::{Parser as _, cbv::unpack_cbv_to, pgn},
+    formats::{
+        Pgn,
+        chessbase::{archive, database},
+        pgn,
+    },
     game,
 };
 use clap::ValueEnum;
 
 use crate::{Args, Result};
 
-type PgnInput = Box<dyn Iterator<Item = io::Result<Result<pgn::Game, pgn::Error>>>>;
+type PgnInput = Box<dyn Iterator<Item = io::Result<Result<Pgn, pgn::Error>>>>;
 
 #[derive(Args, Clone, Debug)]
 pub struct Command {
@@ -73,7 +77,9 @@ impl Command {
                 let archive = self.archive_input(from)?;
                 self.archive_to_pgn(archive)
             }
+            (Format::Cbv, Format::Pgn) => self.cbv_to_pgn(),
             (Format::Cbv, Format::Cb) => self.cbv_to_cb(),
+            (Format::Cb, Format::Pgn) => self.cb_to_pgn(),
             _ => bail!("unsupported conversion: {from:?} -> {:?}", self.to),
         }
     }
@@ -126,7 +132,7 @@ impl Command {
 
     fn archive_to_pgn(self, archive: game::storage::Archive) -> Result<()> {
         let game = game::Game::load(archive)?;
-        let pgn = pgn::Game::from(game);
+        let pgn = Pgn::from(game);
         let mut output = self.output()?;
         writeln!(output, "{pgn}")?;
         Ok(())
@@ -218,16 +224,70 @@ impl Command {
     }
 
     fn cbv_to_cb(self) -> Result<()> {
-        let input = self.read_input()?;
+        let mut input: Box<dyn io::Read> = if self.input == Path::new("-") {
+            Box::new(io::stdin())
+        } else {
+            Box::new(
+                fs::File::open(&self.input)
+                    .with_context(|| format!("reading input {}", self.input.display()))?,
+            )
+        };
         let output = self.output_path_for_directory()?;
         fs::create_dir_all(&output)
             .with_context(|| format!("creating output directory {}", output.display()))?;
-        let header =
-            unpack_cbv_to(&output).parse(input.as_slice()).map_err(|error| anyhow!("{error}"))?;
-        for entry in header.iter() {
-            eprintln!("{}: {} bytes", entry.name, entry.len);
+        let header = archive::read_header(&mut input)?;
+        for member in &header.members {
+            let path = output.join(&member.name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating output directory {}", parent.display()))?;
+            }
+            let mut file = fs::File::create(&path)
+                .with_context(|| format!("writing output {}", path.display()))?;
+            archive::unpack_to(member, &mut input, &mut file)
+                .with_context(|| format!("unpacking {}", member.name))?;
+            info!("{}: {} bytes", member.name, member.len);
         }
         Ok(())
+    }
+
+    fn cbv_to_pgn(self) -> Result<()> {
+        let mut output = self.output()?;
+        if self.input == Path::new("-") {
+            let input = self.read_input()?;
+            let archive = database::Archive::from_slice(&input)?;
+            write_pgns(database::Database { reader: archive }, &mut output)
+        } else {
+            let archive = database::Archive::from_file(&self.input)
+                .with_context(|| format!("reading input {}", self.input.display()))?;
+            write_pgns(database::Database { reader: archive }, &mut output)
+        }
+    }
+
+    fn cb_to_pgn(self) -> Result<()> {
+        if self.input == Path::new("-") {
+            bail!("cannot read ChessBase file set from stdin");
+        }
+
+        let mut output = self.output()?;
+        let index = self.input.with_extension("cbh");
+        if !index.try_exists()? {
+            let games = database::Games::from_file(&self.input)
+                .with_context(|| format!("reading input {}", self.input.display()))?;
+            return write_pgns(database::Database { reader: games }, &mut output);
+        }
+
+        let mut bundle = database::Bundle::from_files(&self.input, &index)
+            .with_context(|| format!("reading input {}", self.input.display()))?;
+        let players = self.input.with_extension("cbp");
+        if players.try_exists()? {
+            bundle = bundle.with_players(players)?;
+        }
+        let tournaments = self.input.with_extension("cbt");
+        if tournaments.try_exists()? {
+            bundle = bundle.with_tournaments(tournaments)?;
+        }
+        write_pgns(database::Database { reader: bundle }, &mut output)
     }
 
     fn read_input(&self) -> Result<Vec<u8>> {
@@ -243,11 +303,11 @@ impl Command {
 
     fn pgn_input(&self) -> Result<PgnInput> {
         if self.input == Path::new("-") {
-            Ok(Box::new(pgn::stream::games(io::stdin())))
+            Ok(Box::new(pgn::stream::pgns(io::stdin())))
         } else {
             let file = fs::File::open(&self.input)
                 .with_context(|| format!("reading input {}", self.input.display()))?;
-            Ok(Box::new(pgn::stream::games(file)))
+            Ok(Box::new(pgn::stream::pgns(file)))
         }
     }
 
@@ -265,8 +325,17 @@ impl Command {
     }
 
     fn output_path_for_file(&self) -> Result<Option<PathBuf>> {
-        let output =
-            if self.output_stem { Some(self.derived_output_path()?) } else { self.output.clone() };
+        let output = if self.output_stem {
+            Some(self.derived_output_path()?)
+        } else if let Some(output) = &self.output {
+            Some(if output.is_dir() {
+                output.join(self.derived_output_name()?)
+            } else {
+                output.clone()
+            })
+        } else {
+            None
+        };
         if let Some(output) = &output {
             self.guard_not_same_path(output)?;
         }
@@ -295,12 +364,19 @@ impl Command {
             bail!("-O requires file input");
         }
         let parent = self.input.parent().unwrap_or_else(|| Path::new(""));
+        Ok(parent.join(self.derived_output_name()?))
+    }
+
+    fn derived_output_name(&self) -> Result<PathBuf> {
+        if self.input == Path::new("-") {
+            bail!("cannot derive output name from stdin");
+        }
         let stem = self.input.file_stem().context("-O requires input with a file stem")?;
         Ok(match self.to {
-            Format::Pgn => parent.join(stem).with_extension("pgn"),
-            Format::Json | Format::Cbor => parent.join(stem),
-            Format::Cb => parent.join(stem),
-            Format::Cbv => parent.join(stem).with_extension("cbv"),
+            Format::Pgn => PathBuf::from(stem).with_extension("pgn"),
+            Format::Json | Format::Cbor => PathBuf::from(stem),
+            Format::Cb => PathBuf::from(stem),
+            Format::Cbv => PathBuf::from(stem).with_extension("cbv"),
         })
     }
 
@@ -312,12 +388,32 @@ impl Command {
     }
 }
 
+fn write_pgns<R: database::Reader>(
+    mut database: database::Database<R>,
+    output: &mut dyn io::Write,
+) -> Result<()> {
+    let mut first = true;
+    for game in database.games()? {
+        if !first {
+            writeln!(output)?;
+            writeln!(output)?;
+        }
+        write!(output, "{}", Pgn::from(game?))?;
+        first = false;
+    }
+    if !first {
+        writeln!(output)?;
+    }
+    Ok(())
+}
+
 fn infer_format(path: &Path) -> Result<Format> {
     match path.extension().and_then(OsStr::to_str).map(str::to_ascii_lowercase) {
         Some(extension) if extension == "pgn" => Ok(Format::Pgn),
         Some(extension) if extension == "json" => Ok(Format::Json),
         Some(extension) if extension == "cbor" => Ok(Format::Cbor),
         Some(extension) if extension == "cbv" => Ok(Format::Cbv),
+        Some(extension) if extension == "cbg" => Ok(Format::Cb),
         Some(extension) => bail!("unknown input extension: {extension}"),
         None => bail!("input has no extension"),
     }

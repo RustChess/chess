@@ -139,6 +139,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "exploratory scan of the external puzzle dataset"]
     fn search() {
         let mut count = 0;
         let mut i = 0;
@@ -168,6 +169,5 @@ mod tests {
             //     }
             // }
         }
-        panic!();
     }
 }

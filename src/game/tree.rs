@@ -1,6 +1,6 @@
 use std::collections::BTreeMap as Map;
 
-use super::Play;
+use super::{Options, Play};
 
 /// A local index into the game's slot map, which actually stores the moves of the game.
 pub type Slot = u32;
@@ -9,7 +9,7 @@ pub type Slot = u32;
 pub struct Tree {
     next: Slot,
     slots: Map<Slot, Play>,
-    start: Vec<Slot>,
+    start: Options,
 }
 
 /// A handle to a node in the tree of variations of a game of chess.
@@ -28,7 +28,7 @@ impl Default for Tree {
 
 impl Tree {
     pub const fn new() -> Self {
-        Self { next: 0, slots: Map::new(), start: Vec::new() }
+        Self { next: 0, slots: Map::new(), start: Options::new() }
     }
 
     pub fn contains(&self, slot: Slot) -> bool {
@@ -57,22 +57,22 @@ impl Tree {
         self.slots.values_mut()
     }
 
-    pub fn start(&self) -> &[Slot] {
+    pub fn start(&self) -> &Options {
         &self.start
     }
 
-    pub(super) fn start_mut(&mut self) -> &mut Vec<Slot> {
+    pub(super) fn start_mut(&mut self) -> &mut Options {
         &mut self.start
     }
 
-    pub fn options(&self, node: Node) -> &[Slot] {
+    pub fn options(&self, node: Node) -> &Options {
         match node {
             Node::Start => self.start(),
             Node::Play(slot) => &self.play(slot).expect("slot exists").options,
         }
     }
 
-    pub(super) fn options_mut(&mut self, node: Node) -> &mut Vec<Slot> {
+    pub(super) fn options_mut(&mut self, node: Node) -> &mut Options {
         match node {
             Node::Start => self.start_mut(),
             Node::Play(slot) => &mut self.play_mut(slot).expect("slot exists").options,
@@ -94,7 +94,7 @@ impl Tree {
     // avoid dangling pointers in the move's follow-on options.
     pub(super) fn remove(&mut self, slot: Slot) -> bool {
         let Some(play) = self.slots.remove(&slot) else { return false };
-        for option in &play.options {
+        for option in play.options.iter() {
             self.remove(*option);
         }
         true

@@ -1,4 +1,6 @@
-use super::*;
+use std::{boxed::Box, vec::Vec};
+
+use crate::formats::Bits;
 
 /// Huffman tree
 #[derive(Default)]

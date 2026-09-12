@@ -12,6 +12,7 @@ use crate::{
 use super::{StrInput as Input, prelude::*};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
 pub struct San {
     pub play: Move,
     pub check: Option<Check>,
@@ -188,8 +189,8 @@ impl San {
 impl FromStr for San {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut input = s.trim();
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let mut input = text.trim();
         let san = san(&mut input).map_err(|_| Error::Invalid)?;
         input.is_empty().then_some(san).ok_or(Error::Invalid)
     }
@@ -297,7 +298,7 @@ fn normal_inner(input: &mut Input<'_>) -> ModalResult<Move> {
                 promotion: None,
             })
         }
-        (None, None) => err(),
+        (None, None) => Err(backtrack()),
     }
 }
 
@@ -330,12 +331,6 @@ fn check(input: &mut Input<'_>) -> ModalResult<Check> {
     alt(('+'.value(Check::Check), '#'.value(Check::Checkmate))).parse_next(input)
 }
 
-fn err<T>() -> ModalResult<T> {
-    use winnow::error::{ContextError, ErrMode};
-
-    Err(ErrMode::Backtrack(ContextError::new()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,7 +340,7 @@ mod tests {
     };
 
     #[test]
-    fn parses_pawn_move() {
+    fn parse_pawn_move() {
         let parsed = san.parse("e4").unwrap();
         assert_eq!(
             parsed.play,
@@ -361,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_b_file_pawn_move() {
+    fn parse_b_file_pawn_move() {
         let parsed = san.parse("b6").unwrap();
         assert_eq!(
             parsed.play,
@@ -377,19 +372,19 @@ mod tests {
     }
 
     #[test]
-    fn tolerates_whitespace() {
+    fn tolerate_whitespace() {
         let parsed = San::from_str("  O-O-O#  ").unwrap();
         assert_eq!(parsed.play, Move::Castle(Side::Queen));
         assert_eq!(parsed.check, Some(Check::Checkmate));
     }
 
     #[test]
-    fn san_parser_does_not_consume_padding() {
+    fn leave_padding_after_san() {
         assert!(san.parse("  O-O-O#  ").is_err());
     }
 
     #[test]
-    fn parses_piece_move() {
+    fn parse_piece_move() {
         let parsed = san.parse("Nbd2+").unwrap();
         assert_eq!(
             parsed.play,
@@ -406,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_lowercase_user_input() {
+    fn parse_lowercase_user_input() {
         // Not doing this for now - accepting lowercase pieces
         // leads to ambiguity for e.g. `b3` which might be invalid `B3`.
         // assert_eq!(San::from_str("nf3").unwrap().to_string(), "Nf3");
@@ -419,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_capture_promotion_and_castle() {
+    fn parse_capture_promotion_and_castle() {
         let parsed = san.parse("exd8=Q#").unwrap();
         assert_eq!(
             parsed.play,
@@ -442,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn displays_san() {
+    fn display_san() {
         assert_eq!(san.parse("Nbd2+").unwrap().to_string(), "Nbd2+");
         assert_eq!(san.parse("exd8=Q#").unwrap().to_string(), "exd8=Q#");
         assert_eq!(san.parse("O-O-O").unwrap().to_string(), "O-O-O");

@@ -23,6 +23,9 @@ lint: common-lint
 
 test: common-test
 
+deep-test *tests:
+    cargo nextest run --release {{ cargo_spec }} --run-ignored ignored-only {{ tests }}
+
 uninstall: common-uninstall
 
 update: common-update
@@ -54,6 +57,9 @@ clean:
 perft:
     cargo nextest run --release perft
 
-# takes about 30 seconds
-deep-perft:
-    cargo nextest run --release perft -- --ignored
+twic:
+    mkdir -p twic
+    wget -qrP twic https://theweekinchess.com/zips/twic16{16,32}{g,c6}.zip
+    unzip -oqqd twic 'twic/twic*.zip'
+    cargo run --release -qp rust-chess-bin -- convert -i twic/twic1616.cbv -o twic cb
+    cargo run --release -qp rust-chess-bin -- convert -i twic/twic1632.cbv -o twic cb

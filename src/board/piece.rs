@@ -1,3 +1,5 @@
+use core::str::FromStr;
+
 use crate::{
     Side, Square,
     square::{Direction, File, Rank},
@@ -229,6 +231,21 @@ impl Player {
     pub const fn castle_king_path(self, king_from: Square, side: Side) -> Bitboard {
         let king_to = self.castle_king_to(side);
         king_from.between(king_to).with(king_from).with(king_to)
+    }
+}
+
+impl FromStr for Player {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("black") {
+            Ok(Black)
+        } else if value.eq_ignore_ascii_case("white") {
+            Ok(White)
+        } else {
+            Err("player must be white or black")
+        }
     }
 }
 

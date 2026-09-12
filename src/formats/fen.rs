@@ -1,4 +1,4 @@
-use core::num::NonZeroU32;
+use core::{fmt, num::NonZeroU32, str::FromStr};
 
 use crate::{
     board::{self, Bitboard, Board, Piece, Player, PlayerTable},
@@ -13,7 +13,9 @@ use super::{StrInput as Input, prelude::*};
 // we accept "compact" FEN without it. The "board" parser finishes once the
 // 64 squares are filled, so it won't "swallow" the turn parser's input.
 
-// pub struct Fen(String);
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
+pub struct Fen(pub Position);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -23,13 +25,41 @@ pub enum Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-fn backtrack() -> ErrMode<ContextError> {
-    ErrMode::Backtrack(ContextError::new())
+impl fmt::Display for Fen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0.fen())
+    }
+}
+
+impl FromStr for Fen {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        fen.parse(text).map_err(|_| Error::Invalid(text.to_string()))
+    }
+}
+
+impl From<Position> for Fen {
+    fn from(position: Position) -> Self {
+        Self(position)
+    }
+}
+
+impl From<Fen> for Position {
+    fn from(fen: Fen) -> Self {
+        fen.0
+    }
+}
+
+pub fn fen(input: &mut Input<'_>) -> ModalResult<Fen> {
+    let parts = parts.parse_next(input)?;
+    let position = parts.validate().map_err(|_| backtrack())?;
+    Ok(Fen(position))
 }
 
 // Lenient - missing suffix fields are filled with default values.
 // Missing castling rights are treated like "-", not inferred as KQkq.
-pub fn parse_position(input: &mut Input<'_>) -> ModalResult<Parts> {
+pub fn parts(input: &mut Input<'_>) -> ModalResult<Parts> {
     backtrack_err(preceded(multispace0, position)).parse_next(input)
 }
 
@@ -48,14 +78,15 @@ fn position(input: &mut Input<'_>) -> ModalResult<Parts> {
 }
 
 impl Position {
-    pub fn from_fen(fen: &str) -> Result<Self> {
-        Parts::from_fen(fen)?.validate().map_err(|_| Error::Invalid(fen.to_string()))
+    pub fn from_fen(text: &str) -> Result<Self> {
+        let fen: Fen = text.parse()?;
+        Ok(fen.into())
     }
 }
 
 impl Parts {
-    pub fn from_fen(fen: &str) -> Result<Parts> {
-        parse_position.parse(fen).map_err(|_| Error::Invalid(fen.to_string()))
+    pub fn from_fen(text: &str) -> Result<Parts> {
+        parts.parse(text).map_err(|_| Error::Invalid(text.to_string()))
     }
 }
 
@@ -463,8 +494,8 @@ fn round(input: &mut Input<'_>) -> ModalResult<NonZeroU32> {
 }
 
 fn opt_field<'i, O>(
-    parser: impl Parser<Input<'i>, O, ErrMode<ContextError>>,
-) -> impl Parser<Input<'i>, Option<O>, ErrMode<ContextError>> {
+    parser: impl Parser<Input<'i>, O, ContextMode>,
+) -> impl Parser<Input<'i>, Option<O>, ContextMode> {
     opt(preceded(space1, cut_err(parser)))
 }
 
@@ -482,7 +513,7 @@ fn board_fen_example() {
     // );
 
     let fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3 1 3";
-    let position = parse_position.parse(fen).unwrap();
+    let position = parts.parse(fen).unwrap();
     assert_eq!(position.turn, Black);
     assert!(position.castles.has(Black, King));
     assert!(position.castles.has(Black, Queen));
@@ -501,7 +532,7 @@ fn board_fen_example() {
     );
 
     let partial_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR b KQkq e3";
-    let position = parse_position.parse(partial_fen).unwrap();
+    let position = parts.parse(partial_fen).unwrap();
     assert_eq!(position.turn, Black);
     assert!(position.castles.has(Black, King));
     assert!(position.castles.has(Black, Queen));
@@ -520,7 +551,7 @@ fn board_fen_example() {
     );
 
     let board_fen = "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKBNR";
-    let position = parse_position.parse(board_fen).unwrap();
+    let position = parts.parse(board_fen).unwrap();
     assert_eq!(position.turn, White);
     assert!(!position.castles.has(Black, King));
     assert!(!position.castles.has(Black, Queen));
@@ -540,7 +571,7 @@ fn board_fen_example() {
 }
 
 #[test]
-fn parses_shredder_castling() {
+fn parse_shredder_castling() {
     use File::*;
     use Player::*;
     use Side::*;
@@ -559,7 +590,7 @@ fn parses_shredder_castling() {
 }
 
 #[test]
-fn parses_x_fen_castling() {
+fn parse_x_fen_castling() {
     use File::*;
     use Player::*;
     use Side::*;
@@ -575,7 +606,7 @@ fn parses_x_fen_castling() {
 }
 
 #[test]
-fn writes_chess_and_shredder_castling() {
+fn write_chess_and_shredder_castling() {
     use File::*;
     use Player::*;
     use Side::*;
@@ -596,7 +627,7 @@ fn writes_chess_and_shredder_castling() {
 }
 
 #[test]
-fn castle_resolves_x_fen_castling() {
+fn resolve_x_fen_castling() {
     use File::*;
     use Player::*;
     use Side::*;
@@ -612,7 +643,7 @@ fn castle_resolves_x_fen_castling() {
 }
 
 #[test]
-fn castle_resolves_shredder_castling() {
+fn resolve_shredder_castling() {
     use File::*;
     use Player::*;
     use Side::*;
@@ -628,25 +659,25 @@ fn castle_resolves_shredder_castling() {
 }
 
 #[test]
-fn rejects_duplicate_castling_files() {
+fn reject_duplicate_castling_files() {
     let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HH - 2 9";
     assert!(Parts::from_fen(fen).is_err());
 }
 
 #[test]
-fn rejects_more_than_two_castling_files_per_player() {
+fn reject_more_than_two_castling_files_per_player() {
     let fen = "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFAh - 2 9";
     assert!(Parts::from_fen(fen).is_err());
 }
 
 #[test]
-fn board_row_parses_exactly_one_rank() {
+fn parse_exactly_one_board_rank() {
     assert!(board_row(Rank::Eight).parse("rnbqkbnr").is_ok());
     assert!(board_row(Rank::Eight).parse("8").is_ok());
 }
 
 #[test]
-fn board_row_rejects_invalid_rank_width() {
+fn reject_invalid_board_row_width() {
     assert!(board_row(Rank::Eight).parse("7").is_err());
     assert!(board_row(Rank::Eight).parse("9").is_err());
     assert!(board_row(Rank::Eight).parse("rnbqkbnrr").is_err());
@@ -654,7 +685,7 @@ fn board_row_rejects_invalid_rank_width() {
 }
 
 #[test]
-fn rejects_invalid_board_rank_width() {
+fn reject_invalid_board_rank_width() {
     assert!(Parts::from_fen("8/8/8/8/8/8/8/8 w - - 0 1").is_ok());
     assert!(Parts::from_fen("8/8/8/8/8/8/8/7 w - - 0 1").is_err());
     assert!(Parts::from_fen("8/8/8/8/8/8/8/9 w - - 0 1").is_err());

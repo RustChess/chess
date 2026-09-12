@@ -7,6 +7,7 @@ version.workspace = true
 [[bin]]
 name = "chess"
 path = "chess.rs"
+doc = false
 
 [lib]
 name = "chess_cli"
@@ -17,4 +18,4 @@ anyhow.workspace = true
 ciborium.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-# clap-verbosity-flag.workspace = true
+tracing.workspace = true

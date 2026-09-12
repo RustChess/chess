@@ -1,5 +1,5 @@
 use crate::{
-    formats::uci,
+    formats::{Text, uci},
     game::{self, Node, Slot},
 };
 
@@ -18,10 +18,12 @@ pub struct Game {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<game::Tag>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub intro: Option<game::Text>,
+    pub intro: Option<Text>,
     #[serde(default, skip_serializing_if = "game::Outcome::is_unknown")]
     pub outcome: game::Outcome,
     pub start: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaluation: Option<game::Evaluation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<Slot>,
 }
@@ -34,6 +36,8 @@ pub struct Play {
     #[serde(default, skip_serializing_if = "game::Meta::is_empty")]
     pub meta: game::Meta,
     pub play: uci::Move,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaluation: Option<game::Evaluation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<Slot>,
 }
@@ -65,6 +69,7 @@ impl From<&game::Game> for Game {
             intro: game.intro.clone(),
             outcome: game.outcome,
             start: game.start().fen(),
+            evaluation: game.start_options().state().evaluation,
             options: game.tree.start().to_vec(),
         }
     }
@@ -81,7 +86,8 @@ impl From<&game::Play> for Play {
                 to: play.play.to,
                 promotion: play.play.promotes(),
             },
-            options: play.options.clone(),
+            evaluation: play.state.evaluation,
+            options: play.options.plays.clone(),
         }
     }
 }

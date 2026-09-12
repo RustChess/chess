@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn generates_freestyle_castle_moves() {
+    fn generate_freestyle_castle_moves() {
         let moves = freestyle_position().legal_castle_moves();
 
         assert!(moves.contains(&Move::castle(White, C1, A)));
@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn blocks_freestyle_castle_move() {
+    fn block_freestyle_castle_move() {
         let mut parts = freestyle_position().parts();
         parts.board.insert(E1, White.knight());
         let position = parts.validate().unwrap();

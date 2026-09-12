@@ -6,12 +6,12 @@ use std::{
 use encoding_rs::WINDOWS_1252;
 use winnow::Parser as _;
 
-use super::{Game, Result, parse};
+use super::{Pgn, Result, parse};
 
-pub fn games<R: Read>(reader: R) -> impl Iterator<Item = io::Result<Result<Game>>> {
+pub fn pgns<R: Read>(reader: R) -> impl Iterator<Item = io::Result<Result<Pgn>>> {
     GameShaped::new(reader).map(|chunk| {
         chunk.map(|chunk| {
-            parse::game
+            parse::pgn
                 .parse(chunk.text.as_str())
                 .map_err(|error| parse::Error::from(&chunk.text, chunk.line, error).into())
         })

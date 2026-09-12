@@ -204,7 +204,7 @@ mod tests {
     const START: Position = Position::start();
 
     #[test]
-    fn documents_game_ids() {
+    fn document_game_ids() {
         use crate::formats::{Parser as _, pgn};
 
         // start position, no moves
@@ -221,19 +221,19 @@ mod tests {
         assert_eq!(e4.id().u128(), 33370984391190127392068542153345756661);
 
         // The weird game
-        let pgn = pgn::game.parse(COLLISION_GAME).unwrap();
+        let pgn = pgn::pgn.parse(COLLISION_GAME).unwrap();
         let game: Game = pgn.try_into().unwrap();
         assert_eq!(game.id().to_string(), "DL7b2eDrC8LVtpBQFL9BYT");
         assert_eq!(game.id().u128(), 132719545793121815798994835819316023416);
     }
 
     #[test]
-    fn documents_polyglot_start_position_hash() {
+    fn document_polyglot_start_position_hash() {
         assert_eq!(START.polyglot_id(), Id(0x463b_9618_1691_fc9c));
     }
 
     #[test]
-    fn documents_polyglot_start_position_collision() {
+    fn document_polyglot_start_position_collision() {
         // Polyglot collision with the standard start position:
         // https://talkchess.com/viewtopic.php?sid=19ffa9bbce9b0b8c00e176365ba29da6&start=20&t=57255
         // https://talkchess.com/viewtopic.php?start=40&t=57255
@@ -245,13 +245,13 @@ mod tests {
     }
 
     #[test]
-    fn reaches_polyglot_collision_position_from_linked_movetext() {
+    fn reach_polyglot_collision_position_from_linked_movetext() {
         use crate::formats::{Parser as _, pgn};
 
         // The first TalkChess thread referenced by
         // `documents_polyglot_start_position_collision` gives this game
         // reaching the collision position.
-        let pgn = pgn::game.parse(COLLISION_GAME).unwrap();
+        let pgn = pgn::pgn.parse(COLLISION_GAME).unwrap();
         let game: Game = pgn.try_into().unwrap();
         let mut cursor = Cursor::new(game);
         cursor.end();
@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn documents_polyglot_zero_hash_position() {
+    fn document_polyglot_zero_hash_position() {
         // Polyglot zero-hash position:
         // https://talkchess.com/forum/viewtopic.php?p=482951
         // https://talkchess.com/viewtopic.php?sid=19ffa9bbce9b0b8c00e176365ba29da6&start=20&t=57255

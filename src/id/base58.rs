@@ -234,7 +234,7 @@ mod tests {
     use super::{Base58, Id};
 
     #[test]
-    fn id_display_roundtrips() {
+    fn id_display_roundtrip() {
         for id in [Id(0), Id(1), Id(u128::MAX), Id(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210)] {
             assert_eq!(id.to_string().parse::<Id>().unwrap(), id);
         }
@@ -242,7 +242,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn json_serializes_id_as_base58_string() {
+    fn json_serialize_id_as_base58_string() {
         let id = Id(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210);
         let json = serde_json::to_string(&id).unwrap();
         assert!(json.starts_with('"'));
@@ -277,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_characters() {
+    fn reject_invalid_characters() {
         for invalid in ["0", "O", "I", "l", "+", "/", "abc0"] {
             assert!(Base58::decode(invalid).is_err());
             assert!(Base58::parse(invalid).is_err());

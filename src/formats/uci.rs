@@ -4,11 +4,11 @@ use core::{fmt, str::FromStr};
 
 use crate::{
     Game, Role, game,
-    game::Mode,
+    game::{Mode, Score},
     square::{File, Rank, Square},
 };
 
-use super::{StrInput as Input, prelude::*};
+use super::{San, StrInput as Input, prelude::*};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(SerializeDisplay, DeserializeFromStr))]
@@ -92,7 +92,7 @@ impl crate::Position {
         resolved
     }
 
-    pub fn resolve_uci_san(self, mode: Mode, moves: &[Move]) -> Vec<String> {
+    pub fn resolve_uci_san(self, mode: Mode, moves: &[Move]) -> Vec<San> {
         let mut game = Game::new(self, mode);
         let mut options = game.start_options_mut();
         let mut resolved = Vec::with_capacity(moves.len());
@@ -101,7 +101,7 @@ impl crate::Position {
             let Ok(play) = options.into_push_uci(*uci) else {
                 break;
             };
-            resolved.push(play.san().to_string());
+            resolved.push(play.san());
             options = play.into_options_mut();
         }
 
@@ -162,12 +162,6 @@ impl FromStr for Info {
         let info = info(&mut input).map_err(|_| Error::InvalidInfo)?;
         input.is_empty().then_some(info).ok_or(Error::InvalidInfo)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Score {
-    Centipawns(i32),
-    Mate(i32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,7 +304,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_normal_move() {
+    fn parse_normal_move() {
         let legal = Position::start().legal_moves();
 
         assert_eq!(parse_move("e2e4", &legal).unwrap().to, E4);
@@ -318,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_promotion_move() {
+    fn parse_promotion_move() {
         let position = Position::from_fen("8/P7/8/8/8/8/8/k6K w - - 0 1").unwrap();
         let legal = position.legal_moves();
 
@@ -328,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_special_moves_from_legal_moves() {
+    fn resolve_special_moves_from_legal_moves() {
         let castle = Position::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         assert!(parse_move("e1g1", &castle.legal_moves()).is_some_and(crate::Move::is_castle));
 
@@ -339,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_info() {
+    fn parse_info() {
         let parsed = info
             .parse(
                 "info depth 24 seldepth 47 multipv 1 score cp 30 nodes 46777504 nps 15592501 hashfull 1000 tbhits 0 time 3000 pv d2d4 g8f6",
@@ -364,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_info_mate_and_bound() {
+    fn parse_info_mate_and_bound() {
         let parsed = info
             .parse("info depth 6 score mate -3 upperbound nodes 974 pv c8c1 d2f1 c1f1")
             .unwrap();

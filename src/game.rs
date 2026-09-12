@@ -1,11 +1,8 @@
-use core::{
-    fmt,
-    ops::{Deref, DerefMut},
-};
+use core::ops::{Deref, DerefMut};
 
 use crate::{
-    Move, Position,
-    formats::san::Check,
+    Move, Player, Position,
+    formats::{Text, san::Check},
     square::{File, Rank},
 };
 
@@ -51,6 +48,7 @@ pub struct Game {
     pub tags: Vec<Tag>,
     pub intro: Option<Text>,
     pub outcome: Outcome,
+    pub orientation: Player,
     /// State before any options are played.
     start: State,
     tree: Tree,
@@ -68,11 +66,48 @@ pub struct Play {
     /// State after playing this move, before any options are played.
     state: State,
     /// Options to play after this position.
-    options: Vec<Slot>,
+    options: Options,
+}
+
+/// Ordered options from a game position and their preferred presentation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Options {
+    /// Whether variations in this option set are expanded.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_false"))]
+    pub expanded: bool,
+    /// Ordered plays, with the mainline first.
+    plays: Vec<Slot>,
+}
+
+#[cfg(feature = "serde")]
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+impl Options {
+    pub const fn new() -> Self {
+        Self { expanded: false, plays: Vec::new() }
+    }
+}
+
+impl Deref for Options {
+    type Target = Vec<Slot>;
+
+    fn deref(&self) -> &Vec<Slot> {
+        &self.plays
+    }
+}
+
+impl DerefMut for Options {
+    fn deref_mut(&mut self) -> &mut Vec<Slot> {
+        &mut self.plays
+    }
 }
 
 #[derive(Clone, PartialEq)]
 pub struct State {
+    pub evaluation: Option<Evaluation>,
     position: Position,
     legal: Vec<Move>,
     check: Option<Check>,
@@ -91,6 +126,32 @@ pub struct Meta {
     pub nags: Vec<Nag>,
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
     pub commands: Vec<Command>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+pub struct Evaluation {
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub depth: Option<u32>,
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub score: Score,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Score {
+    Centipawns(i32),
+    Mate(i32),
+}
+
+impl Score {
+    pub const fn flip(self) -> Self {
+        match self {
+            Self::Centipawns(value) => Self::Centipawns(-value),
+            Self::Mate(value) => Self::Mate(-value),
+        }
+    }
 }
 
 impl Game {
@@ -115,13 +176,20 @@ impl Game {
 
     fn options_ref(&self, node: Node) -> OptionsRef<'_> {
         let options = self.tree.options(node);
-        OptionsRef { game: self, node, options }
+        OptionsRef { game: self, node, expanded: options.expanded, options: &options.plays }
     }
 
     fn state(&self, node: Node) -> &State {
         match node {
             Node::Start => &self.start,
             Node::Play(slot) => &self.tree.play(slot).expect("slot exists").state,
+        }
+    }
+
+    fn state_mut(&mut self, node: Node) -> &mut State {
+        match node {
+            Node::Start => &mut self.start,
+            Node::Play(slot) => &mut self.tree.play_mut(slot).expect("slot exists").state,
         }
     }
 
@@ -151,6 +219,7 @@ impl Game {
             tags: Default::default(),
             intro: None,
             outcome: Default::default(),
+            orientation: Player::White,
             start: State::new(position),
             tree: Tree::new(),
             mode,
@@ -250,6 +319,10 @@ impl Play {
     pub fn legal(&self) -> &[Move] {
         self.state.legal()
     }
+
+    pub fn state(&self) -> &State {
+        &self.state
+    }
 }
 
 impl Play {
@@ -267,7 +340,7 @@ impl State {
             None
         };
 
-        Self { position, legal, check }
+        Self { evaluation: None, position, legal, check }
     }
 
     #[inline]
@@ -278,6 +351,23 @@ impl State {
     #[inline]
     pub fn check(&self) -> Option<Check> {
         self.check
+    }
+
+    pub fn set_evaluation(&mut self, evaluation: Option<Evaluation>) -> bool {
+        if self.evaluation == evaluation {
+            false
+        } else {
+            self.evaluation = evaluation;
+            true
+        }
+    }
+
+    pub fn update_evaluation(&mut self, evaluation: Evaluation) -> bool {
+        if self.evaluation.is_some_and(|previous| evaluation.depth < previous.depth) {
+            false
+        } else {
+            self.set_evaluation(Some(evaluation))
+        }
     }
 }
 
@@ -394,43 +484,6 @@ pub enum Outcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
-pub struct Text(String);
-
-impl Text {
-    pub fn new(text: impl AsRef<str>) -> Option<Self> {
-        let text = text.as_ref().trim();
-        (!text.is_empty()).then(|| Self(text.to_string()))
-    }
-
-    pub fn merge(&mut self, text: &Text) {
-        self.0.push_str("\n\n");
-        self.0.push_str(&text.0);
-    }
-}
-
-impl AsRef<str> for Text {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for Text {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Deref for Text {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Command {
     pub command: Text,
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
@@ -495,12 +548,21 @@ impl<'g> PlayMut<'g> {
     pub fn into_options_mut(self) -> OptionsMut<'g> {
         OptionsMut { game: self.game, node: Node::Play(self.slot) }
     }
+
+    pub fn set_evaluation(&mut self, evaluation: Option<Evaluation>) -> bool {
+        self.state.set_evaluation(evaluation)
+    }
+
+    pub fn update_evaluation(&mut self, evaluation: Evaluation) -> bool {
+        self.state.update_evaluation(evaluation)
+    }
 }
 
 /// Read-only iterator over the options of a `Node`.
 pub struct OptionsRef<'g> {
     game: &'g Game,
     node: Node,
+    expanded: bool,
     options: &'g [Slot],
 }
 
@@ -526,6 +588,10 @@ impl<'g> OptionsRef<'g> {
 
     pub fn contains(&self, play: Move) -> bool {
         self.index(play).is_some()
+    }
+
+    pub const fn is_expanded(&self) -> bool {
+        self.expanded
     }
 
     pub fn position(&self) -> Position {
@@ -564,6 +630,7 @@ impl<'g> OptionsRef<'g> {
         OptionsRef {
             game: self.game,
             node: self.node,
+            expanded: self.expanded,
             options: self.options.get(1..).unwrap_or_default(),
         }
     }
@@ -577,7 +644,7 @@ impl<'g> OptionsRef<'g> {
         let (slot, rest) = self.options.split_first()?;
         Some((
             PlayRef { game: self.game, slot: *slot },
-            OptionsRef { game: self.game, node: self.node, options: rest },
+            OptionsRef { game: self.game, node: self.node, expanded: self.expanded, options: rest },
         ))
     }
 
@@ -695,90 +762,118 @@ impl<'g> OptionsMut<'g> {
     }
 
     #[must_use]
-    pub fn remove(&mut self, play: Move) -> bool {
-        let Some(index) = self.as_ref().index(play) else {
-            return false;
-        };
+    pub fn remove(&mut self, play: Move) -> Option<()> {
+        let index = self.as_ref().index(play)?;
         self.remove_index(index)
     }
 
-    fn remove_index(&mut self, index: usize) -> bool {
-        let Some(slot) = self.game.tree.options_mut(self.node).get(index).copied() else {
-            return false;
-        };
+    fn remove_index(&mut self, index: usize) -> Option<()> {
+        let slot = self.game.tree.options_mut(self.node).get(index).copied()?;
         self.game.tree.options_mut(self.node).remove(index);
         self.game.delete_slot(slot);
-        true
+        Some(())
     }
 
     #[must_use]
-    pub fn swap(&mut self, a: Move, b: Move) -> bool {
-        let Some(a) = self.as_ref().index(a) else {
-            return false;
-        };
-        let Some(b) = self.as_ref().index(b) else {
-            return false;
-        };
+    pub fn swap(&mut self, a: Move, b: Move) -> Option<bool> {
+        let a = self.as_ref().index(a)?;
+        let b = self.as_ref().index(b)?;
         self.swap_index(a, b)
     }
 
-    fn swap_index(&mut self, a: usize, b: usize) -> bool {
+    fn swap_index(&mut self, a: usize, b: usize) -> Option<bool> {
         let len = self.as_ref().len();
         if a >= len || b >= len {
-            false
+            None
+        } else if a == b {
+            Some(false)
         } else {
             self.game.tree.options_mut(self.node).swap(a, b);
-            true
+            Some(true)
         }
     }
 
     #[must_use]
-    pub fn raise(&mut self, play: Move) -> bool {
-        let Some(index) = self.as_ref().index(play) else {
-            return false;
-        };
+    pub fn raise(&mut self, play: Move) -> Option<bool> {
+        let index = self.as_ref().index(play)?;
         self.raise_index(index)
     }
 
-    fn raise_index(&mut self, index: usize) -> bool {
+    fn raise_index(&mut self, index: usize) -> Option<bool> {
         if index >= self.as_ref().len() {
-            false
+            None
+        } else if index == 0 {
+            Some(false)
         } else {
-            index == 0 || self.swap_index(index - 1, index)
+            self.swap_index(index - 1, index)
         }
     }
 
     #[must_use]
-    pub fn lower(&mut self, play: Move) -> bool {
-        let Some(index) = self.as_ref().index(play) else {
-            return false;
-        };
+    pub fn lower(&mut self, play: Move) -> Option<bool> {
+        let index = self.as_ref().index(play)?;
         self.lower_index(index)
     }
 
-    fn lower_index(&mut self, index: usize) -> bool {
+    fn lower_index(&mut self, index: usize) -> Option<bool> {
         let len = self.as_ref().len();
-        if index >= len { false } else { index + 1 == len || self.swap_index(index, index + 1) }
+        if index >= len {
+            None
+        } else if index + 1 == len {
+            Some(false)
+        } else {
+            self.swap_index(index, index + 1)
+        }
     }
 
     #[must_use]
-    pub fn promote(&mut self, play: Move) -> bool {
-        let Some(index) = self.as_ref().index(play) else {
-            return false;
-        };
+    pub fn promote(&mut self, play: Move) -> Option<bool> {
+        let index = self.as_ref().index(play)?;
         self.promote_index(index)
     }
 
-    fn promote_index(&mut self, index: usize) -> bool {
+    #[must_use]
+    pub fn demote(&mut self, play: Move) -> Option<bool> {
+        let index = self.as_ref().index(play)?;
         let len = self.as_ref().len();
         if index >= len {
-            return false;
+            return None;
+        }
+        if index + 1 == len {
+            return Some(false);
+        }
+
+        let options = self.game.tree.options_mut(self.node);
+        let option = options.remove(index);
+        options.push(option);
+        Some(true)
+    }
+
+    fn promote_index(&mut self, index: usize) -> Option<bool> {
+        let len = self.as_ref().len();
+        if index >= len {
+            return None;
+        }
+        if index == 0 {
+            return Some(false);
         }
 
         let options = self.game.tree.options_mut(self.node);
         let option = options.remove(index);
         options.insert(0, option);
-        true
+        Some(true)
+    }
+
+    pub fn collapse(&mut self) {
+        self.set_expanded(false);
+    }
+
+    pub fn expand(&mut self) {
+        self.set_expanded(true);
+    }
+
+    pub fn set_expanded(&mut self, expanded: bool) {
+        self.game.tree.options_mut(self.node).expanded = expanded;
     }
 
     // DANGEROUS, don't want such a thing.
@@ -796,8 +891,22 @@ impl<'g> OptionsMut<'g> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "serde")]
     #[test]
-    fn derives_check_for_start_position() {
+    fn serialize_evaluation_structurally() {
+        let centipawns = Evaluation { depth: Some(18), score: Score::Centipawns(123) };
+        let mate = Evaluation { depth: Some(22), score: Score::Mate(-3) };
+
+        let centipawns_json = r#"{"depth":18,"centipawns":123}"#;
+        let mate_json = r#"{"depth":22,"mate":-3}"#;
+        assert_eq!(serde_json::to_string(&centipawns).unwrap(), centipawns_json);
+        assert_eq!(serde_json::to_string(&mate).unwrap(), mate_json);
+        assert_eq!(serde_json::from_str::<Evaluation>(centipawns_json).unwrap(), centipawns);
+        assert_eq!(serde_json::from_str::<Evaluation>(mate_json).unwrap(), mate);
+    }
+
+    #[test]
+    fn derive_check_for_start_position() {
         let check = Position::from_fen("4k3/8/8/8/8/8/8/K3R3 b - - 0 1").unwrap();
         let checkmate = Position::from_fen("k7/1Q6/2K5/8/8/8/8/8 b - - 0 1").unwrap();
 

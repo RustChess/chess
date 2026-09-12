@@ -31,6 +31,10 @@ impl Cursor {
         &self.game
     }
 
+    pub fn set_orientation(&mut self, orientation: Player) {
+        self.game.orientation = orientation;
+    }
+
     pub fn into_game(self) -> Game {
         self.game
     }
@@ -41,6 +45,16 @@ impl Cursor {
 
     pub fn state(&self) -> &State {
         self.game.state(self.node)
+    }
+
+    /// Sets whether the options at `node` are expanded.
+    #[must_use]
+    pub fn set_expanded(&mut self, node: Node, expanded: bool) -> bool {
+        let Some(mut options) = self.game.options_mut(node) else {
+            return false;
+        };
+        options.set_expanded(expanded);
+        true
     }
 
     #[must_use]
@@ -58,6 +72,43 @@ impl Cursor {
             Node::Start => None,
             Node::Play(slot) => self.game.play(slot),
         }
+    }
+
+    pub fn play_mut(&mut self) -> Option<PlayMut<'_>> {
+        match self.node {
+            Node::Start => None,
+            Node::Play(slot) => self.game.play_mut(slot),
+        }
+    }
+
+    pub fn set_comment(&mut self, comment: Option<Text>) -> Option<bool> {
+        match self.node {
+            Node::Start => {
+                if self.game.intro == comment {
+                    Some(false)
+                } else {
+                    self.game.intro = comment;
+                    Some(true)
+                }
+            }
+            Node::Play(slot) => {
+                let mut play = self.game.play_mut(slot)?;
+                if play.meta.comment == comment {
+                    Some(false)
+                } else {
+                    play.meta.comment = comment;
+                    Some(true)
+                }
+            }
+        }
+    }
+
+    pub fn set_evaluation(&mut self, evaluation: Option<Evaluation>) -> bool {
+        self.game.state_mut(self.node).set_evaluation(evaluation)
+    }
+
+    pub fn update_evaluation(&mut self, evaluation: Evaluation) -> bool {
+        self.game.state_mut(self.node).update_evaluation(evaluation)
     }
 
     pub fn options(&self) -> OptionsRef<'_> {
@@ -124,7 +175,11 @@ impl Cursor {
         let previous = self.previous();
         let play = self.game.play(slot).expect("cursor slot must exist").play();
 
-        let _ = self.game.options_mut(previous).expect("previous options must exist").remove(play);
+        self.game
+            .options_mut(previous)
+            .expect("previous options must exist")
+            .remove(play)
+            .expect("current play must be an option of its predecessor");
         self.node = previous;
         true
     }
@@ -140,6 +195,61 @@ impl Cursor {
             self.game.options_mut(self.node).expect("cursor node must exist").push(play)?.slot();
         self.node = Node::Play(slot);
         Ok(slot)
+    }
+
+    pub fn insert_after(&mut self, after: Slot, play: Move) -> Result<Slot, Error> {
+        if let Some(next) = self.options().get(play) {
+            let slot = next.slot();
+            self.node = Node::Play(slot);
+            return Ok(slot);
+        }
+
+        let index = self
+            .options()
+            .iter()
+            .position(|option| option.slot() == after)
+            .ok_or(super::Error::Illegal)?
+            + 1;
+        let slot = self
+            .game
+            .options_mut(self.node)
+            .expect("cursor node must exist")
+            .into_insert(index, play)?
+            .slot();
+        self.node = Node::Play(slot);
+        Ok(slot)
+    }
+
+    #[must_use]
+    pub fn raise(&mut self) -> Option<bool> {
+        let play = self.play()?;
+        let previous = play.previous();
+        let play = play.play();
+        self.game.options_mut(previous)?.raise(play)
+    }
+
+    #[must_use]
+    pub fn lower(&mut self) -> Option<bool> {
+        let play = self.play()?;
+        let previous = play.previous();
+        let play = play.play();
+        self.game.options_mut(previous)?.lower(play)
+    }
+
+    #[must_use]
+    pub fn promote(&mut self) -> Option<bool> {
+        let play = self.play()?;
+        let previous = play.previous();
+        let play = play.play();
+        self.game.options_mut(previous)?.promote(play)
+    }
+
+    #[must_use]
+    pub fn demote(&mut self) -> Option<bool> {
+        let play = self.play()?;
+        let previous = play.previous();
+        let play = play.play();
+        self.game.options_mut(previous)?.demote(play)
     }
 }
 
@@ -166,7 +276,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn walks_main_line() {
+    fn walk_main_line() {
         let mut cursor = Game::chess(Position::start()).unwrap().cursor();
         let play = cursor.position().legal_moves()[0];
         let slot = cursor.push(play).unwrap();
@@ -192,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn takes_back_current_play() {
+    fn take_back_current_play() {
         let mut cursor = Game::chess(Position::start()).unwrap().cursor();
         let e4 = cursor.push(crate::Move::normal(Pawn, E2, E4)).unwrap();
         cursor.push(crate::Move::normal(Pawn, E7, E5)).unwrap();

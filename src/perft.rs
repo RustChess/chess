@@ -1,6 +1,6 @@
 use crate::{
     Scharnagl,
-    formats::{Parser as _, fen::parse_position},
+    formats::{Parser as _, fen::parts},
     position::Position,
 };
 
@@ -17,14 +17,14 @@ pub(crate) fn perft(position: Position, depth: u32) -> u64 {
 }
 
 fn assert_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = parse_position.parse(fen).unwrap().validate().unwrap();
+    let position = parts.parse(fen).unwrap().validate().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
 }
 
 fn assert_freestyle_perft(name: &str, fen: &str, expected: &[(u32, u64)]) {
-    let position = parse_position.parse(fen).unwrap().validate().unwrap();
+    let position = parts.parse(fen).unwrap().validate().unwrap();
     for &(depth, nodes) in expected {
         assert_eq!(perft(position, depth), nodes, "{name} depth {depth}");
     }
@@ -45,6 +45,7 @@ fn divide(position: Position, depth: u32) {
 }
 
 #[test]
+#[ignore = "extended Chess960 move-generation coverage"]
 fn freestyle_positions() {
     // Selected from Shakmaty's `tests/chess960.perft`:
     // https://github.com/niklasf/shakmaty/blob/master/shakmaty/tests/chess960.perft
@@ -83,7 +84,7 @@ fn freestyle_positions() {
 #[test]
 #[ignore]
 fn deep_freestyle_positions() {
-    let position = parse_position
+    let position = parts
         .parse("b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9")
         .unwrap()
         .validate()

@@ -1,4 +1,7 @@
-use crate::game::{Command, Nag, Outcome, Tag as OtherTag, Text};
+use crate::{
+    formats::Text,
+    game::{Command, Nag, Outcome, Tag as OtherTag},
+};
 
 use super::*;
 use crate::formats::{StrInput as Input, fen, prelude::*, san};
@@ -13,9 +16,9 @@ pub struct Error {
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-pub fn game(input: &mut Input<'_>) -> ModalResult<Game> {
+pub fn pgn(input: &mut Input<'_>) -> ModalResult<Pgn> {
     delimited(multispace0, (tags, comments, repeat(0.., parse_move), opt(outcome)), multispace0)
-        .map(|(tags, intro, moves, outcome)| Game {
+        .map(|(tags, intro, moves, outcome)| Pgn {
             start: start_position(&tags),
             tags,
             intro,
@@ -131,7 +134,7 @@ fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Comment>, Vec<Annotation>)
             |(mut comment, mut annotations), item| {
                 match item {
                     Tail::Comment(MoveComment { commands, text }) => {
-                        annotations.extend(commands.into_iter().map(Annotation::Command));
+                        annotations.extend(commands.into_iter().map(annotation));
                         if let Some(text) = text {
                             merge_comments(&mut comment, text);
                         }
@@ -186,13 +189,18 @@ fn tag_from_pair(key: Text, value: String) -> Option<Tag> {
         "White" => Tag::White(value),
         "Black" => Tag::Black(value),
         "Result" => Tag::Outcome(outcome.parse(value.as_str()).ok()?),
-        "FEN" => Tag::Fen(fen::parse_position.parse(value.as_str()).ok()?),
+        "FEN" => Tag::Fen(fen::parts.parse(value.as_str()).ok()?),
         "SetUp" => Tag::SetUp(match value.as_str() {
             "0" => false,
             "1" => true,
             _ => return None,
         }),
         "Variant" => Tag::Variant(value),
+        "Orientation" => Tag::Orientation(value.parse().ok()?),
+        "StartEvaluation" => value
+            .parse()
+            .map(Tag::StartEvaluation)
+            .unwrap_or_else(|_| Tag::Other(OtherTag { key, value })),
         _ => Tag::Other(OtherTag { key, value }),
     })
 }
@@ -215,7 +223,7 @@ fn tag_value_char(input: &mut Input<'_>) -> ModalResult<char> {
 
 fn name(input: &mut Input<'_>) -> ModalResult<Text> {
     take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
-        .verify_map(Text::new)
+        .verify_map(|text| Text::new(text).ok())
         .parse_next(input)
 }
 
@@ -231,7 +239,7 @@ fn symbol_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
 
 pub fn comment(input: &mut Input<'_>) -> ModalResult<Option<Comment>> {
     alt((bracket_comment, semicolon_comment))
-        .map(|comment| Text::new(comment).map(Comment))
+        .map(|comment| Text::new(comment).ok().map(Comment))
         .context(StrContext::Label("PGN comment"))
         .parse_next(input)
 }
@@ -277,7 +285,7 @@ fn split_comment(raw: String) -> MoveComment {
     }
 
     comment.push_str(rest);
-    MoveComment { commands, text: Text::new(comment).map(Comment) }
+    MoveComment { commands, text: Text::new(comment).ok().map(Comment) }
 }
 
 fn command(input: &mut Input<'_>) -> ModalResult<Command> {
@@ -287,6 +295,18 @@ fn command(input: &mut Input<'_>) -> ModalResult<Command> {
             parameters: parameters.unwrap_or_default(),
         })
         .parse_next(input)
+}
+
+fn annotation(command: Command) -> Annotation {
+    evaluation(&command).map_or(Annotation::Command(command), Annotation::Evaluation)
+}
+
+pub fn evaluation(command: &Command) -> Option<Evaluation> {
+    if command.command.as_ref() != "eval" || !(1..=2).contains(&command.parameters.len()) {
+        return None;
+    }
+
+    command.parameters.join(",").parse().ok()
 }
 
 fn parameters(input: &mut Input<'_>) -> ModalResult<Vec<String>> {
