@@ -1,6 +1,5 @@
 use crate::{
-    Player,
-    board::scharnagl_by_id,
+    Player, Scharnagl,
     game::{self, Mode, PositionId, Roster},
     position::{self, Position},
 };
@@ -51,7 +50,7 @@ impl From<crate::Game> for Pgn {
         if freestyle || (start.parts() != Position::start().parts()) {
             pgn_set_start(&mut tags, start.parts());
         }
-        if freestyle && let Some(id) = scharnagl_by_id(start.board().standard_id()) {
+        if freestyle && let Some(id) = Scharnagl::from_board(start.board()) {
             tags.push(Tag::Chess960Id(id));
         }
         if let Some(evaluation) = start_evaluation {

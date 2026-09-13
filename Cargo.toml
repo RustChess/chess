@@ -49,12 +49,15 @@ version.workspace = true
 [lib]
 name = "chess"
 
+[package.metadata.cargo-shear]
+ignored-paths = [
+  "src/id/POLYGLOT-BASIS.rs",
+  "src/id/STANDARD-BASIS.rs",
+  "src/square/SLIDER-SIGHTS.rs",
+]
+
 [features]
 default = []
-const-fn-polyglot-id = []
-const-fn-scharnagl-id = []
-const-fn-standard-id = []
-const-fn-statics = ["const-fn-polyglot-id", "const-fn-scharnagl-id", "const-fn-standard-id"]
 lichess = ["dep:chess-lichess"]
 serde = ["dep:serde", "dep:serde_with"]
 
@@ -69,6 +72,13 @@ winnow.workspace = true
 
 serde = { workspace = true, optional = true }
 serde_with = { workspace = true, optional = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  "cfg(rust_chess_compile_time_polyglot_basis)",
+  "cfg(rust_chess_compile_time_slider_sights)",
+  "cfg(rust_chess_compile_time_standard_basis)",
+] }
 
 [dev-dependencies]
 anyhow.workspace = true

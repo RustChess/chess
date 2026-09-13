@@ -75,7 +75,7 @@ impl<T> Empty for Vec<T> {
 }
 
 /// "Full" table, containing an element of `T` for every value of `X`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Table<X, T, const N: usize> {
     pub all: [T; N],
     __: PhantomData<X>,

@@ -1,29 +1,122 @@
 pub mod base58;
-pub mod basis;
-pub use basis::{Basis, POLYGLOT, STANDARD};
-
-// Our "standard basis" has 802 "consistent" Ids:
-// - board: 64 * 2 * 6 = 768
-// - turn: 2
-// - castle: 2 * 8 = 16
-// - en-passant: 16 squares
-//
-// Polyglot basis has 781 "random" IDs:
-// - pieces: 12 * 64 = 768
-// - side to move: 1
-// - castling: 4
-// - en-passant files: 8
-// We set zeros/repeat to achieve compatibility.
+#[cfg(any(rust_chess_compile_time_polyglot_basis, test))]
+pub mod polyglot;
+#[cfg(any(rust_chess_compile_time_standard_basis, test))]
+pub mod standard;
 
 use crate::{
-    board::{Board, Player, Role},
+    board::{Board, Player, PlayerTable, Role, RoleTable},
+    finite::Empty as _,
     game::Game,
-    position::{Castles, EnPassant, Position, Side},
+    position::{Castles, EnPassant, EnPassantTable, Position, Side},
+    square::{FileTable, SquareTable},
 };
 
 /// Type of globally unique identifiers.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Id(pub u128);
+
+// Our standard basis has 802 consistent Ids:
+// - board: 64 * 2 * 6 = 768
+// - turn: 2, castle: 2 * 8 = 16, en-passant: 16 squares
+//
+// Polyglot basis has 781 "random" IDs:
+// - pieces: 12 * 64 = 768
+// - side to move: 1, castling: 4, en-passant files: 8
+// We set zeros and repeated values to achieve compatibility.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Basis {
+    pub board: BoardTable<Id>,
+    pub turn: PlayerTable<Id>,
+    pub castle: CastleTable<Id>,
+    pub en_passant: EnPassantTable<Id>,
+}
+
+impl Position {
+    // standard ID plus counters
+    pub fn id(self) -> Id {
+        self.standard_id()
+            .xor(counter_id("reversible", self.reversible()))
+            .xor(counter_id("round", self.round().get()))
+    }
+
+    // our 128-bit replacement of the classical Polyglot hash
+    pub const fn standard_id(self) -> Id {
+        self.transposition_id(Basis::standard())
+    }
+
+    // the classical Polyglot hash, just embedded into u128
+    pub const fn polyglot_id(self) -> Id {
+        self.transposition_id(Basis::polyglot())
+    }
+
+    pub const fn transposition_id(self, basis: &Basis) -> Id {
+        // In validated positions, en_passant is normalized to effective rights.
+        self.apparent_id(basis)
+            .xor(castle_id(basis, self.castles()))
+            .xor(en_passant_id(basis, self.en_passant()))
+    }
+    // What one typically sees in a depicted position: The board, and the player to move
+    pub const fn apparent_id(self, basis: &Basis) -> Id {
+        self.board().id(basis).xor(turn_id(basis, self.turn()))
+    }
+}
+
+impl Board {
+    pub const fn polyglot_id(self) -> Id {
+        self.id(Basis::polyglot())
+    }
+
+    pub const fn standard_id(self) -> Id {
+        self.id(Basis::standard())
+    }
+
+    pub const fn id(self, basis: &Basis) -> Id {
+        let mut id = Id(0);
+
+        finite_for!(player in Player {
+            finite_for!(role in Role {
+                let mut squares = self.player(player).intersection(self.role(role));
+                while let Some(square) = squares.pop_first() {
+                    id = id.xor(basis.board.get(square).get(player).get(role));
+                }
+            });
+        });
+
+        id
+    }
+}
+
+impl Game {
+    // Experimental: A globally unique ID for all games
+    pub fn id(&self) -> Id {
+        use crate::game::cursor::Mainline;
+
+        let mut hash = sha2_const::Sha256::new()
+            .update(b"game:")
+            .update(&self.start().id().u128().to_be_bytes());
+
+        for play in Mainline::new(self) {
+            hash = hash.update(b":").update(play.play().uci_960().to_string().as_bytes());
+        }
+
+        Id(fold(hash.finalize()))
+    }
+
+    // // TODO: This is probably a bad idea
+    // //
+    // // start:2iHiqJgL4hH1Qqqng6VaDF:move:e2e4 => AipYeC9ie6GSVAKwJsVkvB
+    // // play:MSVFqF2aDcnN8CziQZQmqY:move:e7e5 => J3bJ2SruB518B2qn9QKKgs
+    // // play:8pxD8BKK3A9XZuDzrcuexd:move:g1f3 => 26BuaaRqhKHZVs9YRHvLzb
+    // // play:4r2FcZ9jEJukZ3wEGPn3h:move:e7e8q => C6VatJhT8ZjDrsToNGJh4N
+    // fn play_id(&self, previous: Option<Id>, play: Move) -> Id {
+    //     if let Some(previous) = previous {
+    //         hash(format!("play:{previous}:move:{}", play.uci()).as_bytes())
+    //     } else {
+    //         hash(format!("start:{}:move:{}", self.start().id(), play.uci()).as_bytes())
+    //     }
+    // }
+}
 
 impl Id {
     pub const fn xor(self, other: Id) -> Id {
@@ -73,89 +166,36 @@ const fn split(hash: U256) -> (u128, u128) {
     (u128::from_be_bytes(upper), u128::from_be_bytes(lower))
 }
 
-impl Game {
-    // Experimental: A globally unique ID for all games
-    pub fn id(&self) -> Id {
-        use crate::game::cursor::Mainline;
+type BoardTable<T> = SquareTable<PlayerTable<RoleTable<T>>>;
+type CastleTable<T> = PlayerTable<FileTable<T>>;
 
-        let mut hash = sha2_const::Sha256::new()
-            .update(b"game:")
-            .update(&self.start().id().u128().to_be_bytes());
-
-        for play in Mainline::new(self) {
-            hash = hash.update(b":").update(play.play().uci_960().to_string().as_bytes());
+impl Basis {
+    pub const fn empty() -> Self {
+        Self {
+            board: BoardTable::EMPTY,
+            turn: PlayerTable::EMPTY,
+            castle: CastleTable::EMPTY,
+            en_passant: EnPassantTable::EMPTY,
         }
-
-        Id(fold(hash.finalize()))
     }
 
-    // // TODO: This is probably a bad idea
-    // //
-    // // start:2iHiqJgL4hH1Qqqng6VaDF:move:e2e4 => AipYeC9ie6GSVAKwJsVkvB
-    // // play:MSVFqF2aDcnN8CziQZQmqY:move:e7e5 => J3bJ2SruB518B2qn9QKKgs
-    // // play:8pxD8BKK3A9XZuDzrcuexd:move:g1f3 => 26BuaaRqhKHZVs9YRHvLzb
-    // // play:4r2FcZ9jEJukZ3wEGPn3h:move:e7e8q => C6VatJhT8ZjDrsToNGJh4N
-    // fn play_id(&self, previous: Option<Id>, play: Move) -> Id {
-    //     if let Some(previous) = previous {
-    //         hash(format!("play:{previous}:move:{}", play.uci()).as_bytes())
-    //     } else {
-    //         hash(format!("start:{}:move:{}", self.start().id(), play.uci()).as_bytes())
-    //     }
-    // }
-}
+    pub const fn polyglot() -> &'static Self {
+        #[cfg(rust_chess_compile_time_polyglot_basis)]
+        static BASIS: Basis = polyglot::compute_basis();
+        #[cfg(not(rust_chess_compile_time_polyglot_basis))]
+        static BASIS: Basis = include!("id/POLYGLOT-BASIS.rs");
 
-impl Position {
-    // standard ID plus counters
-    pub fn id(self) -> Id {
-        self.standard_id()
-            .xor(counter_id("reversible", self.reversible()))
-            .xor(counter_id("round", self.round().get()))
+        &BASIS
     }
 
-    // our 128-bit replacement of the classical Polyglot hash
-    pub const fn standard_id(self) -> Id {
-        self.transposition_id(&STANDARD)
-    }
+    pub const fn standard() -> &'static Self {
+        #[cfg(rust_chess_compile_time_standard_basis)]
+        #[allow(long_running_const_eval)]
+        static BASIS: Basis = standard::compute_table();
+        #[cfg(not(rust_chess_compile_time_standard_basis))]
+        static BASIS: Basis = include!("id/STANDARD-BASIS.rs");
 
-    // the classical Polyglot hash, just embedded into u128
-    pub const fn polyglot_id(self) -> Id {
-        self.transposition_id(&POLYGLOT)
-    }
-
-    pub const fn transposition_id(self, basis: &Basis) -> Id {
-        // In validated positions, en_passant is normalized to effective rights.
-        self.apparent_id(basis)
-            .xor(castle_id(basis, self.castles()))
-            .xor(en_passant_id(basis, self.en_passant()))
-    }
-    // What one typically sees in a depicted position: The board, and the player to move
-    pub const fn apparent_id(self, basis: &Basis) -> Id {
-        self.board().id(basis).xor(turn_id(basis, self.turn()))
-    }
-}
-
-impl Board {
-    pub const fn polyglot_id(self) -> Id {
-        self.id(&POLYGLOT)
-    }
-
-    pub const fn standard_id(self) -> Id {
-        self.id(&STANDARD)
-    }
-
-    pub const fn id(self, basis: &Basis) -> Id {
-        let mut id = Id(0);
-
-        finite_for!(player in Player {
-            finite_for!(role in Role {
-                let mut squares = self.player(player).intersection(self.role(role));
-                while let Some(square) = squares.pop_first() {
-                    id = id.xor(basis.board.get(square).get(player).get(role));
-                }
-            });
-        });
-
-        id
+        &BASIS
     }
 }
 
@@ -274,6 +314,6 @@ mod tests {
             Position::from_fen("2b1k3/4p3/3p1p2/p2P2p1/P2P4/2P2PP1/4P3/2NQKB2 b - - 0 1").unwrap();
 
         assert_eq!(position.polyglot_id(), Id(0));
-        assert_ne!(position.transposition_id(&STANDARD), Id(0));
+        assert_ne!(position.transposition_id(Basis::standard()), Id(0));
     }
 }

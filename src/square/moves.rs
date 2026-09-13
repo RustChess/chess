@@ -5,8 +5,6 @@ use super::{Direction, Square};
 use Player::*;
 use Role::*;
 
-include!("slider-sights.rs");
-
 /// Square Move API.
 impl Square {
     pub const fn attacks(self, piece: Piece, occupied: Bitboard) -> Bitboard {
@@ -64,11 +62,11 @@ impl Square {
     }
 
     pub const fn bishop_sight(self, occupied: Bitboard) -> Bitboard {
-        SLIDER_SIGHTS.bishop_sight(self, occupied)
+        SliderSights::get().bishop_sight(self, occupied)
     }
 
     pub const fn rook_sight(self, occupied: Bitboard) -> Bitboard {
-        SLIDER_SIGHTS.rook_sight(self, occupied)
+        SliderSights::get().rook_sight(self, occupied)
     }
 
     pub const fn queen_sight(self, occupied: Bitboard) -> Bitboard {
@@ -133,20 +131,18 @@ impl<const B: u32> Projector<B> {
 pub struct SliderSights([Bitboard; 88772]);
 
 impl SliderSights {
-    pub const fn volker_annuss() -> Self {
-        let mut this = Self([Bitboard::EMPTY; 88772]);
-        let mut index = 0;
-        while index < 64 {
-            let square = Square::ALL[index];
-            this.project_bishop_sights(square);
-            this.project_rook_sights(square);
-            index += 1;
-        }
-        this
+    pub const fn get() -> &'static Self {
+        #[cfg(rust_chess_compile_time_slider_sights)]
+        #[allow(long_running_const_eval)]
+        static SIGHTS: SliderSights = SliderSights::compute();
+        #[cfg(not(rust_chess_compile_time_slider_sights))]
+        static SIGHTS: SliderSights = include!("SLIDER-SIGHTS.rs");
+
+        &SIGHTS
     }
 
-    pub const fn into_array(self) -> [Bitboard; 88772] {
-        self.0
+    pub const fn as_array(&self) -> &[Bitboard; 88772] {
+        &self.0
     }
 
     // All the squares a bishop in square "sees", assuming the given occupied squares.
@@ -161,6 +157,18 @@ impl SliderSights {
         let blockers = rook::blockers(square);
         let index = rook::projector(square).index(occupied.intersection(blockers));
         self.0[index]
+    }
+}
+
+#[cfg(any(rust_chess_compile_time_slider_sights, test))]
+impl SliderSights {
+    pub const fn compute() -> Self {
+        let mut this = Self([Bitboard::EMPTY; 88772]);
+        finite_for!(square in Square {
+            this.project_bishop_sights(square);
+            this.project_rook_sights(square);
+        });
+        this
     }
 
     const fn project_bishop_sights(&mut self, square: Square) {
@@ -181,7 +189,7 @@ impl SliderSights {
         );
     }
 
-    const fn get(&self, index: usize) -> Bitboard {
+    const fn at(&self, index: usize) -> Bitboard {
         self.0[index]
     }
 
@@ -202,7 +210,7 @@ impl SliderSights {
             let sight = Self::sight(square, occupied, directions);
             // sanity check: we are not overwriting an existing attack
             // due to hash / magic index failing by clashing.
-            assert!(self.get(index).is_empty() || self.get(index).eq(sight));
+            assert!(self.at(index).is_empty() || self.at(index).eq(sight));
             self.set(index, sight);
             occupied = blockers.next_subset(occupied);
             if occupied.is_empty() {
@@ -240,11 +248,9 @@ struct SliderBlockers([Bitboard; 64]);
 impl SliderBlockers {
     const fn new(directions: &[Direction]) -> Self {
         let mut blockers = [Bitboard::EMPTY; 64];
-        let mut index = 0;
-        while index < 64 {
-            blockers[index] = Self::ray_blockers(Square::ALL[index], directions);
-            index += 1;
-        }
+        finite_for!(square in Square {
+            blockers[square as usize] = Self::ray_blockers(square, directions);
+        });
         Self(blockers)
     }
 
@@ -273,7 +279,6 @@ impl SliderBlockers {
 // Fixed shift white magics found by Volker Annuss.
 // From: http://www.talkchess.com/forum/viewtopic.php?p=727500&t=64790
 
-#[rustfmt::skip]
 const BISHOP_PROJECTOR: [Projector<9>; 64] = [
     Projector::new(0x007f_bfbf_bfbf_bfff, 5378),
     Projector::new(0x0000_a060_4010_07fc, 4093),
@@ -341,7 +346,6 @@ const BISHOP_PROJECTOR: [Projector<9>; 64] = [
     Projector::new(0x007f_ff9f_df7f_f813, 16076),
 ];
 
-#[rustfmt::skip]
 const ROOK_PROJECTOR: [Projector<12>; 64] = [
     Projector::new(0x0028_0077_ffeb_fffe, 26304),
     Projector::new(0x2004_0102_0109_7fff, 35520),

@@ -13,7 +13,7 @@ mod scharnagl;
 
 pub use bitboard::Bitboard;
 pub use piece::*;
-pub use scharnagl::{Scharnagl, scharnagl_by_id};
+pub use scharnagl::Scharnagl;
 
 pub use Player::*;
 pub use Role::*;

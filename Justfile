@@ -1,4 +1,5 @@
 package := "rust-chess"
+rustfmt := "rustfmt --edition 2024 --style-edition 2024"
 import "common.just"
 
 build: common-build
@@ -9,17 +10,13 @@ depcheck: common-depcheck
 
 fmt: common-fmt
     just --justfile common.just --fmt
-    rustfmt scripts/{polyglot,scharnagl,standard}-id.rs
-    rustfmt src/id/{polyglot,standard}.rs
-    rustfmt src/board/scharnagl-id.rs
+    {{ rustfmt }} scripts/{polyglot-basis,slider-sights,standard-basis}.rs
 
 install: common-install
 
 lint: common-lint
     just --justfile common.just --fmt --check
-    rustfmt --check scripts/{polyglot,scharnagl,standard}-id.rs
-    rustfmt --check src/id/{polyglot,standard}.rs
-    rustfmt --check src/board/scharnagl-id.rs
+    {{ rustfmt }} --check scripts/{polyglot-basis,slider-sights,standard-basis}.rs
 
 test: common-test
 
@@ -37,19 +34,13 @@ freestyle-positions:
     cargo run --example freestyle-positions 2>/dev/null > freestyle-positions.txt
 
 slider-sights:
-    rust-script scripts/slider-sights.rs
+    RUSTFLAGS="--cfg rust_chess_compile_time_slider_sights" rust-script scripts/slider-sights.rs
 
-standard-id:
-    rust-script scripts/standard-id.rs
-    rustfmt src/id/standard.rs
+standard-basis:
+    RUSTFLAGS="--cfg rust_chess_compile_time_standard_basis" rust-script scripts/standard-basis.rs
 
-polyglot-id:
-    rust-script scripts/polyglot-id.rs
-    rustfmt src/id/polyglot.rs
-
-scharnagl-id:
-    rust-script scripts/scharnagl-id.rs
-    rustfmt src/board/scharnagl-id.rs
+polyglot-basis:
+    RUSTFLAGS="--cfg rust_chess_compile_time_polyglot_basis" rust-script scripts/polyglot-basis.rs
 
 clean:
     rm -f *.cb{a,c,e,g,h,j,l,m,p,s,t,tt,ini} *.{flags,ini}
