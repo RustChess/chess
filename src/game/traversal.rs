@@ -9,31 +9,31 @@ pub struct Order<'g> {
     pub id: PositionId,
 }
 
-/// Iterator over the plays from a position.
+/// Iterator over the moves from a position.
 #[derive(Clone)]
-pub struct Plays<'g> {
+pub struct Moves<'g> {
     game: &'g Game,
-    ids: slice::Iter<'g, PlayId>,
+    ids: slice::Iter<'g, MoveId>,
 }
 
 /// Lending iterator over the options from a position in index order.
 ///
 /// Options removed before being reached are skipped.
-pub struct PlaysMut<'g> {
+pub struct MovesMut<'g> {
     game: &'g mut Game,
     position: PositionId,
     index: usize,
-    visited: Set<PlayId>,
+    visited: Set<MoveId>,
     protected: Protected,
 }
 
 impl Game {
-    pub fn play(&self, id: PlayId) -> Option<PlayRef<'_>> {
-        self.tree.contains(id.into()).then_some(PlayRef { game: self, id })
+    pub fn play(&self, id: MoveId) -> Option<MoveRef<'_>> {
+        self.tree.contains(id.into()).then_some(MoveRef { game: self, id })
     }
 
-    pub fn play_mut(&mut self, id: PlayId) -> Option<PlayMut<'_>> {
-        self.tree.contains(id.into()).then_some(PlayMut::new(self, id))
+    pub fn play_mut(&mut self, id: MoveId) -> Option<MoveMut<'_>> {
+        self.tree.contains(id.into()).then_some(MoveMut::new(self, id))
     }
 
     pub fn position(&self, id: PositionId) -> Option<PositionRef<'_>> {
@@ -103,21 +103,21 @@ impl<'g> PositionRef<'g> {
         Cursor { game: self.game, id: self.id, preserve: Set::new() }
     }
 
-    pub const fn play(&self) -> Option<PlayRef<'g>> {
+    pub const fn play(&self) -> Option<MoveRef<'g>> {
         match self.id {
-            PositionId::Play(id) => Some(PlayRef { game: self.game, id }),
+            PositionId::Move(id) => Some(MoveRef { game: self.game, id }),
             PositionId::Start => None,
         }
     }
 
-    pub fn main(&self) -> Option<PlayRef<'g>> {
+    pub fn main(&self) -> Option<MoveRef<'g>> {
         self.option(0)
     }
 
-    pub fn option(&self, option: impl Locate) -> Option<PlayRef<'g>> {
+    pub fn option(&self, option: impl Locate) -> Option<MoveRef<'g>> {
         let index = self.index(option)?;
         let id = self.position().options.get(index).copied()?;
-        Some(PlayRef { game: self.game, id })
+        Some(MoveRef { game: self.game, id })
     }
 
     pub fn has_options(&self) -> bool {
@@ -128,13 +128,13 @@ impl<'g> PositionRef<'g> {
         self.position().options.len() >= 2
     }
 
-    pub fn alternatives(&self) -> Plays<'g> {
+    pub fn alternatives(&self) -> Moves<'g> {
         let ids = self.position().options.get(1..).unwrap_or_default().iter();
-        Plays { game: self.game, ids }
+        Moves { game: self.game, ids }
     }
 
-    pub fn iter(&self) -> Plays<'g> {
-        Plays { game: self.game, ids: self.position().options.iter() }
+    pub fn iter(&self) -> Moves<'g> {
+        Moves { game: self.game, ids: self.position().options.iter() }
     }
 }
 
@@ -225,51 +225,51 @@ impl<'g> PositionMut<'g> {
         Cursor { game: self.game, id: self.id, preserve: self.protected.unremovable }
     }
 
-    pub const fn play(&self) -> Option<PlayRef<'_>> {
+    pub const fn play(&self) -> Option<MoveRef<'_>> {
         match self.id {
-            PositionId::Play(id) => Some(PlayRef { game: self.game, id }),
+            PositionId::Move(id) => Some(MoveRef { game: self.game, id }),
             PositionId::Start => None,
         }
     }
 
-    pub fn play_mut(&mut self) -> Option<PlayMut<'_>> {
+    pub fn play_mut(&mut self) -> Option<MoveMut<'_>> {
         match self.id {
-            PositionId::Play(id) => {
-                Some(PlayMut { game: self.game, id, protected: self.protected.clone() })
+            PositionId::Move(id) => {
+                Some(MoveMut { game: self.game, id, protected: self.protected.clone() })
             }
             PositionId::Start => None,
         }
     }
 
-    pub fn into_play(self) -> Option<PlayMut<'g>> {
+    pub fn into_play(self) -> Option<MoveMut<'g>> {
         match self.id {
-            PositionId::Play(id) => {
-                Some(PlayMut { game: self.game, id, protected: self.protected })
+            PositionId::Move(id) => {
+                Some(MoveMut { game: self.game, id, protected: self.protected })
             }
             PositionId::Start => None,
         }
     }
 
-    pub fn main_mut(&mut self) -> Option<PlayMut<'_>> {
+    pub fn main_mut(&mut self) -> Option<MoveMut<'_>> {
         self.option_mut(0)
     }
 
-    pub fn into_main(self) -> Option<PlayMut<'g>> {
+    pub fn into_main(self) -> Option<MoveMut<'g>> {
         self.into_option(0)
     }
 
-    pub fn option_mut(&mut self, option: impl Locate) -> Option<PlayMut<'_>> {
+    pub fn option_mut(&mut self, option: impl Locate) -> Option<MoveMut<'_>> {
         let id = self.as_ref().option(option)?.id();
-        Some(PlayMut { game: self.game, id, protected: self.protected.clone() })
+        Some(MoveMut { game: self.game, id, protected: self.protected.clone() })
     }
 
-    pub fn into_option(self, option: impl Locate) -> Option<PlayMut<'g>> {
+    pub fn into_option(self, option: impl Locate) -> Option<MoveMut<'g>> {
         let id = self.as_ref().option(option)?.id();
-        Some(PlayMut { game: self.game, id, protected: self.protected })
+        Some(MoveMut { game: self.game, id, protected: self.protected })
     }
 
-    pub fn alternatives_mut(&mut self) -> PlaysMut<'_> {
-        PlaysMut {
+    pub fn alternatives_mut(&mut self) -> MovesMut<'_> {
+        MovesMut {
             game: self.game,
             position: self.id,
             index: 1,
@@ -278,8 +278,8 @@ impl<'g> PositionMut<'g> {
         }
     }
 
-    pub fn into_alternatives(self) -> PlaysMut<'g> {
-        PlaysMut {
+    pub fn into_alternatives(self) -> MovesMut<'g> {
+        MovesMut {
             game: self.game,
             position: self.id,
             index: 1,
@@ -288,8 +288,8 @@ impl<'g> PositionMut<'g> {
         }
     }
 
-    pub fn iter_mut(&mut self) -> PlaysMut<'_> {
-        PlaysMut {
+    pub fn iter_mut(&mut self) -> MovesMut<'_> {
+        MovesMut {
             game: self.game,
             position: self.id,
             index: 0,
@@ -298,8 +298,8 @@ impl<'g> PositionMut<'g> {
         }
     }
 
-    pub fn into_iter_mut(self) -> PlaysMut<'g> {
-        PlaysMut {
+    pub fn into_iter_mut(self) -> MovesMut<'g> {
+        MovesMut {
             game: self.game,
             position: self.id,
             index: 0,
@@ -318,8 +318,8 @@ impl Deref for PositionMut<'_> {
 }
 
 /// Access API.
-impl<'g> PlayRef<'g> {
-    pub const fn id(&self) -> PlayId {
+impl<'g> MoveRef<'g> {
+    pub const fn id(&self) -> MoveId {
         self.id
     }
 
@@ -339,37 +339,37 @@ impl<'g> PlayRef<'g> {
         self.game.tree.position(self.id.into()).expanded()
     }
 
-    pub(in crate::game) fn play(&self) -> &Play {
+    pub(in crate::game) fn play(&self) -> &Move {
         self.game.tree.play(self.id)
     }
 }
 
 /// Traversal API.
-impl<'g> PlayRef<'g> {
+impl<'g> MoveRef<'g> {
     pub fn previous(&self) -> PositionRef<'g> {
         PositionRef { game: self.game, id: self.play().previous }
     }
 
     pub const fn position(&self) -> PositionRef<'g> {
-        PositionRef { game: self.game, id: PositionId::Play(self.id) }
+        PositionRef { game: self.game, id: PositionId::Move(self.id) }
     }
 }
 
-impl Deref for PlayRef<'_> {
-    type Target = Play;
+impl Deref for MoveRef<'_> {
+    type Target = Move;
 
-    fn deref(&self) -> &Play {
+    fn deref(&self) -> &Move {
         self.play()
     }
 }
 
 /// Access API.
-impl<'g> PlayMut<'g> {
-    const fn new(game: &'g mut Game, id: PlayId) -> Self {
+impl<'g> MoveMut<'g> {
+    const fn new(game: &'g mut Game, id: MoveId) -> Self {
         Self { game, id, protected: Protected::new() }
     }
 
-    pub const fn id(&self) -> PlayId {
+    pub const fn id(&self) -> MoveId {
         self.id
     }
 
@@ -377,15 +377,15 @@ impl<'g> PlayMut<'g> {
         self.game
     }
 
-    pub const fn as_ref(&self) -> PlayRef<'_> {
-        PlayRef { game: self.game, id: self.id }
+    pub const fn as_ref(&self) -> MoveRef<'_> {
+        MoveRef { game: self.game, id: self.id }
     }
 
-    pub fn into_ref(self) -> PlayRef<'g> {
-        PlayRef { game: self.game, id: self.id }
+    pub fn into_ref(self) -> MoveRef<'g> {
+        MoveRef { game: self.game, id: self.id }
     }
 
-    pub fn public_mut(&mut self) -> &mut PlayPublic {
+    pub fn public_mut(&mut self) -> &mut MovePublic {
         &mut self.play_mut().public
     }
 
@@ -429,17 +429,17 @@ impl<'g> PlayMut<'g> {
         &mut self.position_public_mut().expanded
     }
 
-    pub(in crate::game) fn play(&self) -> &Play {
+    pub(in crate::game) fn play(&self) -> &Move {
         self.game.tree.play(self.id)
     }
 
-    pub(in crate::game) fn play_mut(&mut self) -> &mut Play {
+    pub(in crate::game) fn play_mut(&mut self) -> &mut Move {
         self.game.tree.play_mut(self.id)
     }
 }
 
 /// Traversal API.
-impl<'g> PlayMut<'g> {
+impl<'g> MoveMut<'g> {
     pub fn previous(&self) -> PositionRef<'_> {
         self.as_ref().previous()
     }
@@ -456,26 +456,26 @@ impl<'g> PlayMut<'g> {
     }
 
     pub const fn position(&self) -> PositionRef<'_> {
-        PositionRef { game: self.game, id: PositionId::Play(self.id) }
+        PositionRef { game: self.game, id: PositionId::Move(self.id) }
     }
 
     pub fn position_mut(&mut self) -> PositionMut<'_> {
         PositionMut {
             game: self.game,
-            id: PositionId::Play(self.id),
+            id: PositionId::Move(self.id),
             protected: self.protected.clone(),
         }
     }
 
     pub fn into_position(self) -> PositionMut<'g> {
-        PositionMut { game: self.game, id: PositionId::Play(self.id), protected: self.protected }
+        PositionMut { game: self.game, id: PositionId::Move(self.id), protected: self.protected }
     }
 }
 
-impl Deref for PlayMut<'_> {
-    type Target = Play;
+impl Deref for MoveMut<'_> {
+    type Target = Move;
 
-    fn deref(&self) -> &Play {
+    fn deref(&self) -> &Move {
         self.play()
     }
 }
@@ -510,7 +510,7 @@ impl Locate for usize {
     }
 }
 
-impl Locate for PlayId {
+impl Locate for MoveId {
     fn locate(self, position: PositionRef<'_>) -> Option<usize> {
         position.options().iter().position(|id| *id == self)
     }
@@ -523,20 +523,20 @@ impl Locate for chess::Move {
 }
 
 impl<'g> IntoIterator for PositionRef<'g> {
-    type Item = PlayRef<'g>;
-    type IntoIter = Plays<'g>;
+    type Item = MoveRef<'g>;
+    type IntoIter = Moves<'g>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
 }
 
-impl<'g> Iterator for Plays<'g> {
-    type Item = PlayRef<'g>;
+impl<'g> Iterator for Moves<'g> {
+    type Item = MoveRef<'g>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let id = self.ids.next().copied()?;
-        Some(PlayRef { game: self.game, id })
+        Some(MoveRef { game: self.game, id })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -544,25 +544,25 @@ impl<'g> Iterator for Plays<'g> {
     }
 }
 
-impl DoubleEndedIterator for Plays<'_> {
+impl DoubleEndedIterator for Moves<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let id = self.ids.next_back().copied()?;
-        Some(PlayRef { game: self.game, id })
+        Some(MoveRef { game: self.game, id })
     }
 }
 
-impl ExactSizeIterator for Plays<'_> {}
-impl FusedIterator for Plays<'_> {}
+impl ExactSizeIterator for Moves<'_> {}
+impl FusedIterator for Moves<'_> {}
 
-impl PlaysMut<'_> {
+impl MovesMut<'_> {
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<PlayMut<'_>> {
+    pub fn next(&mut self) -> Option<MoveMut<'_>> {
         loop {
             let id = self.game.tree.position(self.position).options.get(self.index).copied()?;
             self.index += 1;
 
             if self.visited.insert(id) && self.game.tree.contains(id.into()) {
-                return Some(PlayMut { game: self.game, id, protected: self.protected.clone() });
+                return Some(MoveMut { game: self.game, id, protected: self.protected.clone() });
             }
         }
     }

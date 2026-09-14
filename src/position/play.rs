@@ -167,17 +167,17 @@ impl Move {
     }
 
     pub fn pawn(player: Player, from: Square, to: Square, capture: Option<Role>) -> Vec<Move> {
-        let mut moves = Vec::new();
+        let mut plays = Vec::new();
 
         if to.rank() as u8 == player.promotion_rank() as u8 {
             for role in [Queen, Rook, Bishop, Knight] {
-                moves.push(Move::promote_capture(from, to, role, capture));
+                plays.push(Move::promote_capture(from, to, role, capture));
             }
         } else {
-            moves.push(Move::capture(Pawn, from, to, capture));
+            plays.push(Move::capture(Pawn, from, to, capture));
         }
 
-        moves
+        plays
     }
 }
 
@@ -402,7 +402,7 @@ pub mod algebraic {
 }
 
 #[test]
-fn display_move() {
+fn display_play() {
     use Square::*;
 
     let mut play = Move::promote(A2, H7, Queen);

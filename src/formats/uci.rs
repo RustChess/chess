@@ -57,14 +57,14 @@ impl Move {
 }
 
 impl<'g> game::PositionMut<'g> {
-    pub fn push_uci(&mut self, uci: Move) -> Result<game::PlayMut<'_>, game::Error> {
+    pub fn push_uci(&mut self, uci: Move) -> Result<game::MoveMut<'_>, game::Error> {
         let Some(play) = uci.resolve(self.game().mode(), self.legal()) else {
             return Err(game::Error::Illegal);
         };
         self.push(play)
     }
 
-    pub fn into_push_uci(self, uci: Move) -> Result<game::PlayMut<'g>, game::Error> {
+    pub fn into_push_uci(self, uci: Move) -> Result<game::MoveMut<'g>, game::Error> {
         let Some(play) = uci.resolve(self.game().mode(), self.legal()) else {
             return Err(game::Error::Illegal);
         };
@@ -73,7 +73,7 @@ impl<'g> game::PositionMut<'g> {
 }
 
 impl<G: BorrowMut<crate::Game>> game::Cursor<G> {
-    pub fn push_uci(&mut self, uci: Move) -> Result<game::PlayRef<'_>, game::Error> {
+    pub fn push_uci(&mut self, uci: Move) -> Result<game::MoveRef<'_>, game::Error> {
         let Some(play) = uci.resolve(self.game().mode(), self.position().legal()) else {
             return Err(game::Error::Illegal);
         };
@@ -83,11 +83,11 @@ impl<G: BorrowMut<crate::Game>> game::Cursor<G> {
 }
 
 impl game::PositionRef<'_> {
-    pub fn resolve_uci(self, moves: &[Move]) -> Vec<crate::Move> {
+    pub fn resolve_uci(self, plays: &[Move]) -> Vec<crate::Move> {
         let mut cursor = game::Cursor::new(self.new_game());
-        let mut resolved = Vec::with_capacity(moves.len());
+        let mut resolved = Vec::with_capacity(plays.len());
 
-        for uci in moves {
+        for uci in plays {
             let Ok(play) = cursor.push_uci(*uci) else {
                 break;
             };
@@ -97,11 +97,11 @@ impl game::PositionRef<'_> {
         resolved
     }
 
-    pub fn resolve_uci_san(self, moves: &[Move]) -> Vec<San> {
+    pub fn resolve_uci_san(self, plays: &[Move]) -> Vec<San> {
         let mut cursor = game::Cursor::new(self.new_game());
-        let mut resolved = Vec::with_capacity(moves.len());
+        let mut resolved = Vec::with_capacity(plays.len());
 
-        for uci in moves {
+        for uci in plays {
             let Ok(play) = cursor.push_uci(*uci) else {
                 break;
             };
@@ -128,7 +128,7 @@ impl FromStr for Move {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut input = s.trim();
-        let play = uci_move(&mut input).map_err(|_| Error::InvalidMove)?;
+        let play = play(&mut input).map_err(|_| Error::InvalidMove)?;
         input.is_empty().then_some(play).ok_or(Error::InvalidMove)
     }
 }
@@ -174,19 +174,19 @@ pub enum Bound {
 }
 
 /// Parse a UCI move and resolve it against legal moves.
-pub fn parse_move(text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
-    parse_move_as(Mode::Chess, text, legal)
+pub fn parse_play(text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
+    parse_play_as(Mode::Chess, text, legal)
 }
 
-pub fn parse_move_as(mode: Mode, text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
+pub fn parse_play_as(mode: Mode, text: &str, legal: &[crate::Move]) -> Option<crate::Move> {
     let mut input = text.trim();
-    let play = uci_move(&mut input).ok()?;
+    let play = play(&mut input).ok()?;
     input.is_empty().then_some(())?;
 
     play.resolve(mode, legal)
 }
 
-pub fn uci_move(input: &mut Input<'_>) -> ModalResult<Move> {
+pub fn play(input: &mut Input<'_>) -> ModalResult<Move> {
     (square, square, opt(promotion))
         .map(|(from, to, promotion)| Move { from, to, promotion })
         .parse_next(input)
@@ -281,7 +281,7 @@ fn signed(input: &mut Input<'_>) -> ModalResult<i32> {
 }
 
 fn pv(input: &mut Input<'_>) -> ModalResult<Pv> {
-    separated(1.., uci_move, space1).map(|moves| Pv { moves }).parse_next(input)
+    separated(1.., play, space1).map(|moves| Pv { moves }).parse_next(input)
 }
 
 fn square(input: &mut Input<'_>) -> ModalResult<Square> {
@@ -307,31 +307,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_normal_move() {
-        let legal = Position::start().legal_moves();
+    fn parse_normal_play() {
+        let legal = Position::start().legal_plays();
 
-        assert_eq!(parse_move("e2e4", &legal).unwrap().to, E4);
-        assert!(parse_move("e2e5", &legal).is_none());
+        assert_eq!(parse_play("e2e4", &legal).unwrap().to, E4);
+        assert!(parse_play("e2e5", &legal).is_none());
     }
 
     #[test]
-    fn parse_promotion_move() {
+    fn parse_promotion_play() {
         let position = Position::from_fen("8/P7/8/8/8/8/8/k6K w - - 0 1").unwrap();
-        let legal = position.legal_moves();
+        let legal = position.legal_plays();
 
-        assert_eq!(parse_move("a7a8q", &legal).unwrap().promotes(), Some(Queen));
-        assert_eq!(parse_move("a7a8Q", &legal).unwrap().promotes(), Some(Queen));
-        assert!(parse_move("a7a8", &legal).is_none());
+        assert_eq!(parse_play("a7a8q", &legal).unwrap().promotes(), Some(Queen));
+        assert_eq!(parse_play("a7a8Q", &legal).unwrap().promotes(), Some(Queen));
+        assert!(parse_play("a7a8", &legal).is_none());
     }
 
     #[test]
-    fn resolve_special_moves_from_legal_moves() {
+    fn resolve_special_plays_from_legal_plays() {
         let castle = Position::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
-        assert!(parse_move("e1g1", &castle.legal_moves()).is_some_and(crate::Move::is_castle));
+        assert!(parse_play("e1g1", &castle.legal_plays()).is_some_and(crate::Move::is_castle));
 
         let en_passant = Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
         assert!(
-            parse_move("e5d6", &en_passant.legal_moves()).is_some_and(crate::Move::is_en_passant)
+            parse_play("e5d6", &en_passant.legal_plays()).is_some_and(crate::Move::is_en_passant)
         );
     }
 

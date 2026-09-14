@@ -10,7 +10,7 @@ pub(crate) fn perft(position: Position, depth: u32) -> u64 {
     }
 
     position
-        .legal_moves()
+        .legal_plays()
         .into_iter()
         .map(|play| perft(position.apply_unchecked(play), depth - 1))
         .sum()
@@ -39,7 +39,7 @@ fn assert_position_perft(name: &str, position: Position, expected: &[(u32, u64)]
 // This corresponds to a divide reporting mode in e.g. Stockfish,
 // allowing to see the number of moves split count after first move
 fn divide(position: Position, depth: u32) {
-    for play in position.legal_moves() {
+    for play in position.legal_plays() {
         println!("{}: {}", play.uci_chess(), perft(position.apply_unchecked(play), depth - 1));
     }
 }

@@ -169,13 +169,13 @@ impl crate::Move {
     }
 }
 
-impl game::PlayRef<'_> {
+impl game::MoveRef<'_> {
     pub fn san(&self) -> San {
         self.play().san(self.short(), self.position().check())
     }
 }
 
-impl game::PlayMut<'_> {
+impl game::MoveMut<'_> {
     pub fn san(&self) -> San {
         self.as_ref().san()
     }
@@ -357,7 +357,7 @@ mod tests {
     };
 
     #[test]
-    fn parse_pawn_move() {
+    fn parse_pawn_play() {
         let parsed = san.parse("e4").unwrap();
         assert_eq!(
             parsed.play,
@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_b_file_pawn_move() {
+    fn parse_b_file_pawn_play() {
         let parsed = san.parse("b6").unwrap();
         assert_eq!(
             parsed.play,
@@ -401,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_piece_move() {
+    fn parse_piece_play() {
         let parsed = san.parse("Nbd2+").unwrap();
         assert_eq!(
             parsed.play,

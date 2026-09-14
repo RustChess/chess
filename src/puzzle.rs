@@ -25,7 +25,7 @@ impl Puzzle {
     pub fn from_csv(line: &str) -> Option<Self> {
         let (mistake, fen) = line.split_once(',')?;
         let position = Position::from_fen(fen).ok()?;
-        let mistake = mistake.parse::<uci::Move>().ok()?.resolve_chess(&position.legal_moves())?;
+        let mistake = mistake.parse::<uci::Move>().ok()?.resolve_chess(&position.legal_plays())?;
         Some(Self { mistake: Some(mistake), position })
     }
 }
@@ -50,7 +50,7 @@ pub struct MateIn2 {
 }
 
 fn is_checkmate(position: Position) -> bool {
-    position.is_check() && position.legal_moves().is_empty()
+    position.is_check() && position.legal_plays().is_empty()
 }
 
 fn san(position: Position, play: Move) -> game::Result<San> {
@@ -90,13 +90,13 @@ impl MateIn2 {
     pub fn new(puzzle: Puzzle) -> Option<Self> {
         let position = puzzle.start();
         // position.is_mate_in_2().then(Self { position })
-        // let legal = position.legal_moves();
+        // let legal = position.legal_plays();
         let mut mate_in_1: Map<Move, Position> = Default::default();
         let mut solutions = Solutions::default().0;
         // first move of our solution
-        'play1: for play1 in position.legal_moves() {
+        'play1: for play1 in position.legal_plays() {
             let defend = position.apply_unchecked(play1);
-            let defenses = defend.legal_moves();
+            let defenses = defend.legal_plays();
 
             // already checkmate? problem was a mate-in-1
             // stalemate => bad move, suppress
@@ -111,7 +111,7 @@ impl MateIn2 {
             for defense in defenses {
                 let attack = defend.apply_unchecked(defense);
                 let mut mates = Map::new();
-                for play2 in attack.legal_moves() {
+                for play2 in attack.legal_plays() {
                     let outcome = attack.apply_unchecked(play2);
                     if is_checkmate(outcome) {
                         mates.entry(play2).insert_entry(outcome);

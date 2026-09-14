@@ -8,60 +8,60 @@ type Moves = Vec<Move>;
 
 /// Position Move API.
 impl Position {
-    pub fn legal_moves(&self) -> Moves {
+    pub fn legal_plays(&self) -> Moves {
         if self.is_check() {
-            return self.evasion_moves();
+            return self.evasion_plays();
         }
 
         let shields = self.board().king_shields(self.turn());
 
-        let mut moves = self.pseudo_piece_moves();
-        moves.retain(|m| self.piece_move_is_safe(*m, shields));
-        moves.extend(self.legal_king_moves());
-        moves.extend(self.legal_en_passant_moves());
-        moves.extend(self.legal_castle_moves());
-        moves
+        let mut plays = self.pseudo_piece_plays();
+        plays.retain(|play| self.piece_play_is_safe(*play, shields));
+        plays.extend(self.legal_king_plays());
+        plays.extend(self.legal_en_passant_plays());
+        plays.extend(self.legal_castle_plays());
+        plays
     }
 
-    pub fn legal_castle_moves(&self) -> Moves {
-        let mut moves = Moves::new();
+    pub fn legal_castle_plays(&self) -> Moves {
+        let mut plays = Moves::new();
 
         for side in Side::ALL {
             if let Some(play) = self.can_castle(side) {
-                moves.push(play);
+                plays.push(play);
             }
         }
 
-        moves
+        plays
     }
-    fn evasion_moves(&self) -> Moves {
+    fn evasion_plays(&self) -> Moves {
         let checkers = self.checkers();
         let Some(king) = self.board().king_of(self.turn()) else {
             return Moves::new();
         };
 
-        let mut moves = self.legal_king_evasion_moves(king, checkers);
+        let mut plays = self.legal_king_evasion_plays(king, checkers);
         if checkers.more_than_one() {
-            return moves;
+            return plays;
         }
 
         let Some(checker) = checkers.first() else {
-            return moves;
+            return plays;
         };
 
         let shields = self.board().king_shields(self.turn());
         let target = king.between(checker).with(checker);
-        let mut piece_moves = self.pseudo_piece_moves_to(target);
-        piece_moves.retain(|m| self.piece_move_is_safe(*m, shields));
-        moves.extend(piece_moves);
-        moves.extend(self.legal_en_passant_moves());
+        let mut piece_plays = self.pseudo_piece_plays_to(target);
+        piece_plays.retain(|play| self.piece_play_is_safe(*play, shields));
+        plays.extend(piece_plays);
+        plays.extend(self.legal_en_passant_plays());
 
-        moves
+        plays
     }
 
-    pub fn pseudo_piece_moves(&self) -> Moves {
+    pub fn pseudo_piece_plays(&self) -> Moves {
         let target = !self.board().player(self.turn());
-        self.pseudo_piece_moves_to(target)
+        self.pseudo_piece_plays_to(target)
     }
 
     /// Ordinary non-king, non-en-passant, non-castle pseudo moves landing in
@@ -69,48 +69,48 @@ impl Position {
     ///
     /// In non-check positions `target` is every square not occupied by us. In
     /// single-check evasions it is the checker square plus blocking squares.
-    fn pseudo_piece_moves_to(&self, target: Bitboard) -> Moves {
-        let mut moves = Moves::new();
+    fn pseudo_piece_plays_to(&self, target: Bitboard) -> Moves {
+        let mut plays = Moves::new();
 
-        self.pseudo_pawn_moves(target, &mut moves);
+        self.pseudo_pawn_plays(target, &mut plays);
         for role in [Knight, Bishop, Rook, Queen] {
-            self.pseudo_role_moves(role, target, &mut moves);
+            self.pseudo_role_plays(role, target, &mut plays);
         }
 
-        moves
+        plays
     }
 
-    fn legal_king_evasion_moves(&self, king: Square, checkers: Bitboard) -> Moves {
+    fn legal_king_evasion_plays(&self, king: Square, checkers: Bitboard) -> Moves {
         let sliders = checkers.intersection(self.board().sliders());
         let mut attacked = Bitboard::EMPTY;
         let mut sliders = sliders;
         while let Some(checker) = sliders.pop_first() {
-            // `king_move_is_safe` checks attacks to the destination, but a
+            // `king_play_is_safe` checks attacks to the destination, but a
             // slider checking the king still controls the ray through the old
             // king square after the king moves away.
             attacked.append(checker.full_ray(king).difference(Bitboard::from_square(checker)));
         }
 
-        let mut moves = Moves::new();
+        let mut plays = Moves::new();
         let target = self.board().player(self.turn()).union(attacked);
 
-        self.pseudo_role_moves(King, !target, &mut moves);
-        moves.retain(|m| self.king_move_is_safe(*m));
+        self.pseudo_role_plays(King, !target, &mut plays);
+        plays.retain(|play| self.king_play_is_safe(*play));
 
-        moves
+        plays
     }
 
-    pub fn legal_king_moves(&self) -> Moves {
-        let mut moves = Moves::new();
+    pub fn legal_king_plays(&self) -> Moves {
+        let mut plays = Moves::new();
         let target = !self.board().player(self.turn());
 
-        self.pseudo_role_moves(King, target, &mut moves);
-        moves.retain(|m| self.king_move_is_safe(*m));
+        self.pseudo_role_plays(King, target, &mut plays);
+        plays.retain(|play| self.king_play_is_safe(*play));
 
-        moves
+        plays
     }
 
-    fn king_move_is_safe(&self, play: Move) -> bool {
+    fn king_play_is_safe(&self, play: Move) -> bool {
         let occupied = self.board().occupied().difference(Bitboard::from_square(play.from));
         self.board().attacks_on(play.to, self.turn().other(), occupied).is_empty()
     }
@@ -119,7 +119,7 @@ impl Position {
         self.board().attacks_on(square, self.turn().other(), self.board().occupied()).is_empty()
     }
 
-    fn pseudo_role_moves(&self, role: Role, target: Bitboard, moves: &mut Moves) {
+    fn pseudo_role_plays(&self, role: Role, target: Bitboard, plays: &mut Moves) {
         let occupied = self.board().occupied();
         let mut pieces = self.board().role(role).intersection(self.board().player(self.turn()));
 
@@ -127,12 +127,12 @@ impl Position {
             let piece = role.of(self.turn());
             let mut targets = from.attacks(piece, occupied).intersection(target);
             while let Some(to) = targets.pop_first() {
-                moves.push(Move::capture(role, from, to, self.board().role_at(to)));
+                plays.push(Move::capture(role, from, to, self.board().role_at(to)));
             }
         }
     }
 
-    fn pseudo_pawn_moves(&self, target: Bitboard, moves: &mut Moves) {
+    fn pseudo_pawn_plays(&self, target: Bitboard, plays: &mut Moves) {
         let occupied = self.board().occupied();
         let them = self.board().player(self.turn().other());
         let pawns = self.board().pawns().intersection(self.board().player(self.turn()));
@@ -150,30 +150,30 @@ impl Position {
         let mut targets = single.intersection(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add(push.reverse()).expect("valid pawn source");
-            moves.extend(Move::pawn(self.turn(), from, to, None));
+            plays.extend(Move::pawn(self.turn(), from, to, None));
         }
 
         let mut targets = double.intersection(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add(double_push.reverse()).expect("valid pawn source");
-            moves.push(Move::normal(Pawn, from, to));
+            plays.push(Move::normal(Pawn, from, to));
         }
 
         let mut targets = captures_left.intersection(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add(left.reverse()).expect("valid pawn source");
-            moves.extend(Move::pawn(self.turn(), from, to, self.board().role_at(to)));
+            plays.extend(Move::pawn(self.turn(), from, to, self.board().role_at(to)));
         }
 
         let mut targets = captures_right.intersection(target);
         while let Some(to) = targets.pop_first() {
             let from = to.checked_add(right.reverse()).expect("valid pawn source");
-            moves.extend(Move::pawn(self.turn(), from, to, self.board().role_at(to)));
+            plays.extend(Move::pawn(self.turn(), from, to, self.board().role_at(to)));
         }
     }
 
-    fn legal_en_passant_moves(&self) -> Moves {
-        let mut moves = Moves::new();
+    fn legal_en_passant_plays(&self) -> Moves {
+        let mut plays = Moves::new();
 
         if let Some(to) = self.en_passant() {
             let to = to.square();
@@ -182,20 +182,20 @@ impl Position {
                 .board()
                 .pawns()
                 .intersection(self.board().player(self.turn()))
-                .intersection(to.pawn_attack_moves(self.turn().other()));
+                .intersection(to.pawn_attack_plays(self.turn().other()));
 
             while let Some(from) = pawns.pop_first() {
-                let m = Move::en_passant(from, to);
-                if self.en_passant_move_is_safe(m) {
-                    moves.push(m);
+                let play = Move::en_passant(from, to);
+                if self.en_passant_play_is_safe(play) {
+                    plays.push(play);
                 }
             }
         }
 
-        moves
+        plays
     }
 
-    fn piece_move_is_safe(&self, play: Move, shields: Bitboard) -> bool {
+    fn piece_play_is_safe(&self, play: Move, shields: Bitboard) -> bool {
         // In a legal, not-in-check position, an ordinary piece move can only
         // expose our king by moving a shielding piece off a slider ray.
         if !shields.contains(play.from) {
@@ -214,7 +214,7 @@ impl Position {
         }
     }
 
-    fn en_passant_move_is_safe(&self, play: Move) -> bool {
+    fn en_passant_play_is_safe(&self, play: Move) -> bool {
         let Some(king) = self.board().king_of(self.turn()) else {
             return false;
         };
@@ -280,19 +280,19 @@ mod tests {
     }
 
     #[test]
-    fn generate_freestyle_castle_moves() {
-        let moves = freestyle_position().legal_castle_moves();
+    fn generate_freestyle_castle_plays() {
+        let plays = freestyle_position().legal_castle_plays();
 
-        assert!(moves.contains(&Move::castle(White, C1, A)));
-        assert!(moves.contains(&Move::castle(White, C1, H)));
+        assert!(plays.contains(&Move::castle(White, C1, A)));
+        assert!(plays.contains(&Move::castle(White, C1, H)));
     }
 
     #[test]
-    fn block_freestyle_castle_move() {
+    fn block_freestyle_castle_play() {
         let mut parts = freestyle_position().parts();
         parts.board.insert(E1, White.knight());
         let position = parts.validate().unwrap();
 
-        assert!(!position.legal_castle_moves().contains(&Move::castle(White, C1, H)));
+        assert!(!position.legal_castle_plays().contains(&Move::castle(White, C1, H)));
     }
 }

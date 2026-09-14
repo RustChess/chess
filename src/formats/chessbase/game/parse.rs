@@ -444,13 +444,13 @@ mod tests {
     }
 
     fn mainline(game: &crate::Game) -> Vec<crate::Move> {
-        let mut moves = Vec::new();
+        let mut plays = Vec::new();
         let mut position = game.start();
         while let Some(play) = position.main() {
-            moves.push(play.play());
+            plays.push(play.play());
             position = play.position();
         }
-        moves
+        plays
     }
 
     #[test]
@@ -534,10 +534,10 @@ mod tests {
 
     #[test]
     fn variations() {
-        let moves = encode(&[0xfe, 0x80, 0x80, 0xff, 0x7c, 0x7c, 0xff]);
-        let len = u32::try_from(moves.len() + 4).unwrap();
+        let bytes = encode(&[0xfe, 0x80, 0x80, 0xff, 0x7c, 0x7c, 0xff]);
+        let len = u32::try_from(bytes.len() + 4).unwrap();
         let mut input = vec![0, (len >> 16) as u8, (len >> 8) as u8, len as u8];
-        input.extend(moves);
+        input.extend(bytes);
         let encoded = game_with_info.parse(input.as_slice()).unwrap().1;
         let actual = crate::Game::from_chessbase(encoded).unwrap();
         let expected =
@@ -614,13 +614,13 @@ mod tests {
     solely from the initial setup.
 
     fn score_row_seeds(encoded: Game<'_>, lookup: &Lookup, expected: &crate::Game) {
-        let moves = mainline(expected);
+        let plays = mainline(expected);
         let score = |seed| {
             let mut lookup = lookup.clone();
             let mut bases = BTreeMap::new();
             let mut changes = 0;
 
-            for (ply, (raw, play)) in encoded.tokens.iter().zip(&moves).enumerate() {
+            for (ply, (raw, play)) in encoded.tokens.iter().zip(&plays).enumerate() {
                 let player = lookup.position.turn();
                 let number = lookup.pieces[player][play.role]
                     .iter()
@@ -662,12 +662,12 @@ mod tests {
         expected: &crate::Game,
         game: usize,
     ) -> usize {
-        let moves = mainline(expected);
-        assert_eq!(encoded.tokens.len(), moves.len() + 1, "encoded length of game {game}");
+        let plays = mainline(expected);
+        assert_eq!(encoded.tokens.len(), plays.len() + 1, "encoded length of game {game}");
         let mut conflicts = 0;
         let mut bases = BTreeMap::new();
 
-        for (ply, (raw, play)) in encoded.tokens.iter().zip(moves).enumerate() {
+        for (ply, (raw, play)) in encoded.tokens.iter().zip(plays).enumerate() {
             let player = lookup.position.turn();
             let number = lookup.pieces[player][play.role]
                 .iter()

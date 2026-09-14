@@ -20,8 +20,8 @@ use crate::{Board, Player, Role, Scharnagl, Square, board::Bitboard, square::Fil
 use Player::*;
 use Role::*;
 
-mod moves;
 mod play;
+mod plays;
 mod rights;
 mod validate;
 
@@ -228,16 +228,16 @@ impl Position {
 }
 
 impl Position {
-    pub fn capture_moves(&self) -> Vec<Move> {
-        self.legal_moves().into_iter().filter(|m| m.is_capture()).collect()
+    pub fn capture_plays(&self) -> Vec<Move> {
+        self.legal_plays().into_iter().filter(|play| play.is_capture()).collect()
     }
 
-    pub fn castle_side_moves(&self, side: Side) -> Vec<Move> {
-        self.legal_moves().into_iter().filter(|m| m.is_castle_side(side)).collect()
+    pub fn castle_side_plays(&self, side: Side) -> Vec<Move> {
+        self.legal_plays().into_iter().filter(|play| play.is_castle_side(side)).collect()
     }
 
-    pub fn castle_moves(&self) -> Vec<Move> {
-        self.legal_moves().into_iter().filter(|m| m.is_castle()).collect()
+    pub fn castle_plays(&self) -> Vec<Move> {
+        self.legal_plays().into_iter().filter(|play| play.is_castle()).collect()
     }
 }
 

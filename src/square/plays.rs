@@ -5,20 +5,20 @@ use super::{Direction, Square};
 use Player::*;
 use Role::*;
 
-/// Square Move API.
+/// Square Play API.
 impl Square {
     pub const fn attacks(self, piece: Piece, occupied: Bitboard) -> Bitboard {
         match piece.role {
-            Pawn => self.pawn_attack_moves(piece.player),
-            Knight => self.knight_moves(),
+            Pawn => self.pawn_attack_plays(piece.player),
+            Knight => self.knight_plays(),
             Bishop => self.bishop_sight(occupied),
             Rook => self.rook_sight(occupied),
             Queen => self.queen_sight(occupied),
-            King => self.king_moves(),
+            King => self.king_plays(),
         }
     }
 
-    pub const fn king_moves(self) -> Bitboard {
+    pub const fn king_plays(self) -> Bitboard {
         const KING_ATTACKS: [Direction; 8] = {
             use Direction::*;
             [North, NorthEast, East, SouthEast, South, SouthWest, West, NorthWest]
@@ -27,7 +27,7 @@ impl Square {
         self.checked_add_vector_const(&KING_ATTACKS)
     }
 
-    pub const fn knight_moves(self) -> Bitboard {
+    pub const fn knight_plays(self) -> Bitboard {
         const KNIGHT_MOVES: [Direction; 8] = {
             use Direction::*;
             [
@@ -45,7 +45,7 @@ impl Square {
         self.checked_add_vector_const(&KNIGHT_MOVES)
     }
 
-    pub const fn pawn_attack_moves(self, player: Player) -> Bitboard {
+    pub const fn pawn_attack_plays(self, player: Player) -> Bitboard {
         const WHITE_PAWN_ATTACKS: [Direction; 2] = {
             use Direction::*;
             [NorthWest, NorthEast]

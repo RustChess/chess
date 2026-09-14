@@ -6,10 +6,10 @@ use File::*;
 use Rank::*;
 
 mod geometry;
-mod moves;
+mod plays;
 
 pub use geometry::Direction;
-pub use moves::SliderSights;
+pub use plays::SliderSights;
 
 crate::finite_set!(
     File,

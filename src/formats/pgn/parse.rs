@@ -17,12 +17,12 @@ pub struct Error {
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 pub fn pgn(input: &mut Input<'_>) -> ModalResult<Pgn> {
-    delimited(multispace0, (tags, comments, repeat(0.., parse_move), opt(outcome)), multispace0)
-        .map(|(tags, intro, moves, outcome)| Pgn {
+    delimited(multispace0, (tags, comments, repeat(0.., play), opt(outcome)), multispace0)
+        .map(|(tags, intro, plays, outcome)| Pgn {
             start: start_position(&tags),
             tags,
             intro,
-            moves,
+            moves: plays,
             outcome: outcome.unwrap_or(Outcome::Unknown),
         })
         .context(StrContext::Label("PGN game"))
@@ -91,7 +91,7 @@ pub fn tag(input: &mut Input<'_>) -> ModalResult<Tag> {
     .parse_next(input)
 }
 
-pub fn parse_move(input: &mut Input<'_>) -> ModalResult<Move> {
+pub fn play(input: &mut Input<'_>) -> ModalResult<Move> {
     preceded(
         (multispace0, opt(skip_move_number), multispace0),
         (san::san.context(StrContext::Label("PGN move")), tail, variations).map(
@@ -116,7 +116,7 @@ pub fn variation(input: &mut Input<'_>) -> ModalResult<Variation> {
         ('(', multispace0),
         seq! {Variation {
             intro: comments,
-            moves: repeat(0.., parse_move),
+            moves: repeat(0.., play),
             outro: ().value(None),
         }},
         (multispace0, ')'),

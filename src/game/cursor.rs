@@ -39,7 +39,7 @@ impl<G: Borrow<Game>> Cursor<G> {
         PositionRef { game: self.game(), id: self.id }
     }
 
-    pub fn play(&self) -> Option<PlayRef<'_>> {
+    pub fn play(&self) -> Option<MoveRef<'_>> {
         self.position().play()
     }
 
@@ -88,7 +88,7 @@ impl<G: BorrowMut<Game>> Cursor<G> {
         PositionMut { game: self.game.borrow_mut(), id, protected }
     }
 
-    pub fn play_mut(&mut self) -> Option<PlayMut<'_>> {
+    pub fn play_mut(&mut self) -> Option<MoveMut<'_>> {
         self.position_mut().into_play()
     }
 
@@ -118,7 +118,7 @@ impl<'g> CursorRef<'g> {
         PositionRef { game: self.game, id: self.id }
     }
 
-    pub fn into_play(self) -> Option<PlayRef<'g>> {
+    pub fn into_play(self) -> Option<MoveRef<'g>> {
         self.into_position().play()
     }
 }
@@ -132,7 +132,7 @@ impl<'g> CursorMut<'g> {
         PositionMut { game: self.game, id, protected: Protected { unremovable } }
     }
 
-    pub fn into_play_mut(self) -> Option<PlayMut<'g>> {
+    pub fn into_play_mut(self) -> Option<MoveMut<'g>> {
         self.into_position_mut().into_play()
     }
 }

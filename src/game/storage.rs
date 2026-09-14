@@ -1,6 +1,6 @@
 use crate::{
     formats::{Text, uci},
-    game::{self, PlayId, PositionId},
+    game::{self, MoveId, PositionId},
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -8,7 +8,7 @@ pub struct Archive {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub games: Vec<Game>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plays: Vec<Play>,
+    pub plays: Vec<Move>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -25,12 +25,12 @@ pub struct Game {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<game::Evaluation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<PlayId>,
+    pub options: Vec<MoveId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Play {
-    pub id: PlayId,
+pub struct Move {
+    pub id: MoveId,
     #[serde(default, skip_serializing_if = "PositionId::is_start")]
     pub previous: PositionId,
     #[serde(default, skip_serializing_if = "game::Meta::is_empty")]
@@ -39,7 +39,7 @@ pub struct Play {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<game::Evaluation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<PlayId>,
+    pub options: Vec<MoveId>,
 }
 
 impl game::Outcome {
@@ -52,7 +52,7 @@ impl game::Game {
     pub fn store(&self) -> Archive {
         Archive {
             games: vec![Game::from(self)],
-            plays: self.tree.plays().map(Play::from).collect(),
+            plays: self.tree.plays().map(Move::from).collect(),
         }
     }
 
@@ -75,8 +75,8 @@ impl From<&game::Game> for Game {
     }
 }
 
-impl From<&game::Play> for Play {
-    fn from(play: &game::Play) -> Self {
+impl From<&game::Move> for Move {
+    fn from(play: &game::Move) -> Self {
         Self {
             id: play.id(),
             previous: play.previous(),

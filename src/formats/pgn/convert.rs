@@ -35,11 +35,11 @@ impl From<crate::Game> for Pgn {
         let position = start.position();
         let evaluation = start.evaluation();
         let intro = start.comment().cloned().map(Comment);
-        let moves = pgn_moves(start);
+        let plays = pgn_plays(start);
         let outcome = game.outcome;
         let tags = pgn_tags(game, position, evaluation);
 
-        Self { start: position.parts(), tags, intro, moves, outcome }
+        Self { start: position.parts(), tags, intro, moves: plays, outcome }
     }
 }
 
@@ -77,32 +77,32 @@ fn game_from_position(pgn: Pgn, position: Position, mode: Mode) -> Result<crate:
     let mut start = game.start_mut();
     *start.comment_mut() = pgn.intro.map(Into::into);
     start.set_evaluation(game_start_evaluation(&pgn.tags));
-    game_moves(start, pgn.moves)?;
+    game_plays(start, pgn.moves)?;
 
     Ok(game)
 }
 
-fn game_moves<'g>(
+fn game_plays<'g>(
     mut position: game::PositionMut<'g>,
-    moves: impl IntoIterator<Item = Move>,
+    plays: impl IntoIterator<Item = Move>,
 ) -> Result<(), Resolve> {
-    for pgn_move in moves {
-        position = game_move(position, pgn_move)?.into_position();
+    for pgn_play in plays {
+        position = game_play(position, pgn_play)?.into_position();
     }
 
     Ok(())
 }
 
-fn game_move<'g>(
+fn game_play<'g>(
     position: game::PositionMut<'g>,
-    pgn_move: Move,
-) -> Result<game::PlayMut<'g>, Resolve> {
-    let play = pgn_move.san.resolve(position.legal())?;
+    pgn_play: Move,
+) -> Result<game::MoveMut<'g>, Resolve> {
+    let play = pgn_play.san.resolve(position.legal())?;
     let mut play = position.into_push(play)?;
-    *play.comment_mut() = pgn_move.comment.map(Into::into);
-    game_annotations(&mut play, pgn_move.annotations);
+    *play.comment_mut() = pgn_play.comment.map(Into::into);
+    game_annotations(&mut play, pgn_play.annotations);
 
-    for variation in pgn_move.variations {
+    for variation in pgn_play.variations {
         game_variation(play.previous_mut(), variation)?;
     }
 
@@ -110,16 +110,16 @@ fn game_move<'g>(
 }
 
 fn game_variation(position: game::PositionMut<'_>, variation: Variation) -> Result<(), Resolve> {
-    let Variation { intro, moves, outro } = variation;
-    let mut moves = moves.into_iter();
-    let Some(first) = moves.next() else {
+    let Variation { intro, moves: plays, outro } = variation;
+    let mut plays = plays.into_iter();
+    let Some(first) = plays.next() else {
         return Ok(());
     };
 
-    let mut play = game_move(position, first)?;
+    let mut play = game_play(position, first)?;
     *play.affixes_mut() =
         game::Affixes { intro: intro.map(Into::into), outro: outro.map(Into::into) };
-    game_moves(play.into_position(), moves)
+    game_plays(play.into_position(), plays)
 }
 
 //
@@ -171,7 +171,7 @@ fn game_start_evaluation(tags: &[Tag]) -> Option<game::Evaluation> {
 }
 
 fn game_annotations(
-    play: &mut game::PlayMut<'_>,
+    play: &mut game::MoveMut<'_>,
     annotations: impl IntoIterator<Item = Annotation>,
 ) {
     for annotation in annotations {
@@ -265,19 +265,19 @@ fn pgn_set_start(tags: &mut Vec<Tag>, position: position::Parts) {
     tags.push(Tag::Fen(position));
 }
 
-fn pgn_moves(mut position: game::PositionRef<'_>) -> Vec<Move> {
-    let mut moves = Vec::new();
+fn pgn_plays(mut position: game::PositionRef<'_>) -> Vec<Move> {
+    let mut plays = Vec::new();
 
     while let Some(play) = position.main() {
         let variations = position.alternatives().map(pgn_variation).collect();
-        moves.push(pgn_move(&play, variations));
+        plays.push(pgn_play(&play, variations));
         position = play.position();
     }
 
-    moves
+    plays
 }
 
-fn pgn_move(play: &game::PlayRef<'_>, variations: Vec<Variation>) -> Move {
+fn pgn_play(play: &game::MoveRef<'_>, variations: Vec<Variation>) -> Move {
     Move {
         san: play.san(),
         comment: play.comment().cloned().map(Comment),
@@ -286,23 +286,23 @@ fn pgn_move(play: &game::PlayRef<'_>, variations: Vec<Variation>) -> Move {
     }
 }
 
-fn pgn_variation(play: game::PlayRef<'_>) -> Variation {
+fn pgn_variation(play: game::MoveRef<'_>) -> Variation {
     let affixes = play.affixes();
 
     Variation {
         intro: affixes.intro.clone().map(Comment),
-        moves: pgn_moves_from(&play),
+        moves: pgn_plays_from(&play),
         outro: affixes.outro.clone().map(Comment),
     }
 }
 
-fn pgn_moves_from(play: &game::PlayRef<'_>) -> Vec<Move> {
-    let mut moves = vec![pgn_move(play, Vec::new())];
-    moves.extend(pgn_moves(play.position()));
-    moves
+fn pgn_plays_from(play: &game::MoveRef<'_>) -> Vec<Move> {
+    let mut plays = vec![pgn_play(play, Vec::new())];
+    plays.extend(pgn_plays(play.position()));
+    plays
 }
 
-fn pgn_annotations(play: &game::PlayRef<'_>) -> Vec<Annotation> {
+fn pgn_annotations(play: &game::MoveRef<'_>) -> Vec<Annotation> {
     let position = play.position();
     let evaluation = position.evaluation();
     let mut annotations: Vec<_> = play.nags().iter().cloned().map(Annotation::Nag).collect();

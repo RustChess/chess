@@ -21,7 +21,7 @@ impl Position {
         let kings = Players { black, white };
 
         // 2. Kings not adjacent
-        if white.king_moves().contains(black) {
+        if white.king_plays().contains(black) {
             return Err(Error::AdjacentKings);
         }
 

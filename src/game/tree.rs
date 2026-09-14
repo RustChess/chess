@@ -2,25 +2,25 @@ use std::collections::BTreeMap as Map;
 
 use super::*;
 
-/// Storage for the starting position and subsequent plays.
+/// Storage for the starting position and subsequent moves.
 #[derive(Clone, PartialEq)]
 pub struct Tree {
-    next: PlayId,
+    next: MoveId,
     // PositionId::is_start() iff Node::play.is_none()
     nodes: Map<PositionId, Node>,
 }
 
-/// A position and the optional play that reached it.
+/// A position and the optional move that reached it.
 #[derive(Clone, PartialEq)]
 pub struct Node {
     pub position: Position,
-    pub play: Option<Play>,
+    pub play: Option<Move>,
 }
 
 impl Tree {
     pub fn new(position: chess::Position) -> Self {
         let start = Node { position: Position::new(position), play: None };
-        Self { next: PlayId::default(), nodes: Map::from([(START, start)]) }
+        Self { next: MoveId::default(), nodes: Map::from([(START, start)]) }
     }
 
     pub fn contains(&self, id: PositionId) -> bool {
@@ -29,17 +29,17 @@ impl Tree {
 
     pub(in crate::game) fn less_equal(&self, ancestor: PositionId, mut child: PositionId) -> bool {
         while ancestor != child {
-            let PositionId::Play(id) = child else { return false };
+            let PositionId::Move(id) = child else { return false };
             child = self.play(id).previous;
         }
         true
     }
 
-    pub(in crate::game) fn play(&self, id: PlayId) -> &Play {
+    pub(in crate::game) fn play(&self, id: MoveId) -> &Move {
         self.node(id.into()).play()
     }
 
-    pub(in crate::game) fn play_mut(&mut self, id: PlayId) -> &mut Play {
+    pub(in crate::game) fn play_mut(&mut self, id: MoveId) -> &mut Move {
         self.node_mut(id.into()).play_mut()
     }
 
@@ -51,14 +51,14 @@ impl Tree {
         self.node_mut(id).position_mut()
     }
 
-    pub(in crate::game) fn insert(&mut self, node: Node) -> PlayId {
+    pub(in crate::game) fn insert(&mut self, node: Node) -> MoveId {
         let id = self.next;
         self.next.0 += 1;
         self.nodes.insert(id.into(), node);
         id
     }
 
-    pub(in crate::game) fn remove(&mut self, id: PlayId) -> bool {
+    pub(in crate::game) fn remove(&mut self, id: MoveId) -> bool {
         let Some(node) = self.nodes.remove(&id.into()) else { return false };
         for option in node.position.options {
             self.remove(option);
@@ -76,11 +76,11 @@ impl Tree {
 }
 
 impl Node {
-    const fn play(&self) -> &Play {
+    const fn play(&self) -> &Move {
         self.play.as_ref().expect("play exists")
     }
 
-    const fn play_mut(&mut self) -> &mut Play {
+    const fn play_mut(&mut self) -> &mut Move {
         self.play.as_mut().expect("play exists")
     }
 

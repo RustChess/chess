@@ -7,7 +7,7 @@ use crate::{
 
 use super::{Bitboard, Board};
 
-/// Board Move API.
+/// Board Play API.
 impl Board {
     /// Pieces of `attacker` on this board that attack `square`.
     ///
@@ -28,12 +28,12 @@ impl Board {
         // Sliders, knights and kings are symmetric enough for this.
         let straight = square.rook_sight(occupied).intersection(self.rooks_and_queens());
         let diagonal = square.bishop_sight(occupied).intersection(self.bishops_and_queens());
-        let knights = square.knight_moves().intersection(self.knights());
-        let kings = square.king_moves().intersection(self.kings());
+        let knights = square.knight_plays().intersection(self.knights());
+        let kings = square.king_plays().intersection(self.kings());
 
         // Pawns are directional, so find pawn source squares with the opposite
         // player's pawn attacks, then filter down to `attacker` below.
-        let pawns = square.pawn_attack_moves(attacker.other()).intersection(self.pawns());
+        let pawns = square.pawn_attack_plays(attacker.other()).intersection(self.pawns());
 
         let attacks = straight.union(diagonal).union(knights).union(kings).union(pawns);
 
@@ -50,7 +50,7 @@ impl Board {
     ) -> Option<EnPassant> {
         let to = en_passant.square();
         let pawns = self.pawns().intersection(self.player(turn));
-        if pawns.intersection(to.pawn_attack_moves(turn.other())).is_empty() {
+        if pawns.intersection(to.pawn_attack_plays(turn.other())).is_empty() {
             None
         } else {
             Some(en_passant)

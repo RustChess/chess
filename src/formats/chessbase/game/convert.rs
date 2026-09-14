@@ -134,7 +134,7 @@ impl Pieces {
                 let side = if dx > 0 { Side::King } else { Side::Queen };
                 let to = player.castle_king_to(side);
                 return position
-                    .legal_moves()
+                    .legal_plays()
                     .into_iter()
                     .find(|play| {
                         play.from == from
@@ -190,7 +190,7 @@ impl Pieces {
         };
 
         position
-            .legal_moves()
+            .legal_plays()
             .into_iter()
             .find(|play| {
                 play.from == from

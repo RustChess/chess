@@ -7,8 +7,8 @@ use crate::{
 };
 
 mod bitboard;
-mod moves;
 mod piece;
+mod plays;
 mod scharnagl;
 
 pub use bitboard::Bitboard;

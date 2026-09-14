@@ -48,18 +48,18 @@ pub struct Game {
 /// The stable identity of a position within a game.
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-#[cfg_attr(feature = "serde", serde(from = "Option<PlayId>", into = "Option<PlayId>"))]
+#[cfg_attr(feature = "serde", serde(from = "Option<MoveId>", into = "Option<MoveId>"))]
 pub enum PositionId {
-    Play(PlayId),
+    Move(MoveId),
     #[default]
     Start,
 }
 
-/// The stable identity of a play within a game.
+/// The stable identity of a move within a game.
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct PlayId(u32);
+pub struct MoveId(u32);
 
 /// The starting position identity.
 pub const START: PositionId = PositionId::Start;
@@ -68,7 +68,7 @@ pub const START: PositionId = PositionId::Start;
 #[derive(Clone, PartialEq)]
 pub struct Position {
     // pointers right
-    options: Vec<PlayId>,
+    options: Vec<MoveId>,
 
     // core datum
     position: chess::Position,
@@ -90,7 +90,7 @@ pub struct PositionPublic {
 
 /// A move in a game, with its derived and public data.
 #[derive(Clone, PartialEq)]
-pub struct Play {
+pub struct Move {
     // pointer left
     previous: PositionId,
 
@@ -100,12 +100,12 @@ pub struct Play {
     // derived data
     short: Short,
 
-    pub public: PlayPublic,
+    pub public: MovePublic,
 }
 
-/// Public data associated with a play.
+/// Public data associated with a move.
 #[derive(Clone, Default, PartialEq)]
-pub struct PlayPublic {
+pub struct MovePublic {
     pub affixes: Affixes,
     pub commands: Vec<Command>,
     pub nags: Vec<Nag>,
@@ -125,17 +125,17 @@ pub struct PositionMut<'g> {
     protected: Protected,
 }
 
-/// An immutable reference to a play in a game.
+/// An immutable reference to a move in a game.
 #[derive(Clone, Copy)]
-pub struct PlayRef<'g> {
+pub struct MoveRef<'g> {
     game: &'g Game,
-    id: PlayId,
+    id: MoveId,
 }
 
-/// A mutable reference to a play in a game.
-pub struct PlayMut<'g> {
+/// A mutable reference to a move in a game.
+pub struct MoveMut<'g> {
     game: &'g mut Game,
-    id: PlayId,
+    id: MoveId,
     protected: Protected,
 }
 
@@ -297,13 +297,13 @@ impl Game {
 
 impl Position {
     fn new(position: chess::Position) -> Self {
-        let legal = position.legal_moves();
+        let legal = position.legal_plays();
         let check = Check::new(position.is_check(), legal.is_empty());
 
         Self { options: Vec::new(), position, check, legal, public: PositionPublic::default() }
     }
 
-    pub const fn options(&self) -> &[PlayId] {
+    pub const fn options(&self) -> &[MoveId] {
         self.options.as_slice()
     }
 
@@ -348,7 +348,7 @@ impl Deref for Position {
     }
 }
 
-impl Play {
+impl Move {
     pub const fn affixes(&self) -> &Affixes {
         &self.public.affixes
     }
@@ -374,7 +374,7 @@ impl Play {
     }
 }
 
-impl Deref for Play {
+impl Deref for Move {
     type Target = chess::Move;
 
     fn deref(&self) -> &chess::Move {
@@ -432,25 +432,25 @@ impl PositionId {
     }
 }
 
-impl From<PlayId> for PositionId {
-    fn from(id: PlayId) -> Self {
-        Self::Play(id)
+impl From<MoveId> for PositionId {
+    fn from(id: MoveId) -> Self {
+        Self::Move(id)
     }
 }
 
-impl From<Option<PlayId>> for PositionId {
-    fn from(id: Option<PlayId>) -> Self {
+impl From<Option<MoveId>> for PositionId {
+    fn from(id: Option<MoveId>) -> Self {
         match id {
-            Some(id) => Self::Play(id),
+            Some(id) => Self::Move(id),
             None => Self::Start,
         }
     }
 }
 
-impl From<PositionId> for Option<PlayId> {
+impl From<PositionId> for Option<MoveId> {
     fn from(id: PositionId) -> Self {
         match id {
-            PositionId::Play(id) => Some(id),
+            PositionId::Move(id) => Some(id),
             PositionId::Start => None,
         }
     }
@@ -491,12 +491,12 @@ impl Short {
             return short;
         }
 
-        let different_move = |other: &chess::Move| *other != play;
+        let different_play = |other: &chess::Move| *other != play;
         let same_role_and_to = |other: &chess::Move| (other.role, other.to) == (play.role, play.to);
         let ambiguity = legal
             .iter()
             .copied()
-            .filter(different_move)
+            .filter(different_play)
             .filter(same_role_and_to)
             .fold(Ambiguity::default(), |ambiguity, other| ambiguity.consider(play, other));
 

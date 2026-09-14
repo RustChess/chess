@@ -99,7 +99,7 @@ impl fmt::Display for Pgn {
         if let Some(intro) = &self.intro {
             wrap.token(intro)?;
         }
-        write_moves(&self.moves, &mut wrap, self.start.ply(), Notation::San)?;
+        write_plays(&self.moves, &mut wrap, self.start.ply(), Notation::San)?;
         wrap.token(self.outcome)
     }
 }
@@ -208,7 +208,7 @@ impl Pgn {
         if let Some(intro) = &self.intro {
             wrap.token(intro).expect("writing PGN movetext to string");
         }
-        write_moves(&self.moves, &mut wrap, self.start.ply(), notation)
+        write_plays(&self.moves, &mut wrap, self.start.ply(), notation)
             .expect("writing PGN movetext to string");
         movetext
     }
@@ -321,14 +321,14 @@ impl fmt::Display for Outcome {
     }
 }
 
-fn write_moves<W: fmt::Write + ?Sized, const WIDTH: usize>(
-    moves: &[Move],
+fn write_plays<W: fmt::Write + ?Sized, const WIDTH: usize>(
+    plays: &[Move],
     wrap: &mut Wrap<'_, W, WIDTH>,
     first_ply: usize,
     notation: Notation,
 ) -> fmt::Result {
-    for (ply, (index, play)) in (first_ply..).zip(moves.iter().enumerate()) {
-        if should_write_move_number(ply, index, moves) {
+    for (ply, (index, play)) in (first_ply..).zip(plays.iter().enumerate()) {
+        if should_write_move_number(ply, index, plays) {
             wrap.token(MoveNumber(ply))?;
         }
         match notation {
@@ -375,7 +375,7 @@ fn write_variations<W: fmt::Write + ?Sized, const WIDTH: usize>(
         if let Some(intro) = &variation.intro {
             wrap.token(intro)?;
         }
-        write_moves(&variation.moves, wrap, ply, notation)?;
+        write_plays(&variation.moves, wrap, ply, notation)?;
         wrap.close(")")?;
         if let Some(outro) = &variation.outro {
             wrap.token(outro)?;
@@ -493,10 +493,10 @@ impl<'a, W: fmt::Write + ?Sized, const WIDTH: usize> Wrap<'a, W, WIDTH> {
     }
 }
 
-fn should_write_move_number(ply: usize, index: usize, moves: &[Move]) -> bool {
+fn should_write_move_number(ply: usize, index: usize, plays: &[Move]) -> bool {
     ply.is_multiple_of(2)
         || index == 0
-        || moves[index - 1].has_intervening_annotation_or_variation()
+        || plays[index - 1].has_intervening_annotation_or_variation()
 }
 
 impl Move {
@@ -865,7 +865,7 @@ mod tests {
         let position = Position::from_fen(fen).unwrap();
         let mut game = crate::Game::chess(position).unwrap();
 
-        for play in position.legal_moves() {
+        for play in position.legal_plays() {
             let id = game.start_mut().push(play).unwrap().id();
             let replies = game.play(id).unwrap().position().legal().to_vec();
             let mut position = game.play_mut(id).unwrap().into_position();

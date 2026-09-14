@@ -2,54 +2,54 @@ use super::{tree::Node, *};
 
 /// Options Mutation API
 impl<'g> PositionMut<'g> {
-    pub fn push(&mut self, play: chess::Move) -> Result<PlayMut<'_>> {
+    pub fn push(&mut self, play: chess::Move) -> Result<MoveMut<'_>> {
         let id = self.insert_at(self.options().len(), play)?;
-        Ok(PlayMut { game: self.game, id, protected: self.protected.clone() })
+        Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
     }
 
-    pub fn into_push(mut self, play: chess::Move) -> Result<PlayMut<'g>> {
+    pub fn into_push(mut self, play: chess::Move) -> Result<MoveMut<'g>> {
         let id = self.insert_at(self.options().len(), play)?;
-        Ok(PlayMut { game: self.game, id, protected: self.protected })
+        Ok(MoveMut { game: self.game, id, protected: self.protected })
     }
 
     // the natural same implementation as in into_option_or_push does
     // not work here due to borrow checker limitations - even though
     // it is "obviously" correct.
-    pub fn option_mut_or_push(&mut self, play: chess::Move) -> Result<PlayMut<'_>> {
+    pub fn option_mut_or_push(&mut self, play: chess::Move) -> Result<MoveMut<'_>> {
         if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(PlayMut { game: self.game, id, protected: self.protected.clone() });
+            return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
         }
         self.push(play)
     }
 
-    pub fn into_option_or_push(self, play: chess::Move) -> Result<PlayMut<'g>> {
+    pub fn into_option_or_push(self, play: chess::Move) -> Result<MoveMut<'g>> {
         if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(PlayMut { game: self.game, id, protected: self.protected });
+            return Ok(MoveMut { game: self.game, id, protected: self.protected });
         }
         self.into_push(play)
     }
 
-    pub fn insert_before(&mut self, option: impl Locate, play: chess::Move) -> Result<PlayMut<'_>> {
+    pub fn insert_before(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveMut<'_>> {
         let id = self.insert_before_option(option, play)?;
-        Ok(PlayMut { game: self.game, id, protected: self.protected.clone() })
+        Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
     }
 
     pub fn into_insert_before(
         mut self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<PlayMut<'g>> {
+    ) -> Result<MoveMut<'g>> {
         let id = self.insert_before_option(option, play)?;
-        Ok(PlayMut { game: self.game, id, protected: self.protected })
+        Ok(MoveMut { game: self.game, id, protected: self.protected })
     }
 
     pub fn option_mut_or_insert_before(
         &mut self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<PlayMut<'_>> {
+    ) -> Result<MoveMut<'_>> {
         if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(PlayMut { game: self.game, id, protected: self.protected.clone() });
+            return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
         }
         self.insert_before(option, play)
     }
@@ -58,34 +58,34 @@ impl<'g> PositionMut<'g> {
         self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<PlayMut<'g>> {
+    ) -> Result<MoveMut<'g>> {
         if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(PlayMut { game: self.game, id, protected: self.protected });
+            return Ok(MoveMut { game: self.game, id, protected: self.protected });
         }
         self.into_insert_before(option, play)
     }
 
-    pub fn insert_after(&mut self, option: impl Locate, play: chess::Move) -> Result<PlayMut<'_>> {
+    pub fn insert_after(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveMut<'_>> {
         let id = self.insert_after_option(option, play)?;
-        Ok(PlayMut { game: self.game, id, protected: self.protected.clone() })
+        Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
     }
 
     pub fn into_insert_after(
         mut self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<PlayMut<'g>> {
+    ) -> Result<MoveMut<'g>> {
         let id = self.insert_after_option(option, play)?;
-        Ok(PlayMut { game: self.game, id, protected: self.protected })
+        Ok(MoveMut { game: self.game, id, protected: self.protected })
     }
 
     pub fn option_mut_or_insert_after(
         &mut self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<PlayMut<'_>> {
+    ) -> Result<MoveMut<'_>> {
         if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(PlayMut { game: self.game, id, protected: self.protected.clone() });
+            return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
         }
         self.insert_after(option, play)
     }
@@ -94,9 +94,9 @@ impl<'g> PositionMut<'g> {
         self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<PlayMut<'g>> {
+    ) -> Result<MoveMut<'g>> {
         if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(PlayMut { game: self.game, id, protected: self.protected });
+            return Ok(MoveMut { game: self.game, id, protected: self.protected });
         }
         self.into_insert_after(option, play)
     }
@@ -193,17 +193,17 @@ impl<'g> PositionMut<'g> {
         play.previous_mut().demote(id).ok()
     }
 
-    fn insert_before_option(&mut self, option: impl Locate, play: chess::Move) -> Result<PlayId> {
+    fn insert_before_option(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveId> {
         let index = self.as_ref().index(option).ok_or(Error::Missing)?;
         self.insert_at(index, play)
     }
 
-    fn insert_after_option(&mut self, option: impl Locate, play: chess::Move) -> Result<PlayId> {
+    fn insert_after_option(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveId> {
         let index = self.as_ref().index(option).ok_or(Error::Missing)?;
         self.insert_at(index + 1, play)
     }
 
-    fn insert_at(&mut self, index: usize, play: chess::Move) -> Result<PlayId> {
+    fn insert_at(&mut self, index: usize, play: chess::Move) -> Result<MoveId> {
         let node = {
             let position = self.as_ref();
             if let Some(index) = position.index(play) {
@@ -213,11 +213,11 @@ impl<'g> PositionMut<'g> {
                 return Err(Error::Illegal);
             }
 
-            let play = Play {
+            let play = Move {
                 previous: self.id,
                 play,
                 short: Short::new(position.legal(), play),
-                public: PlayPublic::default(),
+                public: MovePublic::default(),
             };
             let position = position.position().apply_unchecked(*play);
             Node { position: Position::new(position), play: Some(play) }
