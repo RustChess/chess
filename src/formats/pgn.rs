@@ -6,7 +6,7 @@ use winnow::Parser as _;
 
 use crate::{
     Player, Position, Scharnagl,
-    game::{self, Command, Mode, Nag, Outcome, PlayId, Tag as OtherTag},
+    game::{self, Command, Mode, Nag, Outcome, Tag as OtherTag},
     position::Parts,
 };
 
@@ -598,22 +598,20 @@ mod tests {
 
         assert_eq!(game.roster.event, Some(text("x")));
         assert_eq!(game.tags.len(), 0);
-        assert_eq!(game.start_options().len(), 1);
+        assert_eq!(game.start().options().len(), 1);
 
-        let e4_id = game.start_options().first().unwrap().id();
-        let e4 = game.play(e4_id).unwrap();
+        let e4 = game.start().main().unwrap();
         assert_eq!(e4.play().to, E4);
-        assert_eq!(e4.meta.nags, vec![Nag::Symbol("!".to_string())]);
-        let e4_options = e4.options();
-        assert_eq!(e4_options.len(), 2);
+        assert_eq!(e4.nags(), &[Nag::Symbol("!".to_string())]);
+        assert_eq!(e4.position().options().len(), 2);
 
-        let (e5, variations) = e4_options.split_first().unwrap();
+        let e5 = e4.position().main().unwrap();
         assert_eq!(e5.play().to, E5);
-        assert_eq!(e5.meta.nags, vec![Nag::Numeric(1)]);
+        assert_eq!(e5.nags(), &[Nag::Numeric(1)]);
 
-        let c5 = variations.first().unwrap();
+        let c5 = e4.position().alternatives().next().unwrap();
         assert_eq!(c5.play().to, C5);
-        assert_eq!(c5.meta.comment, Some(text("Sicilian")));
+        assert_eq!(c5.comment(), Some(&text("Sicilian")));
     }
 
     #[test]
@@ -629,19 +627,16 @@ mod tests {
         let game = crate::Game::from_pgn(pgn).unwrap();
 
         assert_eq!(game.orientation, Player::Black);
-        let e4 = game.start_options().first().unwrap();
-        assert!(e4.options().is_expanded());
+        let e4 = game.start().main().unwrap();
+        assert!(e4.expanded());
         assert_eq!(
-            e4.state().evaluation,
+            e4.evaluation(),
             Some(Evaluation { score: Score::Centipawns(21), depth: Some(18) })
         );
-        assert_eq!(e4.meta.commands.len(), 1);
-        assert_eq!(e4.meta.commands[0].command.as_ref(), "foo");
-        let e5 = e4.options().first().unwrap();
-        assert_eq!(
-            e5.state().evaluation,
-            Some(Evaluation { score: Score::Mate(-3), depth: Some(22) })
-        );
+        assert_eq!(e4.commands().len(), 1);
+        assert_eq!(e4.commands()[0].command.as_ref(), "foo");
+        let e5 = e4.position().main().unwrap();
+        assert_eq!(e5.evaluation(), Some(Evaluation { score: Score::Mate(-3), depth: Some(22) }));
 
         let pgn = Pgn::from(game).to_string();
         assert!(pgn.contains("[Orientation \"black\"]"), "{pgn}");
@@ -664,8 +659,7 @@ mod tests {
             .unwrap();
         let game = crate::Game::from_pgn(pgn).unwrap();
 
-        let options = game.start_options();
-        let e4 = options.first().unwrap();
+        let e4 = game.start().main().unwrap();
         assert_eq!(e4.play().from, E2);
         assert_eq!(e4.play().to, E4);
     }
@@ -802,7 +796,7 @@ mod tests {
         let fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 17";
         let position = Position::from_fen(fen).unwrap();
         let mut game = crate::Game::chess(position).unwrap();
-        game.start_options_mut().push(crate::Move::normal(King, E8, D8)).unwrap();
+        game.start_mut().push(crate::Move::normal(King, E8, D8)).unwrap();
 
         let pgn = Pgn::from(game);
         assert!(pgn.to_string().contains("[SetUp \"1\"]"), "{}", pgn);
@@ -814,8 +808,8 @@ mod tests {
     #[test]
     fn display_figurine_movetext() {
         let mut game = crate::Game::chess(Position::start()).unwrap();
-        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
-        game.play_mut(e4).unwrap().options_mut().push(crate::Move::normal(Knight, G8, F6)).unwrap();
+        let e4 = game.start_mut().into_push(crate::Move::normal(Pawn, E2, E4)).unwrap();
+        e4.into_position().push(crate::Move::normal(Knight, G8, F6)).unwrap();
 
         let pgn = Pgn::from(game);
         assert_eq!(pgn.movetext(), "1. e4 Nf6");
@@ -827,16 +821,15 @@ mod tests {
         let mut game = crate::Game::chess(Position::start()).unwrap();
         game.roster.event = Some(text("x"));
 
-        let e4 = game.start_options_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
-        game.start_options_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap();
 
-        {
-            let mut e4 = game.play_mut(e4).unwrap();
-            e4.meta.nags.push(Nag::Symbol("!".to_string()));
-            e4.options_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
-            let c5 = e4.options_mut().push(crate::Move::normal(Pawn, C7, C5)).unwrap().id();
-            game.play_mut(c5).unwrap().meta.comment = Some(text("Sicilian"));
-        }
+        let mut e4 = game.play_mut(e4).unwrap();
+        e4.nags_mut().push(Nag::Symbol("!".to_string()));
+        let mut position = e4.into_position();
+        position.push(crate::Move::normal(Pawn, E7, E5)).unwrap();
+        let mut c5 = position.push(crate::Move::normal(Pawn, C7, C5)).unwrap();
+        *c5.comment_mut() = Some(text("Sicilian"));
 
         let pgn = Pgn::from(game);
         assert_eq!(
@@ -873,11 +866,11 @@ mod tests {
         let mut game = crate::Game::chess(position).unwrap();
 
         for play in position.legal_moves() {
-            let id = game.start_options_mut().push(play).unwrap().id();
-            let replies = game.play(id).unwrap().legal().to_vec();
-            let mut play = game.play_mut(id).unwrap();
+            let id = game.start_mut().push(play).unwrap().id();
+            let replies = game.play(id).unwrap().position().legal().to_vec();
+            let mut position = game.play_mut(id).unwrap().into_position();
             for reply in replies {
-                play.options_mut().push(reply).unwrap();
+                position.push(reply).unwrap();
             }
         }
 

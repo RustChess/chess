@@ -5,6 +5,7 @@ use std::collections::BTreeMap as Map;
 use crate::{
     Game, Move, Position,
     formats::{san::San, uci},
+    game,
 };
 
 // pub const SAMPLE: &str = include_str!("../../tmp/lichess_mate_in_2.csv");
@@ -52,9 +53,9 @@ fn is_checkmate(position: Position) -> bool {
     position.is_check() && position.legal_moves().is_empty()
 }
 
-fn san(position: Position, play: Move) -> San {
-    let mut game = Game::from(position);
-    game.start_options_mut().into_push(play).expect("legal solution move").san()
+fn san(position: Position, play: Move) -> game::Result<San> {
+    let mut game = Game::new(position);
+    Ok(game.start_mut().into_push(play)?.san())
 }
 
 impl fmt::Debug for MateIn2 {
@@ -64,19 +65,19 @@ impl fmt::Debug for MateIn2 {
         if !self.mate_in_1.is_empty() {
             write!(f, "mate-in-1:")?;
             for play1 in self.mate_in_1.keys() {
-                write!(f, " {}", san(self.position, *play1))?;
+                write!(f, " {}", san(self.position, *play1).map_err(|_| fmt::Error)?)?;
             }
             writeln!(f)?;
         }
 
         for (play1, replies) in &self.solutions.0 {
-            writeln!(f, "{}", san(self.position, *play1))?;
+            writeln!(f, "{}", san(self.position, *play1).map_err(|_| fmt::Error)?)?;
             let defend = self.position.apply_unchecked(*play1);
             for (defense, mates) in replies {
-                writeln!(f, "  {}", san(defend, *defense))?;
+                writeln!(f, "  {}", san(defend, *defense).map_err(|_| fmt::Error)?)?;
                 let attack = defend.apply_unchecked(*defense);
                 for play2 in mates.keys() {
-                    writeln!(f, "    {}", san(attack, *play2))?;
+                    writeln!(f, "    {}", san(attack, *play2).map_err(|_| fmt::Error)?)?;
                 }
             }
         }

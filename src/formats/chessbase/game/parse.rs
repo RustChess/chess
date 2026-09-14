@@ -445,10 +445,10 @@ mod tests {
 
     fn mainline(game: &crate::Game) -> Vec<crate::Move> {
         let mut moves = Vec::new();
-        let mut play = game.start_options().first();
-        while let Some(current) = play {
-            moves.push(current.play());
-            play = current.options().first();
+        let mut position = game.start();
+        while let Some(play) = position.main() {
+            moves.push(play.play());
+            position = play.position();
         }
         moves
     }
@@ -570,7 +570,7 @@ mod tests {
             if info.mode.has_setup() {
                 let position = crate::Position::try_from(encoded.position.clone())
                     .unwrap_or_else(|error| panic!("CBG starting position of game {i}: {error}"));
-                assert_eq!(position, expected.start(), "starting position of game {i}");
+                assert_eq!(position, expected.start().position(), "starting position of game {i}");
                 // if i == 0 {
                 //     score_row_seeds(encoded, &lookup, &expected);
                 //     let lookup_conflicts =

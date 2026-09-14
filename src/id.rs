@@ -90,14 +90,14 @@ impl Board {
 impl Game {
     // Experimental: A globally unique ID for all games
     pub fn id(&self) -> Id {
-        use crate::game::cursor::Mainline;
-
         let mut hash = sha2_const::Sha256::new()
             .update(b"game:")
-            .update(&self.start().id().u128().to_be_bytes());
+            .update(&self.start().position().id().u128().to_be_bytes());
 
-        for play in Mainline::new(self) {
+        let mut position = self.start();
+        while let Some(play) = position.main() {
             hash = hash.update(b":").update(play.play().uci_960().to_string().as_bytes());
+            position = play.position();
         }
 
         Id(fold(hash.finalize()))
@@ -255,8 +255,8 @@ mod tests {
 
         // 1. e4 on start position
         let mut cursor = Cursor::new(game);
-        cursor.push(Move::normal(Pawn, E2, E4)).unwrap();
-        let e4 = cursor.into_inner();
+        cursor.option_mut_or_push(Move::normal(Pawn, E2, E4)).unwrap();
+        let e4 = cursor.into_game();
         assert_eq!(e4.id().to_string(), "46osJVmEGh3XxSk2FKcFbr");
         assert_eq!(e4.id().u128(), 33370984391190127392068542153345756661);
 
@@ -294,7 +294,7 @@ mod tests {
         let pgn = pgn::pgn.parse(COLLISION_GAME).unwrap();
         let game: Game = pgn.try_into().unwrap();
         let mut cursor = Cursor::new(game);
-        cursor.end();
+        cursor.mainline_end();
         let constructed = cursor.position();
 
         let expected = Position::from_fen(COLLISION_FEN).unwrap();

@@ -1,6 +1,6 @@
 use crate::{
     Player, Scharnagl,
-    game::{self, Mode, PositionId, Roster},
+    game::{self, Mode, Roster},
     position::{self, Position},
 };
 
@@ -31,39 +31,15 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 impl From<crate::Game> for Pgn {
     fn from(game: crate::Game) -> Self {
-        let mode = game.mode();
-        let freestyle = mode.is_freestyle();
         let start = game.start();
-        let start_evaluation = game.start_options().state().evaluation;
-        let moves = pgn_moves(&game, game.start_options());
-        let mut tags = pgn_roster(&game.roster, game.outcome, game.orientation);
-        if freestyle {
-            tags.push(Tag::freestyle());
-        }
-        tags.extend(
-            game.tags
-                .into_iter()
-                .filter(|tag| start_evaluation.is_none() || tag.key.as_ref() != "StartEvaluation")
-                .map(Tag::Other),
-        );
+        let position = start.position();
+        let evaluation = start.evaluation();
+        let intro = start.comment().cloned().map(Comment);
+        let moves = pgn_moves(start);
+        let outcome = game.outcome;
+        let tags = pgn_tags(game, position, evaluation);
 
-        if freestyle || (start.parts() != Position::start().parts()) {
-            pgn_set_start(&mut tags, start.parts());
-        }
-        if freestyle && let Some(id) = Scharnagl::from_board(start.board()) {
-            tags.push(Tag::Chess960Id(id));
-        }
-        if let Some(evaluation) = start_evaluation {
-            tags.push(Tag::StartEvaluation(Evaluation(evaluation)));
-        }
-
-        Self {
-            tags,
-            start: start.parts(),
-            intro: game.intro.map(Comment),
-            moves,
-            outcome: game.outcome,
-        }
+        Self { start: position.parts(), tags, intro, moves, outcome }
     }
 }
 
@@ -87,86 +63,63 @@ impl crate::Game {
     }
 }
 
-fn game_from_position(
-    pgn: Pgn,
-    position: Position,
-    mode: Mode,
-) -> core::result::Result<crate::Game, Resolve> {
-    let mut game = crate::Game::new(position, mode);
+fn game_from_position(pgn: Pgn, position: Position, mode: Mode) -> Result<crate::Game, Resolve> {
+    let mut game = if mode.is_freestyle() {
+        crate::Game::freestyle(position)
+    } else {
+        crate::Game::new(position)
+    };
     game.roster = game_roster(&pgn.tags);
     game.tags = game_tags(&pgn.tags);
-    game.intro = pgn.intro.map(Into::into);
     game.outcome = pgn.outcome;
     game.orientation = game_orientation(&pgn.tags);
-    let start_evaluation = game_start_evaluation(&pgn.tags);
 
-    game_moves(&mut game, PositionId::Start, 0, pgn.moves)?;
-
-    if let Some(evaluation) = start_evaluation {
-        let mut cursor = game.cursor();
-        cursor.set_evaluation(Some(evaluation));
-        game = cursor.into_game();
-    }
+    let mut start = game.start_mut();
+    *start.comment_mut() = pgn.intro.map(Into::into);
+    start.set_evaluation(game_start_evaluation(&pgn.tags));
+    game_moves(start, pgn.moves)?;
 
     Ok(game)
 }
 
-fn game_moves(
-    game: &mut crate::Game,
-    mut previous: PositionId,
-    mut ply: usize,
-    moves: Vec<Move>,
-) -> core::result::Result<(), Resolve> {
+fn game_moves<'g>(
+    mut position: game::PositionMut<'g>,
+    moves: impl IntoIterator<Item = Move>,
+) -> Result<(), Resolve> {
     for pgn_move in moves {
-        let mut options = game.options_mut(previous).expect("previous play exists");
-        let play = pgn_move.san.resolve(options.as_ref().legal())?;
-        let mut play = options.push(play)?;
-        let id = play.id();
-        play.meta.comment = pgn_move.comment.map(Into::into);
-        let (expanded, evaluation) = game_annotations(&mut play.meta, pgn_move.annotations);
-        play.set_evaluation(evaluation);
-        if let Some(expanded) = expanded {
-            play.options_mut().set_expanded(expanded);
-        }
-
-        for variation in pgn_move.variations {
-            game_variation(game, previous, ply, variation)?;
-        }
-
-        previous = PositionId::Play(id);
-        ply += 1;
+        position = game_move(position, pgn_move)?.into_position();
     }
 
     Ok(())
 }
 
-fn game_variation(
-    game: &mut crate::Game,
-    previous: PositionId,
-    ply: usize,
-    variation: Variation,
-) -> core::result::Result<(), Resolve> {
-    let Some((first, rest)) = variation.moves.split_first() else {
+fn game_move<'g>(
+    position: game::PositionMut<'g>,
+    pgn_move: Move,
+) -> Result<game::PlayMut<'g>, Resolve> {
+    let play = pgn_move.san.resolve(position.legal())?;
+    let mut play = position.into_push(play)?;
+    *play.comment_mut() = pgn_move.comment.map(Into::into);
+    game_annotations(&mut play, pgn_move.annotations);
+
+    for variation in pgn_move.variations {
+        game_variation(play.previous_mut(), variation)?;
+    }
+
+    Ok(play)
+}
+
+fn game_variation(position: game::PositionMut<'_>, variation: Variation) -> Result<(), Resolve> {
+    let Variation { intro, moves, outro } = variation;
+    let mut moves = moves.into_iter();
+    let Some(first) = moves.next() else {
         return Ok(());
     };
 
-    let mut options = game.options_mut(previous).expect("previous play exists");
-    let play = first.san.resolve(options.as_ref().legal())?;
-    let mut play = options.push(play)?;
-    let id = play.id();
-    play.meta.intro = variation.intro.map(Into::into);
-    play.meta.outro = variation.outro.map(Into::into);
-    play.meta.comment = first.comment.clone().map(Into::into);
-    let (expanded, evaluation) = game_annotations(&mut play.meta, first.annotations.clone());
-    play.set_evaluation(evaluation);
-    if let Some(expanded) = expanded {
-        play.options_mut().set_expanded(expanded);
-    }
-
-    for variation in &first.variations {
-        game_variation(game, previous, ply, variation.clone())?;
-    }
-    game_moves(game, PositionId::Play(id), ply + 1, rest.to_vec())
+    let mut play = game_move(position, first)?;
+    *play.affixes_mut() =
+        game::Affixes { intro: intro.map(Into::into), outro: outro.map(Into::into) };
+    game_moves(play.into_position(), moves)
 }
 
 //
@@ -218,25 +171,24 @@ fn game_start_evaluation(tags: &[Tag]) -> Option<game::Evaluation> {
 }
 
 fn game_annotations(
-    meta: &mut game::Meta,
+    play: &mut game::PlayMut<'_>,
     annotations: impl IntoIterator<Item = Annotation>,
-) -> (Option<bool>, Option<game::Evaluation>) {
-    let mut expanded = None;
-    let mut evaluation = None;
+) {
     for annotation in annotations {
         match annotation {
-            Annotation::Nag(nag) => meta.nags.push(nag),
-            Annotation::Evaluation(Evaluation(value)) => evaluation = Some(value),
+            Annotation::Nag(nag) => play.nags_mut().push(nag),
+            Annotation::Evaluation(Evaluation(value)) => {
+                play.position_mut().set_evaluation(Some(value));
+            }
             Annotation::Command(command) => {
-                if let Some(value) = pgn_expansion(&command) {
-                    expanded = Some(value);
+                if command.is_expanded() {
+                    *play.position_mut().expanded_mut() = true;
                 } else {
-                    meta.commands.push(command);
+                    play.commands_mut().push(command);
                 }
             }
         }
     }
-    (expanded, evaluation)
 }
 
 fn roster_text(value: &str, default: &str) -> Option<Text> {
@@ -251,6 +203,36 @@ fn game_tags(tags: &[Tag]) -> Vec<game::Tag> {
             _ => None,
         })
         .collect()
+}
+
+fn pgn_tags(
+    game: crate::Game,
+    position: Position,
+    evaluation: Option<game::Evaluation>,
+) -> Vec<Tag> {
+    let freestyle = game.mode().is_freestyle();
+    let mut tags = pgn_roster(&game.roster, game.outcome, game.orientation);
+    if freestyle {
+        tags.push(Tag::freestyle());
+    }
+    tags.extend(
+        game.tags
+            .into_iter()
+            .filter(|tag| evaluation.is_none() || tag.key.as_ref() != "StartEvaluation")
+            .map(Tag::Other),
+    );
+
+    if freestyle || (position.parts() != Position::start().parts()) {
+        pgn_set_start(&mut tags, position.parts());
+    }
+    if freestyle && let Some(id) = Scharnagl::from_board(position.board()) {
+        tags.push(Tag::Chess960Id(id));
+    }
+    if let Some(evaluation) = evaluation {
+        tags.push(Tag::StartEvaluation(Evaluation(evaluation)));
+    }
+
+    tags
 }
 
 fn pgn_roster(roster: &Roster, outcome: game::Outcome, orientation: Player) -> Vec<Tag> {
@@ -283,97 +265,59 @@ fn pgn_set_start(tags: &mut Vec<Tag>, position: position::Parts) {
     tags.push(Tag::Fen(position));
 }
 
-fn pgn_moves<'g>(game: &'g crate::Game, options: game::OptionsRef<'g>) -> Vec<Move> {
+fn pgn_moves(mut position: game::PositionRef<'_>) -> Vec<Move> {
     let mut moves = Vec::new();
-    let mut options = options;
 
-    while let Some((play, variations)) = options.split_first() {
-        moves.push(pgn_move(game, &play, variations));
-        options = play.options();
+    while let Some(play) = position.main() {
+        let variations = position.alternatives().map(pgn_variation).collect();
+        moves.push(pgn_move(&play, variations));
+        position = play.position();
     }
 
     moves
 }
 
-fn pgn_move(
-    game: &crate::Game,
-    play: &game::PlayRef<'_>,
-    variations: game::OptionsRef<'_>,
-) -> Move {
+fn pgn_move(play: &game::PlayRef<'_>, variations: Vec<Variation>) -> Move {
     Move {
-        san: san::San::from((play.play(), play.short(), play.check())),
-        comment: play.meta.comment.clone().map(Comment),
-        annotations: pgn_annotations(
-            &play.meta,
-            play.state().evaluation,
-            play.options().is_expanded(),
-        ),
-        variations: variations.iter().map(|play| pgn_variation(game, play.id())).collect(),
+        san: play.san(),
+        comment: play.comment().cloned().map(Comment),
+        annotations: pgn_annotations(play),
+        variations,
     }
 }
 
-fn pgn_variation(game: &crate::Game, id: PlayId) -> Variation {
-    let play = game.play(id).expect("option must reference an existing play");
+fn pgn_variation(play: game::PlayRef<'_>) -> Variation {
+    let affixes = play.affixes();
+
     Variation {
-        intro: play.meta.intro.clone().map(Comment),
-        moves: pgn_moves_from(game, &play),
-        outro: play.meta.outro.clone().map(Comment),
+        intro: affixes.intro.clone().map(Comment),
+        moves: pgn_moves_from(&play),
+        outro: affixes.outro.clone().map(Comment),
     }
 }
 
-fn pgn_moves_from<'g>(game: &'g crate::Game, play: &game::PlayRef<'g>) -> Vec<Move> {
-    let mut moves = vec![pgn_move_without_variations(play)];
-    moves.extend(pgn_moves(game, play.options()));
+fn pgn_moves_from(play: &game::PlayRef<'_>) -> Vec<Move> {
+    let mut moves = vec![pgn_move(play, Vec::new())];
+    moves.extend(pgn_moves(play.position()));
     moves
 }
 
-fn pgn_move_without_variations(play: &game::PlayRef<'_>) -> Move {
-    Move {
-        san: san::San::from((play.play(), play.short(), play.check())),
-        comment: play.meta.comment.clone().map(Comment),
-        annotations: pgn_annotations(
-            &play.meta,
-            play.state().evaluation,
-            play.options().is_expanded(),
-        ),
-        variations: Vec::new(),
-    }
-}
-
-fn pgn_annotations(
-    meta: &game::Meta,
-    evaluation: Option<game::Evaluation>,
-    expanded: bool,
-) -> Vec<Annotation> {
-    let mut annotations: Vec<_> = meta.nags.iter().cloned().map(Annotation::Nag).collect();
+fn pgn_annotations(play: &game::PlayRef<'_>) -> Vec<Annotation> {
+    let position = play.position();
+    let evaluation = position.evaluation();
+    let mut annotations: Vec<_> = play.nags().iter().cloned().map(Annotation::Nag).collect();
     if let Some(evaluation) = evaluation {
         annotations.push(Annotation::Evaluation(Evaluation(evaluation)));
     }
-    if expanded {
-        annotations.push(Annotation::Command(pgn_command("cgexp", vec!["true".to_string()])));
+    if position.expanded() {
+        annotations.push(Annotation::Command(game::Command::expanded()));
     }
     annotations.extend(
-        meta.commands
+        play.commands()
             .iter()
             .filter(|command| evaluation.is_none() || command.command.as_ref() != "eval")
             .cloned()
             .map(Annotation::Command),
     );
     annotations
-}
-
-fn pgn_expansion(command: &game::Command) -> Option<bool> {
-    if command.command.as_ref() != "cgexp" || command.parameters.len() != 1 {
-        return None;
-    }
-
-    match command.parameters[0].as_str() {
-        "false" => Some(false),
-        "true" => Some(true),
-        _ => None,
-    }
-}
-
-fn pgn_command(command: &str, parameters: Vec<String>) -> game::Command {
-    game::Command { command: Text::new(command).expect("command name is non-empty"), parameters }
 }

@@ -144,8 +144,9 @@ impl fmt::Display for Check {
     }
 }
 
-impl From<(crate::Move, game::Short, Option<Check>)> for San {
-    fn from((play, short, check): (crate::Move, game::Short, Option<Check>)) -> Self {
+impl crate::Move {
+    pub fn san(self, short: game::Short, check: Option<Check>) -> San {
+        let play = self;
         let play = if let Some(side) = play.castle_side() {
             Move::Castle(side)
         } else {
@@ -168,9 +169,15 @@ impl From<(crate::Move, game::Short, Option<Check>)> for San {
     }
 }
 
-impl game::Play {
+impl game::PlayRef<'_> {
     pub fn san(&self) -> San {
-        San::from((self.play(), self.short(), self.check()))
+        self.play().san(self.short(), self.position().check())
+    }
+}
+
+impl game::PlayMut<'_> {
+    pub fn san(&self) -> San {
+        self.as_ref().san()
     }
 }
 
@@ -181,7 +188,7 @@ impl San {
         let resolves_to_self = |play: &crate::Move| {
             // Check/checkmate markers are notation adornments. The concrete move
             // is resolved from the SAN move body and the legal moves in this state.
-            San::from((*play, game::Short::new(legal, *play), None)).play == self.play
+            play.san(game::Short::new(legal, *play), None).play == self.play
         };
         // legal crate moves that would match the input SAN move
         let mut matches = legal.iter().copied().filter(resolves_to_self);

@@ -1,134 +1,94 @@
 use std::collections::BTreeMap as Map;
 
-use super::{Options, Play};
+use super::*;
 
-/// A local index into the game's slot map, which actually stores the moves of the game.
-pub type PlayId = u32;
-
+/// Storage for the starting position and subsequent plays.
 #[derive(Clone, PartialEq)]
 pub struct Tree {
     next: PlayId,
-    slots: Map<PlayId, Play>,
-    start: Options,
+    // PositionId::is_start() iff Node::play.is_none()
+    nodes: Map<PositionId, Node>,
 }
 
-/// A handle to a node in the tree of variations of a game of chess.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
-pub enum PositionId {
-    #[default]
-    Start,
-    Play(PlayId),
-}
-
-impl Default for Tree {
-    fn default() -> Self {
-        Tree::new()
-    }
+/// A position and the optional play that reached it.
+#[derive(Clone, PartialEq)]
+pub struct Node {
+    pub position: Position,
+    pub play: Option<Play>,
 }
 
 impl Tree {
-    pub const fn new() -> Self {
-        Self { next: 0, slots: Map::new(), start: Options::new() }
+    pub fn new(position: chess::Position) -> Self {
+        let start = Node { position: Position::new(position), play: None };
+        Self { next: PlayId::default(), nodes: Map::from([(START, start)]) }
     }
 
-    pub fn contains(&self, id: PlayId) -> bool {
-        self.slots.contains_key(&id)
+    pub fn contains(&self, id: PositionId) -> bool {
+        self.nodes.contains_key(&id)
     }
 
-    pub fn play(&self, id: PlayId) -> Option<&Play> {
-        self.slots.get(&id)
-    }
-
-    pub(super) fn play_mut(&mut self, id: PlayId) -> Option<&mut Play> {
-        self.slots.get_mut(&id)
-    }
-
-    pub fn slots(&self) -> impl Iterator<Item = PlayId> + '_ {
-        self.slots.keys().copied()
-    }
-
-    pub fn plays(&self) -> impl Iterator<Item = &Play> {
-        self.slots.values()
-    }
-
-    // unused for now, added for consistency
-    #[allow(dead_code)]
-    pub(super) fn plays_mut(&mut self) -> impl Iterator<Item = &mut Play> {
-        self.slots.values_mut()
-    }
-
-    pub fn start(&self) -> &Options {
-        &self.start
-    }
-
-    pub(super) fn start_mut(&mut self) -> &mut Options {
-        &mut self.start
-    }
-
-    pub fn options(&self, id: PositionId) -> &Options {
-        match id {
-            PositionId::Start => self.start(),
-            PositionId::Play(id) => &self.play(id).expect("play exists").options,
-        }
-    }
-
-    pub(super) fn options_mut(&mut self, id: PositionId) -> &mut Options {
-        match id {
-            PositionId::Start => self.start_mut(),
-            PositionId::Play(id) => &mut self.play_mut(id).expect("play exists").options,
-        }
-    }
-
-    // Non-public, Game controls play coherence and legality.
-    pub(super) fn insert(&mut self, f: impl FnOnce(PlayId) -> Play) -> PlayId {
-        let slot = self.next;
-        self.next += 1;
-
-        let play = f(slot);
-        debug_assert_eq!(slot, play.id);
-        self.slots.insert(slot, play);
-        slot
-    }
-
-    // Could plausibly be public, but would have to return bool to
-    // avoid dangling pointers in the move's follow-on options.
-    pub(super) fn remove(&mut self, id: PlayId) -> bool {
-        let Some(play) = self.slots.remove(&id) else { return false };
-        for option in play.options.iter() {
-            self.remove(*option);
+    pub(in crate::game) fn less_equal(&self, ancestor: PositionId, mut child: PositionId) -> bool {
+        while ancestor != child {
+            let PositionId::Play(id) = child else { return false };
+            child = self.play(id).previous;
         }
         true
     }
-}
 
-impl PositionId {
-    pub fn is_start(&self) -> bool {
-        matches!(self, Self::Start)
+    pub(in crate::game) fn play(&self, id: PlayId) -> &Play {
+        self.node(id.into()).play()
     }
-}
 
-#[cfg(feature = "serde")]
-impl serde::Serialize for PositionId {
-    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::Start => Option::<PlayId>::None.serialize(serializer),
-            Self::Play(id) => Some(*id).serialize(serializer),
+    pub(in crate::game) fn play_mut(&mut self, id: PlayId) -> &mut Play {
+        self.node_mut(id.into()).play_mut()
+    }
+
+    pub(in crate::game) fn position(&self, id: PositionId) -> &Position {
+        self.node(id).position()
+    }
+
+    pub(in crate::game) fn position_mut(&mut self, id: PositionId) -> &mut Position {
+        self.node_mut(id).position_mut()
+    }
+
+    pub(in crate::game) fn insert(&mut self, node: Node) -> PlayId {
+        let id = self.next;
+        self.next.0 += 1;
+        self.nodes.insert(id.into(), node);
+        id
+    }
+
+    pub(in crate::game) fn remove(&mut self, id: PlayId) -> bool {
+        let Some(node) = self.nodes.remove(&id.into()) else { return false };
+        for option in node.position.options {
+            self.remove(option);
         }
+        true
+    }
+
+    fn node(&self, id: PositionId) -> &Node {
+        self.nodes.get(&id).expect("position exists")
+    }
+
+    fn node_mut(&mut self, id: PositionId) -> &mut Node {
+        self.nodes.get_mut(&id).expect("position exists")
     }
 }
 
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for PositionId {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(match Option::<PlayId>::deserialize(deserializer)? {
-            Some(id) => Self::Play(id),
-            None => Self::Start,
-        })
+impl Node {
+    const fn play(&self) -> &Play {
+        self.play.as_ref().expect("play exists")
+    }
+
+    const fn play_mut(&mut self) -> &mut Play {
+        self.play.as_mut().expect("play exists")
+    }
+
+    const fn position(&self) -> &Position {
+        &self.position
+    }
+
+    const fn position_mut(&mut self) -> &mut Position {
+        &mut self.position
     }
 }

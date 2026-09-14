@@ -1,9 +1,9 @@
 //! Universal Chess Interface notation.
 
-use core::{fmt, str::FromStr};
+use core::{borrow::BorrowMut, fmt, str::FromStr};
 
 use crate::{
-    Game, Role, game,
+    Role, game,
     game::{Mode, Score},
     square::{File, Rank, Square},
 };
@@ -56,53 +56,56 @@ impl Move {
     }
 }
 
-impl<'g> game::OptionsMut<'g> {
+impl<'g> game::PositionMut<'g> {
     pub fn push_uci(&mut self, uci: Move) -> Result<game::PlayMut<'_>, game::Error> {
-        let options = self.as_ref();
-        let legal = options.legal();
-        let Some(play) = uci.resolve(options.mode(), legal) else {
+        let Some(play) = uci.resolve(self.game().mode(), self.legal()) else {
             return Err(game::Error::Illegal);
         };
         self.push(play)
     }
+
     pub fn into_push_uci(self, uci: Move) -> Result<game::PlayMut<'g>, game::Error> {
-        let options = self.as_ref();
-        let legal = options.legal();
-        let Some(play) = uci.resolve(options.mode(), legal) else {
+        let Some(play) = uci.resolve(self.game().mode(), self.legal()) else {
             return Err(game::Error::Illegal);
         };
         self.into_push(play)
     }
 }
 
-impl crate::Position {
-    pub fn resolve_uci(self, mode: Mode, moves: &[Move]) -> Vec<crate::Move> {
-        let mut game = Game::new(self, mode);
-        let mut options = game.start_options_mut();
+impl<G: BorrowMut<crate::Game>> game::Cursor<G> {
+    pub fn push_uci(&mut self, uci: Move) -> Result<game::PlayRef<'_>, game::Error> {
+        let Some(play) = uci.resolve(self.game().mode(), self.position().legal()) else {
+            return Err(game::Error::Illegal);
+        };
+        self.option_mut_or_push(play)?;
+        self.play().ok_or(game::Error::Missing)
+    }
+}
+
+impl game::PositionRef<'_> {
+    pub fn resolve_uci(self, moves: &[Move]) -> Vec<crate::Move> {
+        let mut cursor = game::Cursor::new(self.new_game());
         let mut resolved = Vec::with_capacity(moves.len());
 
         for uci in moves {
-            let Ok(play) = options.into_push_uci(*uci) else {
+            let Ok(play) = cursor.push_uci(*uci) else {
                 break;
             };
             resolved.push(play.play());
-            options = play.into_options_mut();
         }
 
         resolved
     }
 
-    pub fn resolve_uci_san(self, mode: Mode, moves: &[Move]) -> Vec<San> {
-        let mut game = Game::new(self, mode);
-        let mut options = game.start_options_mut();
+    pub fn resolve_uci_san(self, moves: &[Move]) -> Vec<San> {
+        let mut cursor = game::Cursor::new(self.new_game());
         let mut resolved = Vec::with_capacity(moves.len());
 
         for uci in moves {
-            let Ok(play) = options.into_push_uci(*uci) else {
+            let Ok(play) = cursor.push_uci(*uci) else {
                 break;
             };
             resolved.push(play.san());
-            options = play.into_options_mut();
         }
 
         resolved

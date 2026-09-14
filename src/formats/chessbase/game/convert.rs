@@ -1,7 +1,7 @@
 use crate::{
     Player, Side,
     board::{Board, Role},
-    game::PositionId,
+    game::CursorMut,
     position::{Castles as ChessCastles, EnPassant, Parts, Special},
     square::{File, Rank, Square},
 };
@@ -38,38 +38,27 @@ impl crate::Game {
     pub fn from_chessbase(encoded: Game) -> Result<Self> {
         let Game { position, tokens } = encoded;
         let mut pieces = position.pieces;
-        let mut game = Self::from(crate::Position::try_from(position)?);
-        game.decode_tokens(&mut tokens.into_iter(), &mut pieces, PositionId::Start)?;
+        let mut game = Self::new(crate::Position::try_from(position)?);
+        Self::decode_tokens(game.cursor_mut(), &mut tokens.into_iter(), &mut pieces)?;
         Ok(game)
     }
 
     fn decode_tokens(
-        &mut self,
+        mut cursor: CursorMut<'_>,
         tokens: &mut impl Iterator<Item = Token>,
         pieces: &mut Pieces,
-        mut previous: PositionId,
     ) -> Result<()> {
         while let Some(token) = tokens.next() {
             match token {
                 Token::Move(encoded) => {
-                    let position = match previous {
-                        PositionId::Start => self.start(),
-                        PositionId::Play(id) => {
-                            self.play(id).expect("decoded predecessor exists").position()
-                        }
-                    };
-                    let play = pieces.resolve(position, encoded)?;
-                    pieces.apply(position, play);
-                    previous = PositionId::Play(
-                        self.options_mut(previous)
-                            .expect("decoded predecessor exists")
-                            .push(play)?
-                            .id(),
-                    );
+                    let position = cursor.position();
+                    let play = pieces.resolve(&position, encoded)?;
+                    pieces.apply(&position, play);
+                    cursor.option_mut_or_push(play)?;
                 }
                 Token::Push => {
                     let saved = *pieces;
-                    self.decode_tokens(tokens, pieces, previous)?;
+                    Self::decode_tokens(cursor.cursor_mut(), tokens, pieces)?;
                     *pieces = saved;
                 }
                 Token::Pop => return Ok(()),
@@ -133,7 +122,7 @@ impl TryFrom<Position> for crate::Position {
 }
 
 impl Pieces {
-    fn resolve(&self, position: crate::Position, encoded: Move) -> Result<crate::Move> {
+    fn resolve(&self, position: &crate::Position, encoded: Move) -> Result<crate::Move> {
         use Move::*;
         use PawnMove::*;
 
@@ -222,7 +211,7 @@ impl Pieces {
         })
     }
 
-    fn apply(&mut self, position: crate::Position, play: crate::Move) {
+    fn apply(&mut self, position: &crate::Position, play: crate::Move) {
         let player = position.turn();
         let board = position.board();
         let captured = if play.kind.is_en_passant() {
