@@ -10,8 +10,7 @@ use crate::{
 
 use super::{San, StrInput as Input, prelude::*};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(SerializeDisplay, DeserializeFromStr))]
+#[derive(Clone, Copy, Debug, DeserializeFromStr, Eq, PartialEq, SerializeDisplay)]
 pub struct Move {
     pub from: Square,
     pub to: Square,

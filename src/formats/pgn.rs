@@ -32,8 +32,7 @@ use Mode::*;
 // https://chesstempo.com/manual/en/manual.html#pgnviewercommentannotations
 //
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
+#[derive(Clone, Debug, DeserializeFromStr, PartialEq, Eq, SerializeDisplay)]
 pub struct Pgn {
     pub tags: Vec<Tag>,
     pub start: Parts,

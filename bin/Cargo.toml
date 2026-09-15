@@ -15,5 +15,5 @@ name = "chess_cli"
 [dependencies]
 chess = { workspace = true, features = ["serde"] }
 anyhow.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["derive"] }
 tracing.workspace = true

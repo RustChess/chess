@@ -1,8 +1,7 @@
 use core::{fmt, ops::Deref, str::FromStr};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct Text(String);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]

@@ -316,8 +316,7 @@ macro_rules! finite_set {
     ) => {
         $(#[$name_meta])*
         #[repr(u8)]
-        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-        #[cfg_attr(feature = "serde", derive(SerializeDisplay))]
+        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay)]
         pub enum $name {
             $(
                 $(#[$variant_meta])*

@@ -13,8 +13,9 @@ use super::{StrInput as Input, prelude::*};
 // we accept "compact" FEN without it. The "board" parser finishes once the
 // 64 squares are filled, so it won't "swallow" the turn parser's input.
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
 pub struct Fen(pub Position);
 
 #[derive(Debug, thiserror::Error)]

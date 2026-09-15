@@ -11,8 +11,7 @@ use crate::{
 
 use super::{StrInput as Input, prelude::*};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
+#[derive(Clone, Copy, Debug, DeserializeFromStr, Eq, PartialEq, SerializeDisplay)]
 pub struct San {
     pub play: Move,
     pub check: Option<Check>,

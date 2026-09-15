@@ -1,0 +1,21 @@
+[package]
+name = "rust-chess-macros"
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "macros"
+
+[features]
+default = []
+arbitrary = ["dep:derive_arbitrary"]
+clap = ["dep:clap_derive"]
+serde = ["dep:serde_derive", "macros-impl/serde"]
+
+[dependencies]
+macros-impl.workspace = true
+
+clap_derive = { workspace = true, optional = true }
+derive_arbitrary = { workspace = true, optional = true }
+serde_derive = { workspace = true, optional = true }

@@ -9,8 +9,7 @@ pub struct Error;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(DeserializeFromStr, SerializeDisplay))]
+#[derive(Clone, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay)]
 pub struct Base58 {
     bytes: Vec<u8>,
     string: String,

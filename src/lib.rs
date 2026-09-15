@@ -4,13 +4,8 @@
 
 mod arbitrary;
 
-#[cfg(feature = "serde")]
-#[macro_use(Deserialize, Serialize)]
-extern crate serde;
-
-#[cfg(feature = "serde")]
-#[macro_use(DeserializeFromStr, SerializeDisplay)]
-extern crate serde_with;
+#[macro_use(Deserialize, DeserializeFromStr, Serialize, SerializeDisplay)]
+extern crate macros;
 
 pub mod board;
 #[macro_use]
@@ -21,9 +16,6 @@ pub mod id;
 pub mod position;
 pub mod puzzle;
 pub mod square;
-
-#[cfg(feature = "lichess")]
-pub mod lichess;
 
 #[cfg(test)]
 mod perft;
