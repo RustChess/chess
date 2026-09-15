@@ -19,6 +19,7 @@ chess-lichess-client = { version = "2.0.110", path = "lichess-client" }
 chess = { package = "rust-chess", path = "." }
 
 anyhow = "1"
+arbitrary = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["cargo", "color", "derive"] }
 # clap-verbosity-flag = "3"
@@ -50,6 +51,7 @@ name = "chess"
 
 [package.metadata.cargo-shear]
 ignored-paths = [
+  "src/game/storage.rs",
   "src/id/POLYGLOT-BASIS.rs",
   "src/id/STANDARD-BASIS.rs",
   "src/square/SLIDER-SIGHTS.rs",
@@ -61,6 +63,7 @@ lichess = ["dep:chess-lichess"]
 serde = ["dep:serde", "dep:serde_with"]
 
 [dependencies]
+arbitrary.workspace = true
 chess-lichess = { workspace = true, optional = true }
 
 encoding_rs.workspace = true

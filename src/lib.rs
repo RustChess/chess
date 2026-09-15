@@ -2,6 +2,8 @@
 //!
 //! Attempt at building an ergonomic, idiomatic, and fast foundation for Chess programming in Rust.
 
+mod arbitrary;
+
 #[cfg(feature = "serde")]
 #[macro_use(Deserialize, Serialize)]
 extern crate serde;
