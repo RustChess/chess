@@ -197,9 +197,9 @@ fn tag_from_pair(key: Text, value: String) -> Option<Tag> {
         }),
         "Variant" => Tag::Variant(value),
         "Orientation" => Tag::Orientation(value.parse().ok()?),
-        "StartEvaluation" => value
+        "Valuation" => value
             .parse()
-            .map(Tag::StartEvaluation)
+            .map(Tag::Valuation)
             .unwrap_or_else(|_| Tag::Other(OtherTag { key, value })),
         _ => Tag::Other(OtherTag { key, value }),
     })
@@ -298,10 +298,10 @@ fn command(input: &mut Input<'_>) -> ModalResult<Command> {
 }
 
 fn annotation(command: Command) -> Annotation {
-    evaluation(&command).map_or(Annotation::Command(command), Annotation::Evaluation)
+    evaluation(&command).map_or(Annotation::Command(command), Annotation::Valuation)
 }
 
-pub fn evaluation(command: &Command) -> Option<Evaluation> {
+pub fn evaluation(command: &Command) -> Option<Valuation> {
     if command.command.as_ref() != "eval" || !(1..=2).contains(&command.parameters.len()) {
         return None;
     }

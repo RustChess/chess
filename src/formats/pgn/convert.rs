@@ -33,11 +33,11 @@ impl From<crate::Game> for Pgn {
     fn from(game: crate::Game) -> Self {
         let start = game.start();
         let position = start.position();
-        let evaluation = start.evaluation();
+        let valuation = start.valuation();
         let intro = start.comment().cloned().map(Comment);
         let plays = pgn_plays(start);
         let outcome = game.outcome;
-        let tags = pgn_tags(game, position, evaluation);
+        let tags = pgn_tags(game, position, valuation);
 
         Self { start: position.parts(), tags, intro, moves: plays, outcome }
     }
@@ -76,7 +76,7 @@ fn game_from_position(pgn: Pgn, position: Position, mode: Mode) -> Result<crate:
 
     let mut start = game.start_mut();
     *start.comment_mut() = pgn.intro.map(Into::into);
-    start.set_evaluation(game_start_evaluation(&pgn.tags));
+    start.set_valuation(game_start_valuation(&pgn.tags));
     game_plays(start, pgn.moves)?;
 
     Ok(game)
@@ -145,7 +145,7 @@ fn game_roster(tags: &[Tag]) -> Roster {
             | Tag::Variant(_)
             | Tag::Chess960Id(_)
             | Tag::Orientation(_)
-            | Tag::StartEvaluation(_)
+            | Tag::Valuation(_)
             | Tag::Other(_) => {}
         }
     }
@@ -163,9 +163,9 @@ fn game_orientation(tags: &[Tag]) -> Player {
         .unwrap_or(Player::White)
 }
 
-fn game_start_evaluation(tags: &[Tag]) -> Option<game::Evaluation> {
+fn game_start_valuation(tags: &[Tag]) -> Option<game::Valuation> {
     tags.iter().rev().find_map(|tag| match tag {
-        Tag::StartEvaluation(Evaluation(evaluation)) => Some(*evaluation),
+        Tag::Valuation(Valuation(valuation)) => Some(*valuation),
         _ => None,
     })
 }
@@ -177,8 +177,8 @@ fn game_annotations(
     for annotation in annotations {
         match annotation {
             Annotation::Nag(nag) => play.nags_mut().push(nag),
-            Annotation::Evaluation(Evaluation(value)) => {
-                play.position_mut().set_evaluation(Some(value));
+            Annotation::Valuation(Valuation(valuation)) => {
+                play.position_mut().set_valuation(Some(valuation));
             }
             Annotation::Command(command) => {
                 if command.is_expanded() {
@@ -205,11 +205,7 @@ fn game_tags(tags: &[Tag]) -> Vec<game::Tag> {
         .collect()
 }
 
-fn pgn_tags(
-    game: crate::Game,
-    position: Position,
-    evaluation: Option<game::Evaluation>,
-) -> Vec<Tag> {
+fn pgn_tags(game: crate::Game, position: Position, valuation: Option<game::Valuation>) -> Vec<Tag> {
     let freestyle = game.mode().is_freestyle();
     let mut tags = pgn_roster(&game.roster, game.outcome, game.orientation);
     if freestyle {
@@ -218,7 +214,7 @@ fn pgn_tags(
     tags.extend(
         game.tags
             .into_iter()
-            .filter(|tag| evaluation.is_none() || tag.key.as_ref() != "StartEvaluation")
+            .filter(|tag| valuation.is_none() || tag.key.as_ref() != "Valuation")
             .map(Tag::Other),
     );
 
@@ -228,8 +224,8 @@ fn pgn_tags(
     if freestyle && let Some(id) = Scharnagl::from_board(position.board()) {
         tags.push(Tag::Chess960Id(id));
     }
-    if let Some(evaluation) = evaluation {
-        tags.push(Tag::StartEvaluation(Evaluation(evaluation)));
+    if let Some(valuation) = valuation {
+        tags.push(Tag::Valuation(Valuation(valuation)));
     }
 
     tags
@@ -304,10 +300,10 @@ fn pgn_plays_from(play: &game::MoveRef<'_>) -> Vec<Move> {
 
 fn pgn_annotations(play: &game::MoveRef<'_>) -> Vec<Annotation> {
     let position = play.position();
-    let evaluation = position.evaluation();
+    let valuation = position.valuation();
     let mut annotations: Vec<_> = play.nags().iter().cloned().map(Annotation::Nag).collect();
-    if let Some(evaluation) = evaluation {
-        annotations.push(Annotation::Evaluation(Evaluation(evaluation)));
+    if let Some(valuation) = valuation {
+        annotations.push(Annotation::Valuation(Valuation(valuation)));
     }
     if position.expanded() {
         annotations.push(Annotation::Command(game::Command::expanded()));
@@ -315,7 +311,7 @@ fn pgn_annotations(play: &game::MoveRef<'_>) -> Vec<Annotation> {
     annotations.extend(
         play.commands()
             .iter()
-            .filter(|command| evaluation.is_none() || command.command.as_ref() != "eval")
+            .filter(|command| valuation.is_none() || command.command.as_ref() != "eval")
             .cloned()
             .map(Annotation::Command),
     );

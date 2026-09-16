@@ -176,31 +176,31 @@ impl<'g> PositionMut<'g> {
         &mut self.position_mut().public.comment
     }
 
-    pub fn evaluation_mut(&mut self) -> &mut Option<Evaluation> {
-        &mut self.position_mut().public.evaluation
+    pub fn valuation_mut(&mut self) -> &mut Option<Valuation> {
+        &mut self.position_mut().public.valuation
     }
 
     pub fn expanded_mut(&mut self) -> &mut bool {
         &mut self.position_mut().public.expanded
     }
 
-    pub fn set_evaluation(&mut self, evaluation: Option<Evaluation>) -> bool {
-        if self.public.evaluation != evaluation {
-            self.public_mut().evaluation = evaluation;
+    pub fn set_valuation(&mut self, valuation: Option<Valuation>) -> bool {
+        if self.public.valuation != valuation {
+            self.public_mut().valuation = valuation;
             true
         } else {
             false
         }
     }
 
-    // Only set if we have at least same depth evaluation.
+    // Only set if we have at least the same valuation depth.
     // For Multi-PV lines, they are not stable for a given depth
     // until all lines at that depth were determined, hence `<`, not `<=`
-    pub fn update_evaluation(&mut self, evaluation: Evaluation) -> bool {
-        if self.public.evaluation.is_some_and(|previous| evaluation.depth < previous.depth) {
+    pub fn update_valuation(&mut self, valuation: Valuation) -> bool {
+        if self.public.valuation.is_some_and(|previous| valuation.depth < previous.depth) {
             false
         } else {
-            self.set_evaluation(Some(evaluation))
+            self.set_valuation(Some(valuation))
         }
     }
 
@@ -331,8 +331,8 @@ impl<'g> MoveRef<'g> {
         self.game.tree.position(self.id.into()).comment()
     }
 
-    pub fn evaluation(&self) -> Option<Evaluation> {
-        self.game.tree.position(self.id.into()).evaluation()
+    pub fn valuation(&self) -> Option<Valuation> {
+        self.game.tree.position(self.id.into()).valuation()
     }
 
     pub fn expanded(&self) -> bool {
@@ -405,8 +405,8 @@ impl<'g> MoveMut<'g> {
         self.game.tree.position(self.id.into()).comment()
     }
 
-    pub fn evaluation(&self) -> Option<Evaluation> {
-        self.as_ref().evaluation()
+    pub fn valuation(&self) -> Option<Valuation> {
+        self.as_ref().valuation()
     }
 
     pub fn expanded(&self) -> bool {
@@ -421,8 +421,8 @@ impl<'g> MoveMut<'g> {
         &mut self.position_public_mut().comment
     }
 
-    pub fn evaluation_mut(&mut self) -> &mut Option<Evaluation> {
-        &mut self.position_public_mut().evaluation
+    pub fn valuation_mut(&mut self) -> &mut Option<Valuation> {
+        &mut self.position_public_mut().valuation
     }
 
     pub fn expanded_mut(&mut self) -> &mut bool {

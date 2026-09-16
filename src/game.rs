@@ -82,7 +82,7 @@ pub struct Position {
 #[derive(Clone, Default, PartialEq)]
 pub struct PositionPublic {
     pub comment: Option<Text>,
-    pub evaluation: Option<Evaluation>,
+    pub valuation: Option<Valuation>,
     pub expanded: bool,
 }
 
@@ -178,7 +178,7 @@ pub struct Command {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Evaluation {
+pub struct Valuation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
     #[serde(flatten)]
@@ -305,8 +305,8 @@ impl Position {
         self.public.comment.as_ref()
     }
 
-    pub const fn evaluation(&self) -> Option<Evaluation> {
-        self.public.evaluation
+    pub const fn valuation(&self) -> Option<Valuation> {
+        self.public.valuation
     }
 
     pub const fn expanded(&self) -> bool {

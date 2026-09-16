@@ -55,7 +55,7 @@ pub enum Tag {
     Variant(String),
     Chess960Id(Scharnagl),
     Orientation(Player),
-    StartEvaluation(Evaluation),
+    Valuation(Valuation),
     Other(OtherTag),
 }
 
@@ -130,16 +130,16 @@ pub struct Move {
 pub struct Comment(Text);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Evaluation(pub game::Evaluation);
+pub struct Valuation(pub game::Valuation);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Annotation {
     Nag(Nag),
-    Evaluation(Evaluation),
+    Valuation(Valuation),
     Command(Command),
 }
 
-impl fmt::Display for Evaluation {
+impl fmt::Display for Valuation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0.score {
             game::Score::Centipawns(centipawns) => {
@@ -154,7 +154,7 @@ impl fmt::Display for Evaluation {
     }
 }
 
-impl Evaluation {
+impl Valuation {
     fn command(self) -> Command {
         Command {
             command: Text::new("eval").expect("command name is non-empty"),
@@ -163,7 +163,7 @@ impl Evaluation {
     }
 }
 
-impl str::FromStr for Evaluation {
+impl str::FromStr for Valuation {
     type Err = &'static str;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -188,7 +188,7 @@ impl str::FromStr for Evaluation {
             }
             game::Score::Centipawns(centipawns as i32)
         };
-        Ok(Self(game::Evaluation { score, depth }))
+        Ok(Self(game::Valuation { score, depth }))
     }
 }
 
@@ -239,9 +239,7 @@ impl fmt::Display for Tag {
             Tag::Variant(variant) => write_tag(f, "Variant", variant),
             Tag::Chess960Id(id) => write_tag(f, "Chess960Id", &id.to_string()),
             Tag::Orientation(player) => write_tag(f, "Orientation", player.name()),
-            Tag::StartEvaluation(evaluation) => {
-                write_tag(f, "StartEvaluation", &evaluation.to_string())
-            }
+            Tag::Valuation(valuation) => write_tag(f, "Valuation", &valuation.to_string()),
             Tag::Other(tag) => write_tag(f, tag.key.as_ref(), &tag.value),
         }
     }
@@ -279,7 +277,7 @@ impl fmt::Display for Annotation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Annotation::Nag(nag) => write!(f, "{nag}"),
-            Annotation::Evaluation(evaluation) => evaluation.command().fmt(f),
+            Annotation::Valuation(valuation) => valuation.command().fmt(f),
             Annotation::Command(command) => write!(f, "{command}"),
         }
     }
@@ -351,7 +349,7 @@ impl Move {
             match annotation {
                 Annotation::Nag(Nag::Symbol(_)) => wrap.suffix(annotation)?,
                 Annotation::Nag(Nag::Numeric(_)) => wrap.token(annotation)?,
-                Annotation::Evaluation(evaluation) => commands.push(evaluation.command()),
+                Annotation::Valuation(valuation) => commands.push(valuation.command()),
                 Annotation::Command(command) => commands.push(command.clone()),
             }
         }
@@ -510,7 +508,7 @@ mod tests {
         Position,
         board::{Player, Role::*, Scharnagl},
         formats::san,
-        game::{Evaluation, Score},
+        game::Score,
         square::{File::*, Square::*},
     };
 
@@ -629,13 +627,16 @@ mod tests {
         let e4 = game.start().main().unwrap();
         assert!(e4.expanded());
         assert_eq!(
-            e4.evaluation(),
-            Some(Evaluation { score: Score::Centipawns(21), depth: Some(18) })
+            e4.valuation(),
+            Some(game::Valuation { score: Score::Centipawns(21), depth: Some(18) })
         );
         assert_eq!(e4.commands().len(), 1);
         assert_eq!(e4.commands()[0].command.as_ref(), "foo");
         let e5 = e4.position().main().unwrap();
-        assert_eq!(e5.evaluation(), Some(Evaluation { score: Score::Mate(-3), depth: Some(22) }));
+        assert_eq!(
+            e5.valuation(),
+            Some(game::Valuation { score: Score::Mate(-3), depth: Some(22) })
+        );
 
         let pgn = Pgn::from(game).to_string();
         assert!(pgn.contains("[Orientation \"black\"]"), "{pgn}");

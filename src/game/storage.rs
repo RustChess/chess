@@ -23,7 +23,7 @@ pub struct Game {
     pub outcome: game::Outcome,
     pub start: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub evaluation: Option<game::Evaluation>,
+    pub valuation: Option<game::Valuation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<MoveId>,
 }
@@ -37,7 +37,7 @@ pub struct Move {
     pub meta: game::Meta,
     pub play: uci::Move,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub evaluation: Option<game::Evaluation>,
+    pub valuation: Option<game::Valuation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<MoveId>,
 }
@@ -69,7 +69,7 @@ impl From<&game::Game> for Game {
             intro: game.intro.clone(),
             outcome: game.outcome,
             start: game.start().fen(),
-            evaluation: game.start_options().state().evaluation,
+            valuation: game.start_options().state().valuation,
             options: game.tree.start().to_vec(),
         }
     }
@@ -86,7 +86,7 @@ impl From<&game::Move> for Move {
                 to: play.play.to,
                 promotion: play.play.promotes(),
             },
-            evaluation: play.state.evaluation,
+            valuation: play.state.valuation,
             options: play.options.plays.clone(),
         }
     }
