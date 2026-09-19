@@ -23,8 +23,8 @@ pub enum Error {
 pub enum Resolve {
     #[error("SAN error: {0}")]
     San(#[from] san::Error),
-    #[error("game error: {0}")]
-    Game(#[from] game::Error),
+    #[error("game options error: {0}")]
+    Options(#[from] game::options::Error),
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
@@ -36,8 +36,8 @@ impl From<crate::Game> for Pgn {
         let valuation = start.valuation();
         let intro = start.comment().cloned().map(Comment);
         let plays = pgn_plays(start);
-        let outcome = game.outcome;
-        let tags = pgn_tags(game, position, valuation);
+        let outcome = game.outcome();
+        let tags = pgn_tags(&game, position, valuation);
 
         Self { start: position.parts(), tags, intro, moves: plays, outcome }
     }
@@ -69,13 +69,13 @@ fn game_from_position(pgn: Pgn, position: Position, mode: Mode) -> Result<crate:
     } else {
         crate::Game::new(position)
     };
-    game.roster = game_roster(&pgn.tags);
-    game.tags = game_tags(&pgn.tags);
-    game.outcome = pgn.outcome;
-    game.orientation = game_orientation(&pgn.tags);
+    game.update_roster(|roster| *roster = game_roster(&pgn.tags));
+    game.update_tags(|tags| *tags = game_tags(&pgn.tags));
+    game.set_outcome(pgn.outcome);
+    game.set_orientation(game_orientation(&pgn.tags));
 
     let mut start = game.start_mut();
-    *start.comment_mut() = pgn.intro.map(Into::into);
+    start.set_comment(pgn.intro.map(Into::into));
     start.set_valuation(game_start_valuation(&pgn.tags));
     game_plays(start, pgn.moves)?;
 
@@ -99,7 +99,7 @@ fn game_play<'g>(
 ) -> Result<game::MoveMut<'g>, Resolve> {
     let play = pgn_play.san.resolve(position.legal())?;
     let mut play = position.into_push(play)?;
-    *play.comment_mut() = pgn_play.comment.map(Into::into);
+    play.set_comment(pgn_play.comment.map(Into::into));
     game_annotations(&mut play, pgn_play.annotations);
 
     for variation in pgn_play.variations {
@@ -117,8 +117,8 @@ fn game_variation(position: game::PositionMut<'_>, variation: Variation) -> Resu
     };
 
     let mut play = game_play(position, first)?;
-    *play.affixes_mut() =
-        game::Affixes { intro: intro.map(Into::into), outro: outro.map(Into::into) };
+    play.set_intro(intro.map(Into::into));
+    play.set_outro(outro.map(Into::into));
     game_plays(play.into_position(), plays)
 }
 
@@ -176,15 +176,15 @@ fn game_annotations(
 ) {
     for annotation in annotations {
         match annotation {
-            Annotation::Nag(nag) => play.nags_mut().push(nag),
+            Annotation::Nag(nag) => play.update_nags(|nags| nags.push(nag)),
             Annotation::Valuation(Valuation(valuation)) => {
                 play.position_mut().set_valuation(Some(valuation));
             }
             Annotation::Command(command) => {
                 if command.is_expanded() {
-                    *play.position_mut().expanded_mut() = true;
+                    play.position_mut().set_expanded(true);
                 } else {
-                    play.commands_mut().push(command);
+                    play.update_commands(|commands| commands.push(command));
                 }
             }
         }
@@ -205,16 +205,21 @@ fn game_tags(tags: &[Tag]) -> Vec<game::Tag> {
         .collect()
 }
 
-fn pgn_tags(game: crate::Game, position: Position, valuation: Option<game::Valuation>) -> Vec<Tag> {
+fn pgn_tags(
+    game: &crate::Game,
+    position: Position,
+    valuation: Option<game::Valuation>,
+) -> Vec<Tag> {
     let freestyle = game.mode().is_freestyle();
-    let mut tags = pgn_roster(&game.roster, game.outcome, game.orientation);
+    let mut tags = pgn_roster(game.roster(), game.outcome(), game.orientation());
     if freestyle {
         tags.push(Tag::freestyle());
     }
     tags.extend(
-        game.tags
-            .into_iter()
+        game.tags()
+            .iter()
             .filter(|tag| valuation.is_none() || tag.key.as_ref() != "Valuation")
+            .cloned()
             .map(Tag::Other),
     );
 
@@ -264,7 +269,7 @@ fn pgn_set_start(tags: &mut Vec<Tag>, position: position::Parts) {
 fn pgn_plays(mut position: game::PositionRef<'_>) -> Vec<Move> {
     let mut plays = Vec::new();
 
-    while let Some(play) = position.main() {
+    while let Ok(play) = position.main() {
         let variations = position.alternatives().map(pgn_variation).collect();
         plays.push(pgn_play(&play, variations));
         position = play.position();

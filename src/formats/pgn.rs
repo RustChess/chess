@@ -593,8 +593,8 @@ mod tests {
             .unwrap();
         let game = crate::Game::from_pgn(pgn).unwrap();
 
-        assert_eq!(game.roster.event, Some(text("x")));
-        assert_eq!(game.tags.len(), 0);
+        assert_eq!(game.roster().event, Some(text("x")));
+        assert_eq!(game.tags().len(), 0);
         assert_eq!(game.start().options().len(), 1);
 
         let e4 = game.start().main().unwrap();
@@ -623,7 +623,7 @@ mod tests {
             .unwrap();
         let game = crate::Game::from_pgn(pgn).unwrap();
 
-        assert_eq!(game.orientation, Player::Black);
+        assert_eq!(game.orientation(), Player::Black);
         let e4 = game.start().main().unwrap();
         assert!(e4.expanded());
         assert_eq!(
@@ -819,17 +819,17 @@ mod tests {
     #[test]
     fn convert_from_game() {
         let mut game = crate::Game::chess(Position::start()).unwrap();
-        game.roster.event = Some(text("x"));
+        game.update_roster(|roster| roster.event = Some(text("x")));
 
         let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
         game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap();
 
         let mut e4 = game.play_mut(e4).unwrap();
-        e4.nags_mut().push(Nag::Symbol("!".to_string()));
+        e4.update_nags(|nags| nags.push(Nag::Symbol("!".to_string())));
         let mut position = e4.into_position();
         position.push(crate::Move::normal(Pawn, E7, E5)).unwrap();
         let mut c5 = position.push(crate::Move::normal(Pawn, C7, C5)).unwrap();
-        *c5.comment_mut() = Some(text("Sicilian"));
+        c5.set_comment(Some(text("Sicilian")));
 
         let pgn = Pgn::from(game);
         assert_eq!(

@@ -56,34 +56,34 @@ impl Move {
 }
 
 impl<'g> game::PositionMut<'g> {
-    pub fn push_uci(&mut self, uci: Move) -> Result<game::MoveMut<'_>, game::Error> {
+    pub fn push_uci(&mut self, uci: Move) -> game::options::Result<game::MoveMut<'_>> {
         let Some(play) = uci.resolve(self.game().mode(), self.legal()) else {
-            return Err(game::Error::Illegal);
+            return Err(game::options::Insert::Illegal.into());
         };
         self.push(play)
     }
 
-    pub fn into_push_uci(self, uci: Move) -> Result<game::MoveMut<'g>, game::Error> {
+    pub fn into_push_uci(self, uci: Move) -> game::options::Result<game::MoveMut<'g>> {
         let Some(play) = uci.resolve(self.game().mode(), self.legal()) else {
-            return Err(game::Error::Illegal);
+            return Err(game::options::Insert::Illegal.into());
         };
         self.into_push(play)
     }
 }
 
 impl<G: BorrowMut<crate::Game>> game::Cursor<G> {
-    pub fn push_uci(&mut self, uci: Move) -> Result<game::MoveRef<'_>, game::Error> {
+    pub fn push_uci(&mut self, uci: Move) -> game::options::Result<game::MoveRef<'_>> {
         let Some(play) = uci.resolve(self.game().mode(), self.position().legal()) else {
-            return Err(game::Error::Illegal);
+            return Err(game::options::Insert::Illegal.into());
         };
         self.option_mut_or_push(play)?;
-        self.play().ok_or(game::Error::Missing)
+        Ok(self.play().expect("cursor advanced to move"))
     }
 }
 
 impl game::PositionRef<'_> {
     pub fn resolve_uci(self, plays: &[Move]) -> Vec<crate::Move> {
-        let mut cursor = game::Cursor::new(self.new_game());
+        let mut cursor = game::Cursor::new(self.into_game());
         let mut resolved = Vec::with_capacity(plays.len());
 
         for uci in plays {
@@ -97,7 +97,7 @@ impl game::PositionRef<'_> {
     }
 
     pub fn resolve_uci_san(self, plays: &[Move]) -> Vec<San> {
-        let mut cursor = game::Cursor::new(self.new_game());
+        let mut cursor = game::Cursor::new(self.into_game());
         let mut resolved = Vec::with_capacity(plays.len());
 
         for uci in plays {

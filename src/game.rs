@@ -13,36 +13,66 @@ use crate::{
 // pub mod storage;
 
 pub mod options;
+pub mod patch;
 pub mod traversal;
 
 mod cursor;
 pub(in crate::game) mod tree;
 
-/// An error from mutating options.
+/// An error from accessing or editing a game tree.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("option not found")]
-    Missing,
-    #[error("move already exists at index {0}")]
-    Duplicate(usize),
-    #[error("illegal move")]
-    Illegal,
-    #[error("position {0:?} may not be removed")]
-    Unremovable(PositionId),
+    #[error(transparent)]
+    Start(#[from] start::Error),
+    #[error(transparent)]
+    Traversal(#[from] traversal::Error),
+    #[error(transparent)]
+    Options(#[from] options::Error),
+    #[error(transparent)]
+    Patch(#[from] patch::Error),
 }
 
 /// A result of editing a game tree.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
+/// Errors from the rooted boundary of a game tree.
+pub mod start {
+    /// An error from requesting an incoming move at the start position.
+    #[derive(Debug, thiserror::Error)]
+    #[error("start position has no incoming move")]
+    pub struct Error;
+
+    /// A result of accessing an incoming move.
+    pub type Result<T, E = Error> = core::result::Result<T, E>;
+}
+
 /// A game tree and its game-level data.
 #[derive(Clone, PartialEq)]
 pub struct Game {
+    mode: Mode,
+    undo: patch::Undo,
+    tree: tree::Tree,
+    public: GamePublic,
+}
+
+/// Public data associated with a game.
+#[derive(Clone, PartialEq)]
+pub struct GamePublic {
     pub orientation: Player,
     pub outcome: Outcome,
     pub roster: Roster,
     pub tags: Vec<Tag>,
-    mode: Mode,
-    tree: tree::Tree,
+}
+
+impl Default for GamePublic {
+    fn default() -> Self {
+        Self {
+            orientation: Player::White,
+            outcome: Outcome::default(),
+            roster: Roster::default(),
+            tags: Vec::new(),
+        }
+    }
 }
 
 /// The stable identity of a position within a game.
@@ -150,11 +180,6 @@ pub type CursorRef<'g> = Cursor<&'g Game>;
 
 /// A cursor over a mutably borrowed game.
 pub type CursorMut<'g> = Cursor<&'g mut Game>;
-
-/// Locates an option within a game position.
-pub trait Locate {
-    fn locate(self, position: PositionRef<'_>) -> Option<usize>;
-}
 
 /// Comments surrounding an option in PGN movetext.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -273,14 +298,77 @@ impl Game {
         self.mode
     }
 
+    pub const fn has_undo(&self) -> bool {
+        self.undo.on
+    }
+
+    pub fn set_undo(&mut self, on: bool) {
+        self.undo.on = on;
+        if !on {
+            self.undo.stack.clear();
+        }
+    }
+
+    pub fn patches(&self) -> &[patch::Patch] {
+        &self.undo.stack
+    }
+
+    pub const fn public(&self) -> &GamePublic {
+        &self.public
+    }
+
+    pub const fn orientation(&self) -> Player {
+        self.public.orientation
+    }
+
+    pub const fn outcome(&self) -> Outcome {
+        self.public.outcome
+    }
+
+    pub const fn roster(&self) -> &Roster {
+        &self.public.roster
+    }
+
+    pub const fn tags(&self) -> &[Tag] {
+        self.public.tags.as_slice()
+    }
+
+    pub fn set_orientation(&mut self, orientation: Player) {
+        self.update_public(|public| public.orientation = orientation);
+    }
+
+    pub fn set_outcome(&mut self, outcome: Outcome) {
+        self.update_public(|public| public.outcome = outcome);
+    }
+
+    pub fn update_roster(&mut self, update: impl FnOnce(&mut Roster)) {
+        self.update_public(|public| update(&mut public.roster));
+    }
+
+    pub fn update_tags(&mut self, update: impl FnOnce(&mut Vec<Tag>)) {
+        self.update_public(|public| update(&mut public.tags));
+    }
+
+    fn update_public(&mut self, update: impl FnOnce(&mut GamePublic)) {
+        let before = self.undo.on.then(|| self.public.clone());
+        update(&mut self.public);
+        if let Some(before) = before
+            && before != self.public
+        {
+            self.undo.stack.push(patch::Patch::Game(before));
+        }
+    }
+
     fn unchecked_with_mode(position: chess::Position, mode: Mode) -> Self {
+        Self::unchecked_with_mode_next(position, mode, MoveId::default())
+    }
+
+    fn unchecked_with_mode_next(position: chess::Position, mode: Mode, next: MoveId) -> Self {
         Self {
-            orientation: Player::White,
-            outcome: Outcome::default(),
-            roster: Roster::default(),
-            tags: Vec::new(),
             mode,
-            tree: tree::Tree::new(position),
+            undo: Default::default(),
+            tree: tree::Tree::new(position, next),
+            public: Default::default(),
         }
     }
 }
@@ -419,6 +507,22 @@ impl From<bool> for Mode {
 impl PositionId {
     pub const fn is_start(&self) -> bool {
         matches!(self, Self::Start)
+    }
+}
+
+impl MoveId {
+    pub const fn next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(id) => Some(Self(id)),
+            None => None,
+        }
+    }
+
+    pub const fn prev(self) -> Option<Self> {
+        match self.0.checked_sub(1) {
+            Some(id) => Some(Self(id)),
+            None => None,
+        }
     }
 }
 

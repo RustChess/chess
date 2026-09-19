@@ -1,6 +1,69 @@
-use core::{cmp::Ordering, iter::FusedIterator, ops::Deref, slice};
+use core::{cmp::Ordering, fmt, iter::FusedIterator, ops::Deref, slice};
 
 use super::*;
+
+/// An error from traversing a game tree.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("position {0:?} not found")]
+    Position(PositionId),
+    #[error("move {0:?} not found")]
+    Move(MoveId),
+    #[error(transparent)]
+    Option(#[from] MissingOption),
+}
+
+/// A result of traversing a game tree.
+pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+/// Locates an option within a game position.
+pub trait Locate: Into<Location> {
+    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption>;
+}
+
+/// A way to locate an option within a position.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Location {
+    Index(usize),
+    Id(MoveId),
+    Move(chess::Move),
+}
+
+/// An option location that does not exist in a position.
+#[derive(Debug, thiserror::Error)]
+#[error("option {location:?} not found at position {position:?}")]
+pub struct MissingOption {
+    pub position: PositionId,
+    pub location: Location,
+}
+
+impl fmt::Debug for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Index(index) => write!(f, "{index}"),
+            Self::Id(id) => write!(f, "{id:?}"),
+            Self::Move(play) => write!(f, "{play}"),
+        }
+    }
+}
+
+impl From<usize> for Location {
+    fn from(index: usize) -> Self {
+        Self::Index(index)
+    }
+}
+
+impl From<MoveId> for Location {
+    fn from(id: MoveId) -> Self {
+        Self::Id(id)
+    }
+}
+
+impl From<chess::Move> for Location {
+    fn from(play: chess::Move) -> Self {
+        Self::Move(play)
+    }
+}
 
 /// The partial order of a position within a game tree.
 #[derive(Clone, Copy)]
@@ -28,20 +91,26 @@ pub struct MovesMut<'g> {
 }
 
 impl Game {
-    pub fn play(&self, id: MoveId) -> Option<MoveRef<'_>> {
-        self.tree.contains(id.into()).then_some(MoveRef { game: self, id })
+    pub fn play(&self, id: MoveId) -> Result<MoveRef<'_>> {
+        self.tree.contains(id.into()).then_some(MoveRef { game: self, id }).ok_or(Error::Move(id))
     }
 
-    pub fn play_mut(&mut self, id: MoveId) -> Option<MoveMut<'_>> {
-        self.tree.contains(id.into()).then_some(MoveMut::new(self, id))
+    pub fn play_mut(&mut self, id: MoveId) -> Result<MoveMut<'_>> {
+        if !self.tree.contains(id.into()) {
+            return Err(Error::Move(id));
+        }
+        Ok(MoveMut::new(self, id))
     }
 
-    pub fn position(&self, id: PositionId) -> Option<PositionRef<'_>> {
-        self.tree.contains(id).then_some(PositionRef { game: self, id })
+    pub fn position(&self, id: PositionId) -> Result<PositionRef<'_>> {
+        self.tree.contains(id).then_some(PositionRef { game: self, id }).ok_or(Error::Position(id))
     }
 
-    pub fn position_mut(&mut self, id: PositionId) -> Option<PositionMut<'_>> {
-        self.tree.contains(id).then_some(PositionMut::new(self, id))
+    pub fn position_mut(&mut self, id: PositionId) -> Result<PositionMut<'_>> {
+        if !self.tree.contains(id) {
+            return Err(Error::Position(id));
+        }
+        Ok(PositionMut::new(self, id))
     }
 
     pub const fn start(&self) -> PositionRef<'_> {
@@ -79,17 +148,20 @@ impl<'g> PositionRef<'g> {
         self.game
     }
 
-    pub fn new_game(self) -> Game {
-        Game::unchecked_with_mode(self.position().position(), self.game.mode())
+    pub fn into_game(self) -> Game {
+        Game::unchecked_with_mode_next(
+            self.position().position(),
+            self.game.mode(),
+            self.game.tree.next(),
+        )
     }
 
-    pub fn index(&self, option: impl Locate) -> Option<usize> {
-        let index = option.locate(*self)?;
-        (index < self.options().len()).then_some(index)
+    pub fn index(&self, option: impl Locate) -> Result<usize> {
+        Ok(option.locate(*self)?)
     }
 
-    pub fn contains(&self, option: impl Locate) -> bool {
-        self.index(option).is_some()
+    pub fn has_option(&self, option: impl Locate) -> bool {
+        self.index(option).is_ok()
     }
 
     pub(in crate::game) fn position(&self) -> &'g Position {
@@ -103,21 +175,21 @@ impl<'g> PositionRef<'g> {
         Cursor { game: self.game, id: self.id, preserve: Set::new() }
     }
 
-    pub const fn play(&self) -> Option<MoveRef<'g>> {
+    pub const fn play(&self) -> start::Result<MoveRef<'g>> {
         match self.id {
-            PositionId::Move(id) => Some(MoveRef { game: self.game, id }),
-            PositionId::Start => None,
+            PositionId::Move(id) => Ok(MoveRef { game: self.game, id }),
+            PositionId::Start => Err(start::Error),
         }
     }
 
-    pub fn main(&self) -> Option<MoveRef<'g>> {
+    pub fn main(&self) -> Result<MoveRef<'g>> {
         self.option(0)
     }
 
-    pub fn option(&self, option: impl Locate) -> Option<MoveRef<'g>> {
+    pub fn option(&self, option: impl Locate) -> Result<MoveRef<'g>> {
         let index = self.index(option)?;
-        let id = self.position().options.get(index).copied()?;
-        Some(MoveRef { game: self.game, id })
+        let id = self.position().options[index];
+        Ok(MoveRef { game: self.game, id })
     }
 
     pub fn has_options(&self) -> bool {
@@ -168,29 +240,16 @@ impl<'g> PositionMut<'g> {
         PositionRef { game: self.game, id: self.id }
     }
 
-    pub fn public_mut(&mut self) -> &mut PositionPublic {
-        &mut self.position_mut().public
+    pub fn set_comment(&mut self, comment: Option<Text>) {
+        self.update_public(|public| public.comment = comment);
     }
 
-    pub fn comment_mut(&mut self) -> &mut Option<Text> {
-        &mut self.position_mut().public.comment
+    pub fn set_valuation(&mut self, valuation: Option<Valuation>) {
+        self.update_public(|public| public.valuation = valuation);
     }
 
-    pub fn valuation_mut(&mut self) -> &mut Option<Valuation> {
-        &mut self.position_mut().public.valuation
-    }
-
-    pub fn expanded_mut(&mut self) -> &mut bool {
-        &mut self.position_mut().public.expanded
-    }
-
-    pub fn set_valuation(&mut self, valuation: Option<Valuation>) -> bool {
-        if self.public.valuation != valuation {
-            self.public_mut().valuation = valuation;
-            true
-        } else {
-            false
-        }
+    pub fn set_expanded(&mut self, expanded: bool) {
+        self.update_public(|public| public.expanded = expanded);
     }
 
     // Only set if we have at least the same valuation depth.
@@ -200,7 +259,19 @@ impl<'g> PositionMut<'g> {
         if self.public.valuation.is_some_and(|previous| valuation.depth < previous.depth) {
             false
         } else {
-            self.set_valuation(Some(valuation))
+            let changed = self.public.valuation != Some(valuation);
+            self.set_valuation(Some(valuation));
+            changed
+        }
+    }
+
+    fn update_public(&mut self, update: impl FnOnce(&mut PositionPublic)) {
+        let before = self.game.undo.on.then(|| self.public.clone());
+        update(&mut self.position_mut().public);
+        if let Some(before) = before
+            && before != self.public
+        {
+            self.game.undo.stack.push(patch::Patch::Position { id: self.id, public: before });
         }
     }
 
@@ -225,47 +296,45 @@ impl<'g> PositionMut<'g> {
         Cursor { game: self.game, id: self.id, preserve: self.protected.unremovable }
     }
 
-    pub const fn play(&self) -> Option<MoveRef<'_>> {
+    pub const fn play(&self) -> start::Result<MoveRef<'_>> {
         match self.id {
-            PositionId::Move(id) => Some(MoveRef { game: self.game, id }),
-            PositionId::Start => None,
+            PositionId::Move(id) => Ok(MoveRef { game: self.game, id }),
+            PositionId::Start => Err(start::Error),
         }
     }
 
-    pub fn play_mut(&mut self) -> Option<MoveMut<'_>> {
-        match self.id {
-            PositionId::Move(id) => {
-                Some(MoveMut { game: self.game, id, protected: self.protected.clone() })
-            }
-            PositionId::Start => None,
-        }
-    }
-
-    pub fn into_play(self) -> Option<MoveMut<'g>> {
+    pub fn play_mut(&mut self) -> start::Result<MoveMut<'_>> {
         match self.id {
             PositionId::Move(id) => {
-                Some(MoveMut { game: self.game, id, protected: self.protected })
+                Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
             }
-            PositionId::Start => None,
+            PositionId::Start => Err(start::Error),
         }
     }
 
-    pub fn main_mut(&mut self) -> Option<MoveMut<'_>> {
+    pub fn into_play(self) -> start::Result<MoveMut<'g>> {
+        match self.id {
+            PositionId::Move(id) => Ok(MoveMut { game: self.game, id, protected: self.protected }),
+            PositionId::Start => Err(start::Error),
+        }
+    }
+
+    pub fn main_mut(&mut self) -> Result<MoveMut<'_>> {
         self.option_mut(0)
     }
 
-    pub fn into_main(self) -> Option<MoveMut<'g>> {
+    pub fn into_main(self) -> Result<MoveMut<'g>> {
         self.into_option(0)
     }
 
-    pub fn option_mut(&mut self, option: impl Locate) -> Option<MoveMut<'_>> {
+    pub fn option_mut(&mut self, option: impl Locate) -> Result<MoveMut<'_>> {
         let id = self.as_ref().option(option)?.id();
-        Some(MoveMut { game: self.game, id, protected: self.protected.clone() })
+        Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
     }
 
-    pub fn into_option(self, option: impl Locate) -> Option<MoveMut<'g>> {
+    pub fn into_option(self, option: impl Locate) -> Result<MoveMut<'g>> {
         let id = self.as_ref().option(option)?.id();
-        Some(MoveMut { game: self.game, id, protected: self.protected })
+        Ok(MoveMut { game: self.game, id, protected: self.protected })
     }
 
     pub fn alternatives_mut(&mut self) -> MovesMut<'_> {
@@ -327,6 +396,14 @@ impl<'g> MoveRef<'g> {
         self.game
     }
 
+    pub fn into_game(self) -> Game {
+        let mut game = self.previous().into_game();
+        game.start_mut()
+            .insert_at_untracked(Some(self.id), 0, self.play().play)
+            .expect("move is legal in its previous position");
+        game
+    }
+
     pub fn comment(&self) -> Option<&'g Text> {
         self.game.tree.position(self.id.into()).comment()
     }
@@ -385,20 +462,30 @@ impl<'g> MoveMut<'g> {
         MoveRef { game: self.game, id: self.id }
     }
 
-    pub fn public_mut(&mut self) -> &mut MovePublic {
-        &mut self.play_mut().public
+    pub fn set_intro(&mut self, intro: Option<Text>) {
+        self.update_public(|public| public.affixes.intro = intro);
     }
 
-    pub fn affixes_mut(&mut self) -> &mut Affixes {
-        &mut self.play_mut().public.affixes
+    pub fn set_outro(&mut self, outro: Option<Text>) {
+        self.update_public(|public| public.affixes.outro = outro);
     }
 
-    pub fn commands_mut(&mut self) -> &mut Vec<Command> {
-        &mut self.play_mut().public.commands
+    pub fn update_commands(&mut self, update: impl FnOnce(&mut Vec<Command>)) {
+        self.update_public(|public| update(&mut public.commands));
     }
 
-    pub fn nags_mut(&mut self) -> &mut Vec<Nag> {
-        &mut self.play_mut().public.nags
+    pub fn update_nags(&mut self, update: impl FnOnce(&mut Vec<Nag>)) {
+        self.update_public(|public| update(&mut public.nags));
+    }
+
+    fn update_public(&mut self, update: impl FnOnce(&mut MovePublic)) {
+        let before = self.game.undo.on.then(|| self.public.clone());
+        update(&mut self.play_mut().public);
+        if let Some(before) = before
+            && before != self.public
+        {
+            self.game.undo.stack.push(patch::Patch::Move { id: self.id, public: before });
+        }
     }
 
     pub fn comment(&self) -> Option<&Text> {
@@ -413,20 +500,16 @@ impl<'g> MoveMut<'g> {
         self.as_ref().expanded()
     }
 
-    pub fn position_public_mut(&mut self) -> &mut PositionPublic {
-        &mut self.game.tree.position_mut(self.id.into()).public
+    pub fn set_comment(&mut self, comment: Option<Text>) {
+        self.position_mut().set_comment(comment);
     }
 
-    pub fn comment_mut(&mut self) -> &mut Option<Text> {
-        &mut self.position_public_mut().comment
+    pub fn set_valuation(&mut self, valuation: Option<Valuation>) {
+        self.position_mut().set_valuation(valuation);
     }
 
-    pub fn valuation_mut(&mut self) -> &mut Option<Valuation> {
-        &mut self.position_public_mut().valuation
-    }
-
-    pub fn expanded_mut(&mut self) -> &mut bool {
-        &mut self.position_public_mut().expanded
+    pub fn set_expanded(&mut self, expanded: bool) {
+        self.position_mut().set_expanded(expanded);
     }
 
     pub(in crate::game) fn play(&self) -> &Move {
@@ -505,20 +588,29 @@ impl PartialOrd<PositionId> for Order<'_> {
 }
 
 impl Locate for usize {
-    fn locate(self, position: PositionRef<'_>) -> Option<usize> {
-        (self < position.options().len()).then_some(self)
+    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption> {
+        (self < position.options().len())
+            .then_some(self)
+            .ok_or(MissingOption { position: position.id(), location: self.into() })
     }
 }
 
 impl Locate for MoveId {
-    fn locate(self, position: PositionRef<'_>) -> Option<usize> {
-        position.options().iter().position(|id| *id == self)
+    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption> {
+        position
+            .options()
+            .iter()
+            .position(|option| *option == self)
+            .ok_or(MissingOption { position: position.id(), location: self.into() })
     }
 }
 
 impl Locate for chess::Move {
-    fn locate(self, position: PositionRef<'_>) -> Option<usize> {
-        position.iter().position(|option| **option == self)
+    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption> {
+        position
+            .iter()
+            .position(|option| **option == self)
+            .ok_or(MissingOption { position: position.id(), location: self.into() })
     }
 }
 

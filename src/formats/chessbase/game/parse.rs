@@ -446,7 +446,7 @@ mod tests {
     fn mainline(game: &crate::Game) -> Vec<crate::Move> {
         let mut plays = Vec::new();
         let mut position = game.start();
-        while let Some(play) = position.main() {
+        while let Ok(play) = position.main() {
             plays.push(play.play());
             position = play.position();
         }

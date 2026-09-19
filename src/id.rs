@@ -95,7 +95,7 @@ impl Game {
             .update(&self.start().position().id().u128().to_be_bytes());
 
         let mut position = self.start();
-        while let Some(play) = position.main() {
+        while let Ok(play) = position.main() {
             hash = hash.update(b":").update(play.play().uci_960().to_string().as_bytes());
             position = play.position();
         }

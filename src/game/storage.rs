@@ -64,10 +64,10 @@ impl game::Game {
 impl From<&game::Game> for Game {
     fn from(game: &game::Game) -> Self {
         Self {
-            roster: game.roster.clone(),
-            tags: game.tags.clone(),
+            roster: game.roster().clone(),
+            tags: game.tags().to_vec(),
             intro: game.intro.clone(),
-            outcome: game.outcome,
+            outcome: game.outcome(),
             start: game.start().fen(),
             valuation: game.start_options().state().valuation,
             options: game.tree.start().to_vec(),

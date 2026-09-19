@@ -3,7 +3,7 @@ use core::{
     ops::Deref,
 };
 
-use super::*;
+use super::{options, traversal::Locate, *};
 
 // Note: We have three types of cursor, owning Game, &mut Game, &Game,
 // named Cursor, CursorMut, CursorRef.
@@ -39,13 +39,14 @@ impl<G: Borrow<Game>> Cursor<G> {
         PositionRef { game: self.game(), id: self.id }
     }
 
-    pub fn play(&self) -> Option<MoveRef<'_>> {
+    pub fn play(&self) -> start::Result<MoveRef<'_>> {
         self.position().play()
     }
 
-    pub fn at(&self, id: PositionId) -> Option<CursorRef<'_>> {
+    pub fn at(&self, id: PositionId) -> traversal::Result<CursorRef<'_>> {
         let game = self.game();
-        game.tree.contains(id).then(|| Cursor { game, id, preserve: self.preserve.clone() })
+        game.position(id)?;
+        Ok(Cursor { game, id, preserve: self.preserve.clone() })
     }
 }
 
@@ -59,20 +60,20 @@ impl<G: Borrow<Game>> Deref for Cursor<G> {
 
 /// Access API.
 impl<G: BorrowMut<Game>> Cursor<G> {
-    pub fn orientation_mut(&mut self) -> &mut Player {
-        &mut self.game.borrow_mut().orientation
+    pub fn set_orientation(&mut self, orientation: Player) {
+        self.game.borrow_mut().set_orientation(orientation);
     }
 
-    pub fn outcome_mut(&mut self) -> &mut Outcome {
-        &mut self.game.borrow_mut().outcome
+    pub fn set_outcome(&mut self, outcome: Outcome) {
+        self.game.borrow_mut().set_outcome(outcome);
     }
 
-    pub fn roster_mut(&mut self) -> &mut Roster {
-        &mut self.game.borrow_mut().roster
+    pub fn update_roster(&mut self, update: impl FnOnce(&mut Roster)) {
+        self.game.borrow_mut().update_roster(update);
     }
 
-    pub fn tags_mut(&mut self) -> &mut Vec<Tag> {
-        &mut self.game.borrow_mut().tags
+    pub fn update_tags(&mut self, update: impl FnOnce(&mut Vec<Tag>)) {
+        self.game.borrow_mut().update_tags(update);
     }
 
     // "reborrowing" clone
@@ -88,17 +89,17 @@ impl<G: BorrowMut<Game>> Cursor<G> {
         PositionMut { game: self.game.borrow_mut(), id, protected }
     }
 
-    pub fn play_mut(&mut self) -> Option<MoveMut<'_>> {
+    pub fn play_mut(&mut self) -> start::Result<MoveMut<'_>> {
         self.position_mut().into_play()
     }
 
-    pub fn at_mut(&mut self, id: PositionId) -> Option<CursorMut<'_>> {
+    pub fn at_mut(&mut self, id: PositionId) -> traversal::Result<CursorMut<'_>> {
         if !self.game.borrow().tree.contains(id) {
-            return None;
+            return Err(traversal::Error::Position(id));
         }
 
         let preserve = self.protected().unremovable;
-        Some(Cursor { game: self.game.borrow_mut(), id, preserve })
+        Ok(Cursor { game: self.game.borrow_mut(), id, preserve })
     }
 
     fn protected(&self) -> Protected {
@@ -118,7 +119,7 @@ impl<'g> CursorRef<'g> {
         PositionRef { game: self.game, id: self.id }
     }
 
-    pub fn into_play(self) -> Option<MoveRef<'g>> {
+    pub fn into_play(self) -> start::Result<MoveRef<'g>> {
         self.into_position().play()
     }
 }
@@ -132,48 +133,48 @@ impl<'g> CursorMut<'g> {
         PositionMut { game: self.game, id, protected: Protected { unremovable } }
     }
 
-    pub fn into_play_mut(self) -> Option<MoveMut<'g>> {
+    pub fn into_play_mut(self) -> start::Result<MoveMut<'g>> {
         self.into_position_mut().into_play()
     }
 }
 
 /// Traversal API.
 impl<G: Borrow<Game>> Cursor<G> {
-    pub fn set(&mut self, id: PositionId) -> Option<bool> {
+    pub fn set(&mut self, id: PositionId) -> traversal::Result<bool> {
         if !self.game.borrow().tree.contains(id) {
-            return None;
+            return Err(traversal::Error::Position(id));
         }
 
         let changed = self.id != id;
         self.id = id;
-        Some(changed)
+        Ok(changed)
     }
 
-    pub fn prev(&mut self) -> Option<PositionId> {
+    pub fn prev(&mut self) -> start::Result<PositionId> {
         let id = self.position().play()?.previous().id();
         self.id = id;
-        Some(id)
+        Ok(id)
     }
 
     pub fn mainline_end(&mut self) -> PositionId {
-        while self.main().is_some() {}
+        while self.main().is_ok() {}
         self.id
     }
 
-    pub fn main(&mut self) -> Option<PositionId> {
+    pub fn main(&mut self) -> traversal::Result<PositionId> {
         self.option(0)
     }
 
-    pub fn option(&mut self, option: impl Locate) -> Option<PositionId> {
+    pub fn option(&mut self, option: impl Locate) -> traversal::Result<PositionId> {
         let id = self.position().option(option)?.position().id();
         self.id = id;
-        Some(id)
+        Ok(id)
     }
 }
 
 /// Options Mutation API
 impl<G: BorrowMut<Game>> Cursor<G> {
-    pub fn option_mut_or_push(&mut self, play: chess::Move) -> Result<PositionId> {
+    pub fn option_mut_or_push(&mut self, play: chess::Move) -> options::Result<PositionId> {
         let id = self.position_mut().option_mut_or_push(play)?.id().into();
         self.id = id;
         Ok(id)
@@ -202,7 +203,7 @@ impl<G: BorrowMut<Game>> Cursor<G> {
     /// Unlike `self.position_mut().into_remove_play()`, this first retreats the cursor so its
     /// former position is no longer protected by the cursor itself.
     pub fn remove_play(&mut self) -> Result<()> {
-        let play = self.play().ok_or(Error::Missing)?;
+        let play = self.play()?;
         let removed = self.id;
         let id = play.id();
         self.id = play.previous().id();
@@ -229,18 +230,18 @@ mod tests {
         let e5 = chess::Move::normal(Pawn, E7, E5);
 
         assert_eq!(cursor.id(), START);
-        assert_eq!(cursor.prev(), None);
-        assert_eq!(cursor.main(), None);
+        assert!(cursor.prev().is_err());
+        assert!(cursor.main().is_err());
 
         cursor.option_mut_or_push(e4).unwrap();
         let after_e4 = cursor.id();
         cursor.option_mut_or_push(e5).unwrap();
         let after_e5 = cursor.id();
 
-        assert_eq!(cursor.prev(), Some(after_e4));
-        assert_eq!(cursor.main(), Some(after_e5));
-        assert_eq!(cursor.set(after_e5), Some(false));
-        assert_eq!(cursor.play().map(|play| **play), Some(e5));
+        assert_eq!(cursor.prev().unwrap(), after_e4);
+        assert_eq!(cursor.main().unwrap(), after_e5);
+        assert!(!cursor.set(after_e5).unwrap());
+        assert_eq!(**cursor.play().unwrap(), e5);
     }
 
     #[test]
@@ -257,18 +258,22 @@ mod tests {
         let d4 = game.start_mut().into_push(chess::Move::normal(Pawn, D2, D4)).unwrap().id();
 
         let mut cursor = Cursor::new(game);
-        assert_eq!(cursor.set(e5.into()), Some(true));
+        assert!(cursor.set(e5.into()).unwrap());
 
         let mut root = cursor.at_mut(START).unwrap();
         let mut start = root.position_mut();
-        assert!(matches!(start.remove(e4), Err(Error::Unremovable(id)) if id == e5.into()));
+        assert!(matches!(
+            start.remove(e4),
+            Err(Error::Options(options::Error::Remove(options::Remove::Unremovable(id))))
+                if id == e5.into()
+        ));
         assert!(start.remove(d4).is_ok());
 
         assert_eq!(cursor.id(), e5.into());
         assert_eq!(cursor.position().id(), e5.into());
-        assert!(cursor.game().play(e4).is_some());
-        assert!(cursor.game().play(e5).is_some());
-        assert!(cursor.game().play(d4).is_none());
+        assert!(cursor.game().play(e4).is_ok());
+        assert!(cursor.game().play(e5).is_ok());
+        assert!(cursor.game().play(d4).is_err());
     }
 
     #[test]
@@ -281,9 +286,9 @@ mod tests {
         assert_eq!(cursor.id(), e5);
         assert!(cursor.remove_play().is_ok());
         assert_eq!(cursor.id(), e4);
-        assert!(cursor.game().position(e5).is_none());
+        assert!(cursor.game().position(e5).is_err());
         assert!(cursor.remove_play().is_ok());
         assert_eq!(cursor.id(), START);
-        assert!(matches!(cursor.remove_play(), Err(Error::Missing)));
+        assert!(matches!(cursor.remove_play(), Err(Error::Start(start::Error))));
     }
 }

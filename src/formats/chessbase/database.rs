@@ -163,30 +163,36 @@ impl Indexed {
     fn enrich(self, game: &mut crate::Game) {
         let Self { index, black, tournament, white } = self;
 
-        game.roster.white = white.and_then(player_name);
-        game.roster.black = black.and_then(player_name);
-        game.roster.date = date(index.date);
-        game.roster.round = round(index.round, index.subround);
-        game.outcome = match index.outcome {
+        game.update_roster(|roster| {
+            roster.white = white.and_then(player_name);
+            roster.black = black.and_then(player_name);
+            roster.date = date(index.date);
+            roster.round = round(index.round, index.subround);
+        });
+        game.set_outcome(match index.outcome {
             index::Outcome::WhiteWins => native::Outcome::White,
             index::Outcome::BlackWins => native::Outcome::Black,
             index::Outcome::Draw => native::Outcome::Draw,
             _ => native::Outcome::Unknown,
-        };
+        });
 
         if let Some(white_elo) = index.white_elo {
-            game.tags.push(tag("WhiteElo", white_elo));
+            game.update_tags(|tags| tags.push(tag("WhiteElo", white_elo)));
         }
         if let Some(black_elo) = index.black_elo {
-            game.tags.push(tag("BlackElo", black_elo));
+            game.update_tags(|tags| tags.push(tag("BlackElo", black_elo)));
         }
         if let Some(tournament) = tournament {
-            game.roster.event = Text::new(tournament.title).ok();
-            game.roster.site = Text::new(tournament.place).ok();
+            game.update_roster(|roster| {
+                roster.event = Text::new(tournament.title).ok();
+                roster.site = Text::new(tournament.place).ok();
+            });
             if let Some(date) = date(tournament.date) {
-                game.tags.push(Tag {
-                    key: Text::new("EventDate").expect("tag name is non-empty"),
-                    value: date.to_string(),
+                game.update_tags(|tags| {
+                    tags.push(Tag {
+                        key: Text::new("EventDate").expect("tag name is non-empty"),
+                        value: date.to_string(),
+                    });
                 });
             }
         }
@@ -755,10 +761,10 @@ mod tests {
         assert!(database.game(0).unwrap().is_some());
         assert!(database.game(1).unwrap().is_none());
         let game = database.games().unwrap().next().expect("first game").unwrap();
-        assert!(game.roster.white.is_some());
-        assert!(game.roster.black.is_some());
-        assert!(game.roster.event.is_some());
-        assert!(game.roster.site.is_some());
+        assert!(game.roster().white.is_some());
+        assert!(game.roster().black.is_some());
+        assert!(game.roster().event.is_some());
+        assert!(game.roster().site.is_some());
     }
 
     #[test]
@@ -789,10 +795,10 @@ mod tests {
         let mut database = Database { reader: archive };
         assert!(database.game(0).unwrap().is_some());
         let game = database.games().unwrap().next().expect("first archived game").unwrap();
-        assert!(game.roster.white.is_some());
-        assert!(game.roster.black.is_some());
-        assert!(game.roster.event.is_some());
-        assert!(game.roster.site.is_some());
+        assert!(game.roster().white.is_some());
+        assert!(game.roster().black.is_some());
+        assert!(game.roster().event.is_some());
+        assert!(game.roster().site.is_some());
     }
 
     #[test]

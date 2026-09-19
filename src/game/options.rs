@@ -1,4 +1,34 @@
-use super::{tree::Node, *};
+use super::{self as game, traversal::Locate, tree::Node, *};
+
+/// An error from mutating the options in a game tree.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Insert(#[from] Insert),
+    #[error(transparent)]
+    Remove(#[from] Remove),
+}
+
+/// An error from inserting an option.
+#[derive(Debug, thiserror::Error)]
+pub enum Insert {
+    #[error("move already exists at index {0}")]
+    Duplicate(usize),
+    #[error("illegal move")]
+    Illegal,
+    #[error("move ID space exhausted")]
+    Exhausted,
+}
+
+/// An error from removing an option.
+#[derive(Debug, thiserror::Error)]
+pub enum Remove {
+    #[error("position {0:?} may not be removed")]
+    Unremovable(PositionId),
+}
+
+/// A result of mutating the options in a game tree.
+pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 /// Options Mutation API
 impl<'g> PositionMut<'g> {
@@ -16,21 +46,26 @@ impl<'g> PositionMut<'g> {
     // not work here due to borrow checker limitations - even though
     // it is "obviously" correct.
     pub fn option_mut_or_push(&mut self, play: chess::Move) -> Result<MoveMut<'_>> {
-        if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
+        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
             return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
         }
         self.push(play)
     }
 
     pub fn into_option_or_push(self, play: chess::Move) -> Result<MoveMut<'g>> {
-        if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
+        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
             return Ok(MoveMut { game: self.game, id, protected: self.protected });
         }
         self.into_push(play)
     }
 
-    pub fn insert_before(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveMut<'_>> {
-        let id = self.insert_before_option(option, play)?;
+    pub fn insert_before(
+        &mut self,
+        option: impl Locate,
+        play: chess::Move,
+    ) -> game::Result<MoveMut<'_>> {
+        let index = self.as_ref().index(option)?;
+        let id = self.insert_at(index, play)?;
         Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
     }
 
@@ -38,8 +73,9 @@ impl<'g> PositionMut<'g> {
         mut self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<MoveMut<'g>> {
-        let id = self.insert_before_option(option, play)?;
+    ) -> game::Result<MoveMut<'g>> {
+        let index = self.as_ref().index(option)?;
+        let id = self.insert_at(index, play)?;
         Ok(MoveMut { game: self.game, id, protected: self.protected })
     }
 
@@ -47,8 +83,8 @@ impl<'g> PositionMut<'g> {
         &mut self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<MoveMut<'_>> {
-        if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
+    ) -> game::Result<MoveMut<'_>> {
+        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
             return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
         }
         self.insert_before(option, play)
@@ -58,33 +94,45 @@ impl<'g> PositionMut<'g> {
         self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<MoveMut<'g>> {
-        if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
+    ) -> game::Result<MoveMut<'g>> {
+        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
             return Ok(MoveMut { game: self.game, id, protected: self.protected });
         }
         self.into_insert_before(option, play)
     }
 
-    pub fn insert_after(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveMut<'_>> {
-        let id = self.insert_after_option(option, play)?;
-        Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
+    pub fn insert_after(
+        &mut self,
+        option: impl Locate,
+        play: chess::Move,
+    ) -> game::Result<MoveMut<'_>> {
+        let index = self.as_ref().index(option)? + 1;
+        if index == self.options().len() {
+            Ok(self.push(play)?)
+        } else {
+            self.insert_before(index, play)
+        }
     }
 
     pub fn into_insert_after(
-        mut self,
+        self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<MoveMut<'g>> {
-        let id = self.insert_after_option(option, play)?;
-        Ok(MoveMut { game: self.game, id, protected: self.protected })
+    ) -> game::Result<MoveMut<'g>> {
+        let index = self.as_ref().index(option)? + 1;
+        if index == self.options().len() {
+            Ok(self.into_push(play)?)
+        } else {
+            self.into_insert_before(index, play)
+        }
     }
 
     pub fn option_mut_or_insert_after(
         &mut self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<MoveMut<'_>> {
-        if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
+    ) -> game::Result<MoveMut<'_>> {
+        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
             return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
         }
         self.insert_after(option, play)
@@ -94,25 +142,36 @@ impl<'g> PositionMut<'g> {
         self,
         option: impl Locate,
         play: chess::Move,
-    ) -> Result<MoveMut<'g>> {
-        if let Some(id) = self.as_ref().option(play).map(|option| option.id()) {
+    ) -> game::Result<MoveMut<'g>> {
+        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
             return Ok(MoveMut { game: self.game, id, protected: self.protected });
         }
         self.into_insert_after(option, play)
     }
 
-    pub fn pop(&mut self) -> Result<()> {
-        let index = self.options().len().checked_sub(1).ok_or(Error::Missing)?;
-        self.remove_index(index)
+    pub fn pop(&mut self) -> game::Result<()> {
+        self.remove(self.options().len().saturating_sub(1))
     }
 
-    pub fn remove(&mut self, option: impl Locate) -> Result<()> {
-        let index = self.as_ref().index(option).ok_or(Error::Missing)?;
-        self.remove_index(index)
+    pub fn remove(&mut self, option: impl Locate) -> game::Result<()> {
+        let index = self.as_ref().index(option)?;
+        let id = self.position().options[index];
+        if let Some(id) =
+            self.protected.unremovable.iter().copied().find(|at| self.game.order(*at) >= id.into())
+        {
+            return Err(Error::from(Remove::Unremovable(id)).into());
+        }
+
+        let branch = self.game.undo.on.then(|| self.game.tree.branch(id));
+        self.remove_untracked(index)?;
+        if let Some(branch) = branch {
+            self.game.undo.stack.push(patch::Patch::Insert { position: self.id, index, branch });
+        }
+        Ok(())
     }
 
-    pub fn into_remove_play(self) -> Result<PositionMut<'g>> {
-        let play = self.as_ref().play().ok_or(Error::Missing)?;
+    pub fn into_remove_play(self) -> game::Result<PositionMut<'g>> {
+        let play = self.as_ref().play()?;
         let id = play.id();
         let previous = play.previous().id();
         let mut position = PositionMut { game: self.game, id: previous, protected: self.protected };
@@ -120,97 +179,98 @@ impl<'g> PositionMut<'g> {
         Ok(position)
     }
 
-    pub fn swap(&mut self, a: impl Locate, b: impl Locate) -> Result<bool> {
-        let position = self.as_ref();
-        let a = position.index(a).ok_or(Error::Missing)?;
-        let b = position.index(b).ok_or(Error::Missing)?;
-        Ok(self.swap_index(a, b))
-    }
-
-    pub fn raise(&mut self, option: impl Locate) -> Result<bool> {
-        let index = self.as_ref().index(option).ok_or(Error::Missing)?;
-        if index == 0 {
-            Ok(false)
-        } else {
-            self.swap_index(index - 1, index);
-            Ok(true)
+    pub fn swap(&mut self, a: impl Locate, b: impl Locate) -> traversal::Result<bool> {
+        let (a, b) = {
+            let position = self.as_ref();
+            let a = position.index(a)?;
+            let b = position.index(b)?;
+            (a, b)
+        };
+        let changed = self.swap_untracked(a, b)?;
+        if self.game.undo.on && changed {
+            self.game.undo.stack.push(patch::Patch::Swap { position: self.id, a, b });
         }
+        Ok(changed)
     }
 
-    pub fn raise_play(&mut self) -> Option<bool> {
+    pub fn raise(&mut self, option: impl Locate) -> traversal::Result<bool> {
+        let index = self.as_ref().index(option)?;
+        if index == 0 { Ok(false) } else { self.reorder_tracked(index, index - 1) }
+    }
+
+    pub fn raise_play(&mut self) -> start::Result<bool> {
         let mut play = self.play_mut()?;
         let id = play.id();
-        play.previous_mut().raise(id).ok()
+        Ok(play.previous_mut().raise(id).expect("incoming move exists in previous position"))
     }
 
-    pub fn lower(&mut self, option: impl Locate) -> Result<bool> {
-        let index = self.as_ref().index(option).ok_or(Error::Missing)?;
+    pub fn lower(&mut self, option: impl Locate) -> traversal::Result<bool> {
+        let index = self.as_ref().index(option)?;
         if index + 1 == self.options().len() {
             Ok(false)
         } else {
-            self.swap_index(index, index + 1);
-            Ok(true)
+            self.reorder_tracked(index, index + 1)
         }
     }
 
-    pub fn lower_play(&mut self) -> Option<bool> {
+    pub fn lower_play(&mut self) -> start::Result<bool> {
         let mut play = self.play_mut()?;
         let id = play.id();
-        play.previous_mut().lower(id).ok()
+        Ok(play.previous_mut().lower(id).expect("incoming move exists in previous position"))
     }
 
-    pub fn promote(&mut self, option: impl Locate) -> Result<bool> {
-        let index = self.as_ref().index(option).ok_or(Error::Missing)?;
+    pub fn promote(&mut self, option: impl Locate) -> traversal::Result<bool> {
+        let index = self.as_ref().index(option)?;
         if index == 0 {
             return Ok(false);
         }
 
-        let id = self.position_mut().options.remove(index);
-        self.position_mut().options.insert(0, id);
-        Ok(true)
+        self.reorder_tracked(index, 0)
     }
 
-    pub fn promote_play(&mut self) -> Option<bool> {
+    pub fn promote_play(&mut self) -> start::Result<bool> {
         let mut play = self.play_mut()?;
         let id = play.id();
-        play.previous_mut().promote(id).ok()
+        Ok(play.previous_mut().promote(id).expect("incoming move exists in previous position"))
     }
 
-    pub fn demote(&mut self, option: impl Locate) -> Result<bool> {
-        let index = self.as_ref().index(option).ok_or(Error::Missing)?;
+    pub fn demote(&mut self, option: impl Locate) -> traversal::Result<bool> {
+        let index = self.as_ref().index(option)?;
         if index + 1 == self.options().len() {
             return Ok(false);
         }
 
-        let id = self.position_mut().options.remove(index);
-        self.position_mut().options.push(id);
-        Ok(true)
+        let last = self.options().len() - 1;
+        self.reorder_tracked(index, last)
     }
 
-    pub fn demote_play(&mut self) -> Option<bool> {
+    pub fn demote_play(&mut self) -> start::Result<bool> {
         let mut play = self.play_mut()?;
         let id = play.id();
-        play.previous_mut().demote(id).ok()
-    }
-
-    fn insert_before_option(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveId> {
-        let index = self.as_ref().index(option).ok_or(Error::Missing)?;
-        self.insert_at(index, play)
-    }
-
-    fn insert_after_option(&mut self, option: impl Locate, play: chess::Move) -> Result<MoveId> {
-        let index = self.as_ref().index(option).ok_or(Error::Missing)?;
-        self.insert_at(index + 1, play)
+        Ok(play.previous_mut().demote(id).expect("incoming move exists in previous position"))
     }
 
     fn insert_at(&mut self, index: usize, play: chess::Move) -> Result<MoveId> {
+        let id = self.insert_at_untracked(None, index, play)?;
+        if self.game.undo.on {
+            self.game.undo.stack.push(patch::Patch::Remove(id));
+        }
+        Ok(id)
+    }
+
+    pub(in crate::game) fn insert_at_untracked(
+        &mut self,
+        id: Option<MoveId>,
+        index: usize,
+        play: chess::Move,
+    ) -> Result<MoveId> {
         let node = {
             let position = self.as_ref();
-            if let Some(index) = position.index(play) {
-                return Err(Error::Duplicate(index));
+            if let Ok(index) = position.index(play) {
+                return Err(Insert::Duplicate(index).into());
             }
             if !position.legal().contains(&play) {
-                return Err(Error::Illegal);
+                return Err(Insert::Illegal.into());
             }
 
             let play = Move {
@@ -223,32 +283,74 @@ impl<'g> PositionMut<'g> {
             Node { position: Position::new(position), play: Some(play) }
         };
 
-        let id = self.game.tree.insert(node);
+        let id = match id {
+            Some(id) => {
+                if id.next().is_none() {
+                    return Err(Insert::Exhausted.into());
+                }
+                let inserted = self.game.tree.insert_at(id, node);
+                assert!(inserted, "move ID unavailable");
+                id
+            }
+            None => self.game.tree.insert(node).ok_or(Insert::Exhausted)?,
+        };
         self.position_mut().options.insert(index, id);
         Ok(id)
     }
 
-    fn remove_index(&mut self, index: usize) -> Result<()> {
-        let id = self.position().options.get(index).copied().ok_or(Error::Missing)?;
-        if let Some(id) =
-            self.protected.unremovable.iter().copied().find(|at| self.game.order(*at) >= id.into())
-        {
-            return Err(Error::Unremovable(id));
-        }
-
+    pub(in crate::game) fn remove_untracked(
+        &mut self,
+        option: impl Locate,
+    ) -> traversal::Result<()> {
+        let index = self.as_ref().index(option)?;
+        let id = self.position().options[index];
         self.position_mut().options.remove(index);
         let removed = self.game.tree.remove(id);
         debug_assert!(removed);
         Ok(())
     }
 
-    fn swap_index(&mut self, a: usize, b: usize) -> bool {
+    pub(in crate::game) fn swap_untracked(
+        &mut self,
+        a: impl Locate,
+        b: impl Locate,
+    ) -> traversal::Result<bool> {
+        let a = self.as_ref().index(a)?;
+        let b = self.as_ref().index(b)?;
         if a == b {
-            false
+            Ok(false)
         } else {
             self.position_mut().options.swap(a, b);
-            true
+            Ok(true)
         }
+    }
+
+    pub(in crate::game) fn reorder_untracked(
+        &mut self,
+        from: impl Locate,
+        to: impl Locate,
+    ) -> traversal::Result<bool> {
+        let from = self.as_ref().index(from)?;
+        let to = self.as_ref().index(to)?;
+        if from == to {
+            return Ok(false);
+        }
+
+        let play = self.position_mut().options.remove(from);
+        self.position_mut().options.insert(to, play);
+        Ok(true)
+    }
+
+    fn reorder_tracked(&mut self, from: usize, to: usize) -> traversal::Result<bool> {
+        let changed = self.reorder_untracked(from, to)?;
+        if self.game.undo.on && changed {
+            self.game.undo.stack.push(patch::Patch::Reorder {
+                position: self.id,
+                from: to,
+                to: from,
+            });
+        }
+        Ok(changed)
     }
 }
 
@@ -298,6 +400,6 @@ mod tests {
         let previous = game.position_mut(e5.into()).unwrap().into_remove_play().unwrap();
         assert_eq!(previous.id(), e4.into());
         assert!(!previous.as_ref().has_options());
-        assert!(previous.game().play(e5).is_none());
+        assert!(previous.game().play(e5).is_err());
     }
 }

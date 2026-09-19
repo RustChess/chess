@@ -53,7 +53,7 @@ fn is_checkmate(position: Position) -> bool {
     position.is_check() && position.legal_plays().is_empty()
 }
 
-fn san(position: Position, play: Move) -> game::Result<San> {
+fn san(position: Position, play: Move) -> game::options::Result<San> {
     let mut game = Game::new(position);
     Ok(game.start_mut().into_push(play)?.san())
 }

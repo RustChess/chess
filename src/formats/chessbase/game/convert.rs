@@ -22,6 +22,8 @@ pub enum Error {
     Move { from: Square, to: Square },
     #[error(transparent)]
     Game(#[from] crate::game::Error),
+    #[error(transparent)]
+    Options(#[from] crate::game::options::Error),
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
