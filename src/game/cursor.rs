@@ -3,7 +3,7 @@ use core::{
     ops::Deref,
 };
 
-use super::{options, traversal::Locate, *};
+use super::{options, traversal::Choose, *};
 
 // Note: We have three types of cursor, owning Game, &mut Game, &Game,
 // named Cursor, CursorMut, CursorRef.
@@ -165,7 +165,7 @@ impl<G: Borrow<Game>> Cursor<G> {
         self.option(0)
     }
 
-    pub fn option(&mut self, option: impl Locate) -> traversal::Result<PositionId> {
+    pub fn option(&mut self, option: impl Choose) -> traversal::Result<PositionId> {
         let id = self.position().option(option)?.position().id();
         self.id = id;
         Ok(id)
@@ -182,7 +182,7 @@ impl<G: BorrowMut<Game>> Cursor<G> {
 
     pub fn option_mut_or_insert_before(
         &mut self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> Result<PositionId> {
         let id = self.position_mut().option_mut_or_insert_before(option, play)?.id().into();
@@ -192,7 +192,7 @@ impl<G: BorrowMut<Game>> Cursor<G> {
 
     pub fn option_mut_or_insert_after(
         &mut self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> Result<PositionId> {
         let id = self.position_mut().option_mut_or_insert_after(option, play)?.id().into();

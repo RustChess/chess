@@ -1,6 +1,6 @@
-use core::ops::Deref;
+use core::{fmt, num::NonZeroU32, ops::Deref, str::FromStr};
 
-use std::collections::BTreeSet as Set;
+use std::collections::{BTreeMap as Map, BTreeSet as Set};
 
 use crate as chess;
 use crate::{
@@ -9,14 +9,17 @@ use crate::{
     square::{File, Rank},
 };
 
+use self::layout::Layout as _;
+
 // #[cfg(feature = "serde")]
 // pub mod storage;
 
+pub mod change;
 pub mod options;
-pub mod patch;
 pub mod traversal;
 
 mod cursor;
+mod layout;
 pub(in crate::game) mod tree;
 
 /// An error from accessing or editing a game tree.
@@ -29,7 +32,7 @@ pub enum Error {
     #[error(transparent)]
     Options(#[from] options::Error),
     #[error(transparent)]
-    Patch(#[from] patch::Error),
+    Change(#[from] change::Error),
 }
 
 /// A result of editing a game tree.
@@ -50,7 +53,7 @@ pub mod start {
 #[derive(Clone, PartialEq)]
 pub struct Game {
     mode: Mode,
-    undo: patch::Undo,
+    changes: Option<Vec<change::Change>>,
     tree: tree::Tree,
     public: GamePublic,
 }
@@ -77,17 +80,17 @@ impl Default for GamePublic {
 
 /// The stable identity of a position within a game.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, PartialOrd, Eq, Ord, Serialize)]
-#[serde(from = "Option<MoveId>", into = "Option<MoveId>")]
+#[serde(from = "u32", into = "u32")]
 pub enum PositionId {
-    Move(MoveId),
     #[default]
     Start,
+    Move(MoveId),
 }
 
 /// The stable identity of a move within a game.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, PartialOrd, Eq, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, PartialOrd, Eq, Ord, Serialize)]
 #[serde(transparent)]
-pub struct MoveId(u32);
+pub struct MoveId(NonZeroU32);
 
 /// The starting position identity.
 pub const START: PositionId = PositionId::Start;
@@ -202,6 +205,22 @@ pub struct Command {
     pub parameters: Vec<String>,
 }
 
+/// A detached, injective mapping from every pre-compaction move ID to its compact ID.
+///
+/// Moreover, each compact move ID is greater than the ID of the position containing it as an option.
+pub struct Compact(Map<MoveId, MoveId>);
+
+/// Canonical tree-slot assignment order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Layout {
+    /// The move encounter order used while constructing a game from PGN.
+    ///
+    /// For `1. e4 (1. d4 d5) e5`, IDs are assigned to `e4`, `d4`, `d5`, then `e5`
+    /// consecutively as 1, 2, 3, 4.
+    Pgn,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Valuation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -294,23 +313,41 @@ impl Game {
         Self::unchecked_with_mode(position, Mode::Freestyle)
     }
 
+    /// Reassigns move IDs in a prescribed layout and returns the old-to-new mapping.
+    ///
+    /// Tracked changes are discarded, as they use the the old IDs.
+    /// Change tracking remains enabled or disabled as configured.
+    pub fn compact(&mut self, layout: Layout) -> Compact {
+        let compact = layout.compact(self);
+        self.tree.compact(&compact);
+        if let Some(changes) = self.changes.as_mut() {
+            changes.clear();
+        }
+        compact
+    }
+
     pub const fn mode(&self) -> Mode {
         self.mode
     }
 
-    pub const fn has_undo(&self) -> bool {
-        self.undo.on
+    pub const fn tracks_changes(&self) -> bool {
+        self.changes.is_some()
     }
 
-    pub fn set_undo(&mut self, on: bool) {
-        self.undo.on = on;
-        if !on {
-            self.undo.stack.clear();
+    pub fn track_changes(&mut self, on: bool) {
+        if on {
+            self.changes.get_or_insert_default();
+        } else {
+            self.changes = None;
         }
     }
 
-    pub fn patches(&self) -> &[patch::Patch] {
-        &self.undo.stack
+    pub fn changes(&self) -> Option<&[change::Change]> {
+        self.changes.as_deref()
+    }
+
+    pub fn revisions(&self) -> Option<usize> {
+        self.changes.as_ref().map(Vec::len)
     }
 
     pub const fn public(&self) -> &GamePublic {
@@ -349,24 +386,24 @@ impl Game {
         self.update_public(|public| update(&mut public.tags));
     }
 
-    fn update_public(&mut self, update: impl FnOnce(&mut GamePublic)) {
-        let before = self.undo.on.then(|| self.public.clone());
+    pub fn update_public(&mut self, update: impl FnOnce(&mut GamePublic)) {
+        let before = self.tracks_changes().then(|| self.public.clone());
         update(&mut self.public);
         if let Some(before) = before
             && before != self.public
         {
-            self.undo.stack.push(patch::Patch::Game(before));
+            self.track(change::Patch::Game(before));
         }
     }
 
     fn unchecked_with_mode(position: chess::Position, mode: Mode) -> Self {
-        Self::unchecked_with_mode_next(position, mode, MoveId::default())
+        Self::unchecked_with_mode_next(position, mode, MoveId::MIN)
     }
 
     fn unchecked_with_mode_next(position: chess::Position, mode: Mode, next: MoveId) -> Self {
         Self {
             mode,
-            undo: Default::default(),
+            changes: None,
             tree: tree::Tree::new(position, next),
             public: Default::default(),
         }
@@ -511,6 +548,9 @@ impl PositionId {
 }
 
 impl MoveId {
+    pub const MIN: Self = Self(NonZeroU32::MIN);
+    pub const MAX: Self = Self(NonZeroU32::MAX);
+
     pub const fn next(self) -> Option<Self> {
         match self.0.checked_add(1) {
             Some(id) => Some(Self(id)),
@@ -519,10 +559,45 @@ impl MoveId {
     }
 
     pub const fn prev(self) -> Option<Self> {
-        match self.0.checked_sub(1) {
+        match NonZeroU32::new(self.0.get() - 1) {
             Some(id) => Some(Self(id)),
             None => None,
         }
+    }
+
+    /// Maps iterator.enumerate() indices 0, 1, 2...
+    /// to Self::MIN = 1, Self::MIN + 1 = 2, etc.
+    pub fn from_index(index: usize) -> Option<Self> {
+        let id = u32::try_from(index).ok()?.checked_add(1)?;
+        Some(Self(NonZeroU32::new(id)?))
+    }
+}
+
+impl fmt::Display for MoveId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for MoveId {
+    type Err = <NonZeroU32 as FromStr>::Err;
+
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
+        s.parse().map(Self)
+    }
+}
+
+impl fmt::Display for PositionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", u32::from(*self))
+    }
+}
+
+impl FromStr for PositionId {
+    type Err = <u32 as FromStr>::Err;
+
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
+        s.parse::<u32>().map(Self::from)
     }
 }
 
@@ -532,20 +607,57 @@ impl From<MoveId> for PositionId {
     }
 }
 
-impl From<Option<MoveId>> for PositionId {
-    fn from(id: Option<MoveId>) -> Self {
-        match id {
-            Some(id) => Self::Move(id),
+impl From<NonZeroU32> for MoveId {
+    fn from(id: NonZeroU32) -> Self {
+        Self(id)
+    }
+}
+
+impl From<MoveId> for NonZeroU32 {
+    fn from(id: MoveId) -> Self {
+        id.0
+    }
+}
+
+impl From<u32> for PositionId {
+    fn from(id: u32) -> Self {
+        match NonZeroU32::new(id) {
+            Some(id) => Self::Move(MoveId(id)),
             None => Self::Start,
         }
     }
 }
 
-impl From<PositionId> for Option<MoveId> {
+impl From<PositionId> for u32 {
     fn from(id: PositionId) -> Self {
         match id {
-            PositionId::Move(id) => Some(id),
-            PositionId::Start => None,
+            PositionId::Move(id) => id.0.get(),
+            PositionId::Start => 0,
+        }
+    }
+}
+
+impl Compact {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (MoveId, MoveId)> + '_ {
+        self.0.iter().map(|(&before, &after)| (before, after))
+    }
+
+    pub fn play(&self, id: MoveId) -> Option<MoveId> {
+        self.0.get(&id).copied()
+    }
+
+    pub fn position(&self, id: PositionId) -> Option<PositionId> {
+        match id {
+            PositionId::Move(id) => self.play(id).map(Into::into),
+            PositionId::Start => Some(PositionId::Start),
         }
     }
 }
@@ -604,5 +716,63 @@ impl Short {
         }
 
         short
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_sorts_before_moves() {
+        // Tree compaction derives the next move ID from the greatest position ID.
+        assert!(PositionId::Start < PositionId::Move(MoveId::MIN));
+    }
+
+    #[test]
+    fn position_ids_are_u32s() {
+        for (position, integer) in [
+            (PositionId::Start, 0),
+            (PositionId::Move(MoveId::MIN), 1),
+            (PositionId::Move(MoveId::MAX), u32::MAX),
+        ] {
+            assert_eq!(PositionId::from(integer), position);
+            assert_eq!(u32::from(position), integer);
+        }
+    }
+
+    #[test]
+    fn move_ids_are_nonzero_u32s() {
+        for integer in [NonZeroU32::MIN, NonZeroU32::MAX] {
+            let id = MoveId::from(integer);
+            assert_eq!(NonZeroU32::from(id), integer);
+        }
+    }
+
+    #[test]
+    fn ids_are_numeric_text() {
+        let play = MoveId::from_index(21).unwrap();
+
+        assert_eq!(play.to_string(), "22");
+        assert_eq!("22".parse::<MoveId>().unwrap(), play);
+        assert!("0".parse::<MoveId>().is_err());
+
+        assert_eq!(PositionId::Start.to_string(), "0");
+        assert_eq!("0".parse::<PositionId>().unwrap(), PositionId::Start);
+        assert_eq!(PositionId::Move(play).to_string(), "22");
+        assert_eq!("22".parse::<PositionId>().unwrap(), PositionId::Move(play));
+    }
+
+    #[test]
+    fn ids_are_json_numbers() {
+        let play = MoveId::from_index(21).unwrap();
+
+        assert_eq!(serde_json::to_string(&play).unwrap(), "22");
+        assert_eq!(serde_json::from_str::<MoveId>("22").unwrap(), play);
+
+        assert_eq!(serde_json::to_string(&PositionId::Start).unwrap(), "0");
+        assert_eq!(serde_json::from_str::<PositionId>("0").unwrap(), PositionId::Start);
+        assert_eq!(serde_json::to_string(&PositionId::Move(play)).unwrap(), "22");
+        assert_eq!(serde_json::from_str::<PositionId>("22").unwrap(), PositionId::Move(play));
     }
 }

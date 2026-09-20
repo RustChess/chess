@@ -1,4 +1,4 @@
-use super::{self as game, traversal::Locate, tree::Node, *};
+use super::{self as game, traversal::Choose, tree::Node, *};
 
 /// An error from mutating the options in a game tree.
 #[derive(Debug, thiserror::Error)]
@@ -23,7 +23,7 @@ pub enum Insert {
 /// An error from removing an option.
 #[derive(Debug, thiserror::Error)]
 pub enum Remove {
-    #[error("position {0:?} may not be removed")]
+    #[error("position ID {0} may not be removed")]
     Unremovable(PositionId),
 }
 
@@ -61,7 +61,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn insert_before(
         &mut self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'_>> {
         let index = self.as_ref().index(option)?;
@@ -71,7 +71,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn into_insert_before(
         mut self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'g>> {
         let index = self.as_ref().index(option)?;
@@ -81,7 +81,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn option_mut_or_insert_before(
         &mut self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'_>> {
         if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
@@ -92,7 +92,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn into_option_or_insert_before(
         self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'g>> {
         if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
@@ -103,7 +103,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn insert_after(
         &mut self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'_>> {
         let index = self.as_ref().index(option)? + 1;
@@ -116,7 +116,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn into_insert_after(
         self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'g>> {
         let index = self.as_ref().index(option)? + 1;
@@ -129,7 +129,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn option_mut_or_insert_after(
         &mut self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'_>> {
         if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
@@ -140,7 +140,7 @@ impl<'g> PositionMut<'g> {
 
     pub fn into_option_or_insert_after(
         self,
-        option: impl Locate,
+        option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'g>> {
         if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
@@ -153,7 +153,7 @@ impl<'g> PositionMut<'g> {
         self.remove(self.options().len().saturating_sub(1))
     }
 
-    pub fn remove(&mut self, option: impl Locate) -> game::Result<()> {
+    pub fn remove(&mut self, option: impl Choose) -> game::Result<()> {
         let index = self.as_ref().index(option)?;
         let id = self.position().options[index];
         if let Some(id) =
@@ -162,10 +162,10 @@ impl<'g> PositionMut<'g> {
             return Err(Error::from(Remove::Unremovable(id)).into());
         }
 
-        let branch = self.game.undo.on.then(|| self.game.tree.branch(id));
+        let branch = self.game.tracks_changes().then(|| self.game.tree.branch(id));
         self.remove_untracked(index)?;
         if let Some(branch) = branch {
-            self.game.undo.stack.push(patch::Patch::Insert { position: self.id, index, branch });
+            self.game.track(change::Patch::Insert { position: self.id, index, branch });
         }
         Ok(())
     }
@@ -179,81 +179,50 @@ impl<'g> PositionMut<'g> {
         Ok(position)
     }
 
-    pub fn swap(&mut self, a: impl Locate, b: impl Locate) -> traversal::Result<bool> {
-        let (a, b) = {
-            let position = self.as_ref();
-            let a = position.index(a)?;
-            let b = position.index(b)?;
-            (a, b)
-        };
+    pub fn swap(&mut self, a: impl Choose, b: impl Choose) -> traversal::Result<bool> {
+        let position = self.as_ref();
+        let a = position.index(a)?;
+        let b = position.index(b)?;
         let changed = self.swap_untracked(a, b)?;
-        if self.game.undo.on && changed {
-            self.game.undo.stack.push(patch::Patch::Swap { position: self.id, a, b });
+        if self.game.tracks_changes() && changed {
+            self.game.track(change::Patch::Swap { position: self.id, a, b });
         }
         Ok(changed)
     }
 
-    pub fn raise(&mut self, option: impl Locate) -> traversal::Result<bool> {
+    pub fn raise(&mut self, option: impl Choose) -> traversal::Result<bool> {
         let index = self.as_ref().index(option)?;
-        if index == 0 { Ok(false) } else { self.reorder_tracked(index, index - 1) }
+        if index == 0 { Ok(false) } else { self.drag(index, index - 1) }
     }
 
-    pub fn raise_play(&mut self) -> start::Result<bool> {
-        let mut play = self.play_mut()?;
-        let id = play.id();
-        Ok(play.previous_mut().raise(id).expect("incoming move exists in previous position"))
-    }
-
-    pub fn lower(&mut self, option: impl Locate) -> traversal::Result<bool> {
+    pub fn lower(&mut self, option: impl Choose) -> traversal::Result<bool> {
         let index = self.as_ref().index(option)?;
-        if index + 1 == self.options().len() {
-            Ok(false)
-        } else {
-            self.reorder_tracked(index, index + 1)
-        }
+        if index + 1 == self.options().len() { Ok(false) } else { self.drag(index, index + 1) }
     }
 
-    pub fn lower_play(&mut self) -> start::Result<bool> {
-        let mut play = self.play_mut()?;
-        let id = play.id();
-        Ok(play.previous_mut().lower(id).expect("incoming move exists in previous position"))
-    }
-
-    pub fn promote(&mut self, option: impl Locate) -> traversal::Result<bool> {
+    pub fn promote(&mut self, option: impl Choose) -> traversal::Result<bool> {
         let index = self.as_ref().index(option)?;
         if index == 0 {
             return Ok(false);
         }
 
-        self.reorder_tracked(index, 0)
+        self.drag(index, 0)
     }
 
-    pub fn promote_play(&mut self) -> start::Result<bool> {
-        let mut play = self.play_mut()?;
-        let id = play.id();
-        Ok(play.previous_mut().promote(id).expect("incoming move exists in previous position"))
-    }
-
-    pub fn demote(&mut self, option: impl Locate) -> traversal::Result<bool> {
+    pub fn demote(&mut self, option: impl Choose) -> traversal::Result<bool> {
         let index = self.as_ref().index(option)?;
         if index + 1 == self.options().len() {
             return Ok(false);
         }
 
         let last = self.options().len() - 1;
-        self.reorder_tracked(index, last)
-    }
-
-    pub fn demote_play(&mut self) -> start::Result<bool> {
-        let mut play = self.play_mut()?;
-        let id = play.id();
-        Ok(play.previous_mut().demote(id).expect("incoming move exists in previous position"))
+        self.drag(index, last)
     }
 
     fn insert_at(&mut self, index: usize, play: chess::Move) -> Result<MoveId> {
         let id = self.insert_at_untracked(None, index, play)?;
-        if self.game.undo.on {
-            self.game.undo.stack.push(patch::Patch::Remove(id));
+        if self.game.tracks_changes() {
+            self.game.track(change::Patch::Remove(id));
         }
         Ok(id)
     }
@@ -300,7 +269,7 @@ impl<'g> PositionMut<'g> {
 
     pub(in crate::game) fn remove_untracked(
         &mut self,
-        option: impl Locate,
+        option: impl Choose,
     ) -> traversal::Result<()> {
         let index = self.as_ref().index(option)?;
         let id = self.position().options[index];
@@ -312,8 +281,8 @@ impl<'g> PositionMut<'g> {
 
     pub(in crate::game) fn swap_untracked(
         &mut self,
-        a: impl Locate,
-        b: impl Locate,
+        a: impl Choose,
+        b: impl Choose,
     ) -> traversal::Result<bool> {
         let a = self.as_ref().index(a)?;
         let b = self.as_ref().index(b)?;
@@ -325,10 +294,10 @@ impl<'g> PositionMut<'g> {
         }
     }
 
-    pub(in crate::game) fn reorder_untracked(
+    pub(in crate::game) fn drag_untracked(
         &mut self,
-        from: impl Locate,
-        to: impl Locate,
+        from: impl Choose,
+        to: impl Choose,
     ) -> traversal::Result<bool> {
         let from = self.as_ref().index(from)?;
         let to = self.as_ref().index(to)?;
@@ -341,16 +310,38 @@ impl<'g> PositionMut<'g> {
         Ok(true)
     }
 
-    fn reorder_tracked(&mut self, from: usize, to: usize) -> traversal::Result<bool> {
-        let changed = self.reorder_untracked(from, to)?;
-        if self.game.undo.on && changed {
-            self.game.undo.stack.push(patch::Patch::Reorder {
-                position: self.id,
-                from: to,
-                to: from,
-            });
+    pub fn drag(&mut self, from: impl Choose, to: impl Choose) -> traversal::Result<bool> {
+        let position = self.as_ref();
+        let from = position.index(from)?;
+        let to = position.index(to)?;
+        let changed = self.drag_untracked(from, to)?;
+        if self.game.tracks_changes() && changed {
+            self.game.track(change::Patch::Drag { position: self.id, from: to, to: from });
         }
         Ok(changed)
+    }
+}
+
+/// Options Mutation API.
+impl MoveMut<'_> {
+    pub fn raise(&mut self) -> bool {
+        let id = self.id;
+        self.previous_mut().raise(id).expect("move exists in previous position")
+    }
+
+    pub fn lower(&mut self) -> bool {
+        let id = self.id;
+        self.previous_mut().lower(id).expect("move exists in previous position")
+    }
+
+    pub fn promote(&mut self) -> bool {
+        let id = self.id;
+        self.previous_mut().promote(id).expect("move exists in previous position")
+    }
+
+    pub fn demote(&mut self) -> bool {
+        let id = self.id;
+        self.previous_mut().demote(id).expect("move exists in previous position")
     }
 }
 

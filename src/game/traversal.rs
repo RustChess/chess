@@ -5,61 +5,64 @@ use super::*;
 /// An error from traversing a game tree.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("position {0:?} not found")]
+    #[error("position ID {0} not found")]
     Position(PositionId),
-    #[error("move {0:?} not found")]
+    #[error("move ID {0} not found")]
     Move(MoveId),
     #[error(transparent)]
-    Option(#[from] MissingOption),
+    Option(#[from] Missing),
 }
 
 /// A result of traversing a game tree.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-/// Locates an option within a game position.
-pub trait Locate: Into<Location> {
-    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption>;
+/// Chooses an option within a game position.
+pub trait Choose: Into<Choice> {
+    fn choose(self, position: PositionRef<'_>) -> Result<usize, Missing>;
 }
 
-/// A way to locate an option within a position.
+/// Concrete instantiation of any Choose type.
+// This is a "mini-version" of the enum/trait bridge,
+// as exemplified in the `enum-trait` crate.
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum Location {
+#[non_exhaustive]
+pub enum Choice {
     Index(usize),
     Id(MoveId),
     Move(chess::Move),
 }
 
-/// An option location that does not exist in a position.
+/// A choice that does not identify an existing option in a position.
 #[derive(Debug, thiserror::Error)]
-#[error("option {location:?} not found at position {position:?}")]
-pub struct MissingOption {
+#[error("option {choice:?} not found in position ID {position}")]
+pub struct Missing {
     pub position: PositionId,
-    pub location: Location,
+    pub choice: Choice,
 }
 
-impl fmt::Debug for Location {
+impl fmt::Debug for Choice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Index(index) => write!(f, "{index}"),
-            Self::Id(id) => write!(f, "{id:?}"),
-            Self::Move(play) => write!(f, "{play}"),
+            Self::Index(index) => write!(f, "Index({index})"),
+            Self::Id(id) => write!(f, "Id({id})"),
+            Self::Move(play) => write!(f, "Move({play})"),
         }
     }
 }
 
-impl From<usize> for Location {
+impl From<usize> for Choice {
     fn from(index: usize) -> Self {
         Self::Index(index)
     }
 }
 
-impl From<MoveId> for Location {
+impl From<MoveId> for Choice {
     fn from(id: MoveId) -> Self {
         Self::Id(id)
     }
 }
 
-impl From<chess::Move> for Location {
+impl From<chess::Move> for Choice {
     fn from(play: chess::Move) -> Self {
         Self::Move(play)
     }
@@ -156,11 +159,11 @@ impl<'g> PositionRef<'g> {
         )
     }
 
-    pub fn index(&self, option: impl Locate) -> Result<usize> {
-        Ok(option.locate(*self)?)
+    pub fn index(&self, option: impl Choose) -> Result<usize> {
+        Ok(option.choose(*self)?)
     }
 
-    pub fn has_option(&self, option: impl Locate) -> bool {
+    pub fn has_option(&self, option: impl Choose) -> bool {
         self.index(option).is_ok()
     }
 
@@ -186,7 +189,7 @@ impl<'g> PositionRef<'g> {
         self.option(0)
     }
 
-    pub fn option(&self, option: impl Locate) -> Result<MoveRef<'g>> {
+    pub fn option(&self, option: impl Choose) -> Result<MoveRef<'g>> {
         let index = self.index(option)?;
         let id = self.position().options[index];
         Ok(MoveRef { game: self.game, id })
@@ -265,13 +268,13 @@ impl<'g> PositionMut<'g> {
         }
     }
 
-    fn update_public(&mut self, update: impl FnOnce(&mut PositionPublic)) {
-        let before = self.game.undo.on.then(|| self.public.clone());
+    pub fn update_public(&mut self, update: impl FnOnce(&mut PositionPublic)) {
+        let before = self.game.tracks_changes().then(|| self.public.clone());
         update(&mut self.position_mut().public);
         if let Some(before) = before
             && before != self.public
         {
-            self.game.undo.stack.push(patch::Patch::Position { id: self.id, public: before });
+            self.game.track(change::Patch::Position { id: self.id, public: before });
         }
     }
 
@@ -327,12 +330,12 @@ impl<'g> PositionMut<'g> {
         self.into_option(0)
     }
 
-    pub fn option_mut(&mut self, option: impl Locate) -> Result<MoveMut<'_>> {
+    pub fn option_mut(&mut self, option: impl Choose) -> Result<MoveMut<'_>> {
         let id = self.as_ref().option(option)?.id();
         Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
     }
 
-    pub fn into_option(self, option: impl Locate) -> Result<MoveMut<'g>> {
+    pub fn into_option(self, option: impl Choose) -> Result<MoveMut<'g>> {
         let id = self.as_ref().option(option)?.id();
         Ok(MoveMut { game: self.game, id, protected: self.protected })
     }
@@ -478,13 +481,13 @@ impl<'g> MoveMut<'g> {
         self.update_public(|public| update(&mut public.nags));
     }
 
-    fn update_public(&mut self, update: impl FnOnce(&mut MovePublic)) {
-        let before = self.game.undo.on.then(|| self.public.clone());
+    pub fn update_public(&mut self, update: impl FnOnce(&mut MovePublic)) {
+        let before = self.game.tracks_changes().then(|| self.public.clone());
         update(&mut self.play_mut().public);
         if let Some(before) = before
             && before != self.public
         {
-            self.game.undo.stack.push(patch::Patch::Move { id: self.id, public: before });
+            self.game.track(change::Patch::Move { id: self.id, public: before });
         }
     }
 
@@ -587,30 +590,30 @@ impl PartialOrd<PositionId> for Order<'_> {
     }
 }
 
-impl Locate for usize {
-    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption> {
+impl Choose for usize {
+    fn choose(self, position: PositionRef<'_>) -> Result<usize, Missing> {
         (self < position.options().len())
             .then_some(self)
-            .ok_or(MissingOption { position: position.id(), location: self.into() })
+            .ok_or(Missing { position: position.id(), choice: self.into() })
     }
 }
 
-impl Locate for MoveId {
-    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption> {
+impl Choose for MoveId {
+    fn choose(self, position: PositionRef<'_>) -> Result<usize, Missing> {
         position
             .options()
             .iter()
             .position(|option| *option == self)
-            .ok_or(MissingOption { position: position.id(), location: self.into() })
+            .ok_or(Missing { position: position.id(), choice: self.into() })
     }
 }
 
-impl Locate for chess::Move {
-    fn locate(self, position: PositionRef<'_>) -> Result<usize, MissingOption> {
+impl Choose for chess::Move {
+    fn choose(self, position: PositionRef<'_>) -> Result<usize, Missing> {
         position
             .iter()
             .position(|option| **option == self)
-            .ok_or(MissingOption { position: position.id(), location: self.into() })
+            .ok_or(Missing { position: position.id(), choice: self.into() })
     }
 }
 
@@ -657,5 +660,44 @@ impl MovesMut<'_> {
                 return Some(MoveMut { game: self.game, id, protected: self.protected.clone() });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Role::Pawn, Square::*};
+
+    use super::*;
+
+    #[test]
+    fn choice_debug() {
+        let id = MoveId::from_index(21).unwrap();
+        let play = chess::Move::normal(Pawn, E2, E4);
+
+        assert_eq!(format!("{:?}", Choice::Index(37)), "Index(37)");
+        assert_eq!(format!("{:?}", Choice::Id(id)), "Id(22)");
+        assert_eq!(format!("{:?}", Choice::Move(play)), "Move(e2-e4)");
+    }
+
+    #[test]
+    fn missing_display() {
+        let position = PositionId::from(12);
+        let id = MoveId::from_index(21).unwrap();
+        let play = chess::Move::normal(Pawn, E2, E4);
+
+        assert_eq!(Error::Position(position).to_string(), "position ID 12 not found");
+        assert_eq!(Error::Move(id).to_string(), "move ID 22 not found");
+        assert_eq!(
+            Missing { position, choice: Choice::Index(37) }.to_string(),
+            "option Index(37) not found in position ID 12"
+        );
+        assert_eq!(
+            Missing { position, choice: Choice::Id(id) }.to_string(),
+            "option Id(22) not found in position ID 12"
+        );
+        assert_eq!(
+            Missing { position, choice: Choice::Move(play) }.to_string(),
+            "option Move(e2-e4) not found in position ID 12"
+        );
     }
 }

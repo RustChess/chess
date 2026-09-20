@@ -11,6 +11,10 @@ pub struct Tree {
 }
 
 /// A position and the optional move that reached it.
+///
+/// The Position contains the the Vec<MoveId> options, the forward refs
+/// The Move contains the previous PositionId, the backref
+/// The optionality of Node.play is where the "optional move that reached it" is encoded.
 #[derive(Clone, PartialEq)]
 pub struct Node {
     pub position: Position,
@@ -29,6 +33,14 @@ impl Tree {
 
     pub fn contains(&self, id: PositionId) -> bool {
         self.nodes.contains_key(&id)
+    }
+
+    fn node(&self, id: PositionId) -> &Node {
+        self.nodes.get(&id).expect("position exists")
+    }
+
+    fn node_mut(&mut self, id: PositionId) -> &mut Node {
+        self.nodes.get_mut(&id).expect("position exists")
     }
 
     pub(in crate::game) fn less_equal(&self, ancestor: PositionId, mut child: PositionId) -> bool {
@@ -93,13 +105,13 @@ impl Tree {
         true
     }
 
-    pub(in crate::game) fn branch(&self, id: MoveId) -> patch::Branch {
+    pub(in crate::game) fn branch(&self, id: MoveId) -> change::Branch {
         let node = self.node(id.into());
         let play = node.play();
-        patch::Branch {
+        change::Branch {
             id,
             play: play.play,
-            public: patch::BranchPublic {
+            public: change::BranchPublic {
                 play: play.public.clone(),
                 position: node.position.public.clone(),
             },
@@ -107,12 +119,36 @@ impl Tree {
         }
     }
 
-    fn node(&self, id: PositionId) -> &Node {
-        self.nodes.get(&id).expect("position exists")
-    }
+    /// Reassigns every move ID according to a compaction produced from this tree's current state.
+    pub(in crate::game) fn compact(&mut self, compact: &Compact) {
+        let before = &mut self.nodes;
+        let mut after = Map::new();
 
-    fn node_mut(&mut self, id: PositionId) -> &mut Node {
-        self.nodes.get_mut(&id).expect("position exists")
+        // handle start position options
+        let mut start = before.remove(&START).expect("start position exists");
+        compact.options(&mut start.position);
+        after.insert(START, start);
+
+        // handle non-start positions
+        for (old, new) in compact.iter() {
+            // take the node
+            let mut node = before.remove(&old.into()).expect("move exists");
+            let play = node.play.as_mut().expect("play exists");
+            // update its backref
+            play.previous = compact.position(play.previous).expect("complete compaction");
+            // update its forward refs
+            compact.options(&mut node.position);
+            // insert it at its new ID
+            after.insert(new.into(), node);
+        }
+
+        debug_assert!(before.is_empty());
+        // last_key_value is the maximum of the compacted IDs
+        self.next = match after.last_key_value().expect("start position exists").0 {
+            PositionId::Start => MoveId::MIN,
+            PositionId::Move(id) => id.next().expect("game tree fits in move IDs"),
+        };
+        self.nodes = after;
     }
 }
 
@@ -131,5 +167,72 @@ impl Node {
 
     const fn position_mut(&mut self) -> &mut Position {
         &mut self.position
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        Move as ChessMove, Position as ChessPosition,
+        board::Role::Pawn,
+        formats::Pgn,
+        square::Square::{C2, C4, D2, D4, E2, E4, E5, E7},
+    };
+
+    use super::*;
+
+    #[test]
+    fn compact_in_pgn_layout() {
+        let mut game = Game::new(ChessPosition::start());
+        let e4 = game.start_mut().push(ChessMove::normal(Pawn, E2, E4)).unwrap().id();
+        let e5 = game
+            .play_mut(e4)
+            .unwrap()
+            .position_mut()
+            .push(ChessMove::normal(Pawn, E7, E5))
+            .unwrap()
+            .id();
+        let d4 = game.start_mut().push(ChessMove::normal(Pawn, D2, D4)).unwrap().id();
+        let c4 = game.start_mut().push(ChessMove::normal(Pawn, C2, C4)).unwrap().id();
+        let pgn = Pgn::from(game.clone());
+
+        let mapping = game.compact(Layout::Pgn);
+
+        assert_eq!(mapping.play(e4), Some(MoveId(NonZeroU32::new(1).unwrap())));
+        assert_eq!(mapping.play(d4), Some(MoveId(NonZeroU32::new(2).unwrap())));
+        assert_eq!(mapping.play(c4), Some(MoveId(NonZeroU32::new(3).unwrap())));
+        assert_eq!(mapping.play(e5), Some(MoveId(NonZeroU32::new(4).unwrap())));
+        assert_eq!(
+            game.start().options(),
+            &[
+                MoveId(NonZeroU32::new(1).unwrap()),
+                MoveId(NonZeroU32::new(2).unwrap()),
+                MoveId(NonZeroU32::new(3).unwrap()),
+            ]
+        );
+        assert_eq!(
+            game.play(MoveId(NonZeroU32::new(1).unwrap())).unwrap().position().options(),
+            &[MoveId(NonZeroU32::new(4).unwrap())]
+        );
+        assert_eq!(
+            game.play(MoveId(NonZeroU32::new(4).unwrap())).unwrap().previous().id(),
+            MoveId(NonZeroU32::new(1).unwrap()).into()
+        );
+        assert_eq!(game.tree.next(), MoveId(NonZeroU32::new(5).unwrap()));
+        assert_eq!(Pgn::from(game), pgn);
+    }
+
+    #[test]
+    fn compact_is_idempotent() {
+        let mut game = Game::new(ChessPosition::start());
+        game.start_mut().push(ChessMove::normal(Pawn, E2, E4)).unwrap();
+        game.start_mut().push(ChessMove::normal(Pawn, D2, D4)).unwrap();
+
+        game.compact(Layout::Pgn);
+        let compact = game.clone();
+        let mapping = game.compact(Layout::Pgn);
+
+        assert!(game == compact);
+        assert!(mapping.iter().all(|(previous, id)| previous == id));
     }
 }
