@@ -14,60 +14,66 @@ pub enum Error {
 /// An error from inserting a patched branch.
 #[derive(Debug, thiserror::Error)]
 pub enum Insert {
-    #[error("move ID {0} is unavailable")]
-    Unavailable(MoveId),
+    #[error("move slot {0} is unavailable")]
+    Unavailable(MoveSlot),
 }
 
 /// A game mutation.
-#[derive(Clone, PartialEq)]
+// TODO: Review the JSON shape before treating persisted revisions as a stable format.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub enum Patch {
     /// Replaces public game data.
-    Game(GamePublic),
+    Game(Box<GamePublic>),
     /// Replaces public position data.
-    Position { id: PositionId, public: PositionPublic },
+    Position { slot: PositionSlot, public: Box<PositionPublic> },
     /// Replaces public move data.
-    Move { id: MoveId, public: MovePublic },
+    Move { slot: MoveSlot, public: Box<MovePublic> },
     /// Inserts a branch at an option index.
-    Insert { position: PositionId, index: usize, branch: Branch },
+    Insert { position: PositionSlot, index: usize, branch: Branch },
     /// Removes the branch rooted at a move.
-    Remove(MoveId),
+    Remove(MoveSlot),
     /// Moves an option between indices.
-    Drag { position: PositionId, from: usize, to: usize },
+    Drag { position: PositionSlot, from: usize, to: usize },
     /// Exchanges two options.
-    Swap { position: PositionId, a: usize, b: usize },
+    Swap { position: PositionSlot, a: usize, b: usize },
 }
 
 /// A reversible game change.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub enum Change {
-    Game { before: GamePublic, after: GamePublic },
-    Position { id: PositionId, before: PositionPublic, after: PositionPublic },
-    Move { id: MoveId, before: MovePublic, after: MovePublic },
-    Insert { position: PositionId, index: usize, branch: Branch },
-    Remove { position: PositionId, index: usize, branch: Branch },
-    Drag { position: PositionId, from: usize, to: usize },
-    Swap { position: PositionId, a: usize, b: usize },
+    Game { before: Box<GamePublic>, after: Box<GamePublic> },
+    Position { slot: PositionSlot, before: Box<PositionPublic>, after: Box<PositionPublic> },
+    Move { slot: MoveSlot, before: Box<MovePublic>, after: Box<MovePublic> },
+    Insert { position: PositionSlot, index: usize, branch: Branch },
+    Remove { position: PositionSlot, index: usize, branch: Branch },
+    Drag { position: PositionSlot, from: usize, to: usize },
+    Swap { position: PositionSlot, a: usize, b: usize },
 }
 
 /// A move and the complete game subtree following it.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub struct Branch {
     /// The move's assigned tree slot.
-    pub id: MoveId,
+    pub slot: MoveSlot,
     /// The chess move.
     pub play: chess::Move,
     /// Public data associated with the move and resulting position.
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub public: BranchPublic,
     /// Ordered continuations from the resulting position.
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub options: Vec<Branch>,
 }
 
 /// Public data associated with a branch root.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 pub struct BranchPublic {
     /// Public data associated with the move.
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub play: MovePublic,
     /// Public data associated with the resulting position.
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub position: PositionPublic,
 }
 
@@ -102,19 +108,19 @@ impl Game {
 
     pub fn patch(&mut self, patch: Patch) -> game::Result<()> {
         match patch {
-            Patch::Game(public) => self.update_public(|current| *current = public),
-            Patch::Position { id, public } => {
-                self.position_mut(id)?.update_public(|current| *current = public);
+            Patch::Game(public) => self.update_public(|current| *current = *public),
+            Patch::Position { slot, public } => {
+                self.position_mut(slot)?.update_public(|current| *current = *public);
             }
-            Patch::Move { id, public } => {
-                self.play_mut(id)?.update_public(|current| *current = public);
+            Patch::Move { slot, public } => {
+                self.play_mut(slot)?.update_public(|current| *current = *public);
             }
             Patch::Insert { position, index, branch } => {
                 self.insert_tracked(position, index, branch)?;
             }
-            Patch::Remove(id) => {
-                let position = self.play(id)?.previous().id();
-                self.position_mut(position)?.remove(id)?;
+            Patch::Remove(slot) => {
+                let position = self.play(slot)?.previous().slot();
+                self.position_mut(position)?.remove(slot)?;
             }
             Patch::Drag { position, from, to } => {
                 self.position_mut(position)?.drag(from, to)?;
@@ -135,12 +141,12 @@ impl Game {
 
     fn apply(&mut self, change: &Change) -> game::Result<()> {
         match change {
-            Change::Game { after, .. } => self.public = after.clone(),
-            Change::Position { id, after, .. } => {
-                self.position_mut(*id)?.position_mut().public = after.clone();
+            Change::Game { after, .. } => self.public = (**after).clone(),
+            Change::Position { slot, after, .. } => {
+                self.position_mut(*slot)?.position_mut().public = (**after).clone();
             }
-            Change::Move { id, after, .. } => {
-                self.play_mut(*id)?.play_mut().public = after.clone();
+            Change::Move { slot, after, .. } => {
+                self.play_mut(*slot)?.play_mut().public = (**after).clone();
             }
             Change::Drag { position, from, to } => {
                 self.position_mut(*position)?.drag_untracked(*from, *to)?;
@@ -149,8 +155,8 @@ impl Game {
                 self.position_mut(*position)?.swap_untracked(*a, *b)?;
             }
             Change::Remove { branch, .. } => {
-                let position = self.play(branch.id)?.previous().id();
-                self.position_mut(position)?.remove_untracked(branch.id)?;
+                let position = self.play(branch.slot)?.previous().slot();
+                self.position_mut(position)?.remove_untracked(branch.slot)?;
             }
             Change::Insert { position, index, branch } => {
                 self.insert_untracked(*position, *index, branch)?;
@@ -161,7 +167,7 @@ impl Game {
 
     fn insert_tracked(
         &mut self,
-        position: PositionId,
+        position: PositionSlot,
         index: usize,
         branch: Branch,
     ) -> game::Result<()> {
@@ -174,7 +180,7 @@ impl Game {
 
     fn insert_untracked(
         &mut self,
-        position: PositionId,
+        position: PositionSlot,
         index: usize,
         branch: &Branch,
     ) -> game::Result<()> {
@@ -197,18 +203,20 @@ impl Game {
 impl Patch {
     fn reversible(self, game: &Game) -> traversal::Result<Change> {
         Ok(match self {
-            Self::Game(after) => Change::Game { before: game.public.clone(), after },
-            Self::Position { id, public: after } => {
-                Change::Position { id, before: game.position(id)?.public.clone(), after }
-            }
-            Self::Move { id, public: after } => {
-                Change::Move { id, before: game.play(id)?.public.clone(), after }
+            Self::Game(after) => Change::Game { before: Box::new(game.public.clone()), after },
+            Self::Position { slot, public: after } => Change::Position {
+                slot,
+                before: Box::new(game.position(slot)?.public.clone()),
+                after,
+            },
+            Self::Move { slot, public: after } => {
+                Change::Move { slot, before: Box::new(game.play(slot)?.public.clone()), after }
             }
             Self::Insert { position, index, branch } => Change::Insert { position, index, branch },
-            Self::Remove(id) => {
-                let position = game.play(id)?.previous();
-                let index = position.index(id)?;
-                Change::Remove { position: position.id(), index, branch: game.tree.branch(id) }
+            Self::Remove(slot) => {
+                let position = game.play(slot)?.previous();
+                let index = position.index(slot)?;
+                Change::Remove { position: position.slot(), index, branch: game.tree.branch(slot) }
             }
             Self::Drag { position, from, to } => Change::Drag { position, from, to },
             Self::Swap { position, a, b } => Change::Swap { position, a, b },
@@ -220,12 +228,14 @@ impl Change {
     pub fn forward(&self) -> Patch {
         match self {
             Self::Game { after, .. } => Patch::Game(after.clone()),
-            Self::Position { id, after, .. } => Patch::Position { id: *id, public: after.clone() },
-            Self::Move { id, after, .. } => Patch::Move { id: *id, public: after.clone() },
+            Self::Position { slot, after, .. } => {
+                Patch::Position { slot: *slot, public: after.clone() }
+            }
+            Self::Move { slot, after, .. } => Patch::Move { slot: *slot, public: after.clone() },
             Self::Insert { position, index, branch } => {
                 Patch::Insert { position: *position, index: *index, branch: branch.clone() }
             }
-            Self::Remove { branch, .. } => Patch::Remove(branch.id),
+            Self::Remove { branch, .. } => Patch::Remove(branch.slot),
             Self::Drag { position, from, to } => {
                 Patch::Drag { position: *position, from: *from, to: *to }
             }
@@ -236,11 +246,11 @@ impl Change {
     pub fn backward(&self) -> Patch {
         match self {
             Self::Game { before, .. } => Patch::Game(before.clone()),
-            Self::Position { id, before, .. } => {
-                Patch::Position { id: *id, public: before.clone() }
+            Self::Position { slot, before, .. } => {
+                Patch::Position { slot: *slot, public: before.clone() }
             }
-            Self::Move { id, before, .. } => Patch::Move { id: *id, public: before.clone() },
-            Self::Insert { branch, .. } => Patch::Remove(branch.id),
+            Self::Move { slot, before, .. } => Patch::Move { slot: *slot, public: before.clone() },
+            Self::Insert { branch, .. } => Patch::Remove(branch.slot),
             Self::Remove { position, index, branch } => {
                 Patch::Insert { position: *position, index: *index, branch: branch.clone() }
             }
@@ -258,10 +268,10 @@ impl Neg for Change {
     fn neg(self) -> Self::Output {
         match self {
             Self::Game { before, after } => Self::Game { before: after, after: before },
-            Self::Position { id, before, after } => {
-                Self::Position { id, before: after, after: before }
+            Self::Position { slot, before, after } => {
+                Self::Position { slot, before: after, after: before }
             }
-            Self::Move { id, before, after } => Self::Move { id, before: after, after: before },
+            Self::Move { slot, before, after } => Self::Move { slot, before: after, after: before },
             Self::Insert { position, index, branch } => Self::Remove { position, index, branch },
             Self::Remove { position, index, branch } => Self::Insert { position, index, branch },
             Self::Drag { position, from, to } => Self::Drag { position, from: to, to: from },
@@ -273,23 +283,23 @@ impl Neg for Change {
 fn insert_branch(
     game: &mut Game,
     source: Option<&Game>,
-    position: PositionId,
+    position: PositionSlot,
     index: usize,
     branch: &Branch,
 ) -> game::Result<()> {
-    let unavailable_in_source = source.is_some_and(|source| source.play(branch.id).is_ok());
-    let unavailable_in_game = game.play(branch.id).is_ok();
+    let unavailable_in_source = source.is_some_and(|source| source.play(branch.slot).is_ok());
+    let unavailable_in_game = game.play(branch.slot).is_ok();
     if unavailable_in_source || unavailable_in_game {
-        return Err(Error::Insert(Insert::Unavailable(branch.id)).into());
+        return Err(Error::Insert(Insert::Unavailable(branch.slot)).into());
     }
 
-    game.position_mut(position)?.insert_at_untracked(Some(branch.id), index, branch.play)?;
-    let mut play = game.play_mut(branch.id)?;
+    game.position_mut(position)?.insert_at_untracked(Some(branch.slot), index, branch.play)?;
+    let mut play = game.play_mut(branch.slot)?;
     play.play_mut().public = branch.public.play.clone();
     play.position_mut().position_mut().public = branch.public.position.clone();
 
     for (index, option) in branch.options.iter().enumerate() {
-        insert_branch(game, source, branch.id.into(), index, option)?;
+        insert_branch(game, source, branch.slot.into(), index, option)?;
     }
     Ok(())
 }
@@ -302,6 +312,7 @@ mod tests {
         Game, Player, Position,
         board::Role::{Knight, Pawn},
         formats::Pgn,
+        position::Analysis,
         square::Square::*,
     };
 
@@ -336,10 +347,13 @@ mod tests {
         assert!(game.changes().unwrap().is_empty());
 
         game.set_orientation(Player::White);
-        game.set_outcome(Outcome::Draw);
+        game.set_outcome(Some(Outcome::Draw(None)));
         game.update_roster(|roster| roster.event = Some("Event".parse().unwrap()));
         game.update_tags(|tags| {
-            tags.push(Tag { key: "Annotator".parse().unwrap(), value: "Player".to_string() });
+            tags.push(tag::Other {
+                key: "Annotator".parse().unwrap(),
+                value: "Player".to_string(),
+            });
         });
         assert_eq!(game.changes().unwrap().len(), 4);
 
@@ -364,39 +378,61 @@ mod tests {
         assert!(game.changes().unwrap().is_empty());
 
         game.start_mut().set_comment(None);
-        game.start_mut()
-            .set_valuation(Some(Valuation { depth: Some(1), score: Score::Centipawns(10) }));
+        game.start_mut().set_analysis(Some(Analysis::stalemate()));
         game.start_mut().set_expanded(true);
-        assert_eq!(game.changes().unwrap().len(), 3);
+        assert_eq!(game.changes().unwrap().len(), 2);
+        assert_eq!(game.start().analysis(), Some(&Analysis::stalemate()));
 
-        let Change::Position { id, before, after } = &game.changes().unwrap()[0] else { panic!() };
-        assert_eq!(*id, START);
+        let Change::Position { slot, before, after } = &game.changes().unwrap()[0] else {
+            panic!()
+        };
+        assert_eq!(*slot, START);
         assert!(before.comment.is_some());
         assert!(after.comment.is_none());
     }
 
     #[test]
+    fn clear_analyses_does_not_change_history() {
+        let mut game = Game::new(Position::start());
+        game.track_changes(true);
+        let slot = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
+        let analysis = Analysis::stalemate();
+        game.start_mut().set_analysis(Some(analysis.clone()));
+        game.play_mut(slot).unwrap().position_mut().set_analysis(Some(analysis));
+        let revision = game.revisions();
+
+        game.clear_analyses();
+
+        assert_eq!(game.start().analysis(), None);
+        assert_eq!(game.play(slot).unwrap().analysis(), None);
+        assert_eq!(game.revisions(), revision);
+    }
+
+    #[test]
     fn move_public_changes() {
         let mut game = Game::new(Position::start());
-        let id = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let slot = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let intro: Text = "Intro".parse().unwrap();
-        game.play_mut(id).unwrap().set_intro(Some(intro.clone()));
+        game.play_mut(slot).unwrap().set_intro(Some(intro.clone()));
         assert!(game.changes().is_none());
 
         game.track_changes(true);
-        game.play_mut(id).unwrap().set_intro(Some(intro));
+        game.play_mut(slot).unwrap().set_intro(Some(intro));
         assert!(game.changes().unwrap().is_empty());
 
-        game.play_mut(id).unwrap().set_intro(None);
-        game.play_mut(id).unwrap().set_outro(Some("Outro".parse().unwrap()));
-        game.play_mut(id).unwrap().update_commands(|commands| commands.push(Command::expanded()));
-        game.play_mut(id).unwrap().update_nags(|nags| nags.push(Nag::Numeric(1)));
+        game.play_mut(slot).unwrap().set_intro(None);
+        game.play_mut(slot).unwrap().set_outro(Some("Outro".parse().unwrap()));
+        game.play_mut(slot).unwrap().position_mut().update_commands(|commands| {
+            commands
+                .push(command::Other { command: "test".parse().unwrap(), parameters: Vec::new() })
+        });
+        game.play_mut(slot).unwrap().update_nags(|nags| nags.push(Nag::Numeric(1)));
         assert_eq!(game.changes().unwrap().len(), 4);
 
-        let Change::Move { id: patched, before, after } = &game.changes().unwrap()[0] else {
+        let Change::Move { slot: patched, before, after } = &game.changes().unwrap()[0] else {
             panic!()
         };
-        assert_eq!(*patched, id);
+        assert_eq!(*patched, slot);
         assert!(before.affixes.intro.is_some());
         assert!(after.affixes.intro.is_none());
     }
@@ -404,9 +440,9 @@ mod tests {
     #[test]
     fn option_order_changes() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
-        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().id();
-        let c4 = game.start_mut().push(crate::Move::normal(Pawn, C2, C4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
+        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().slot();
+        let c4 = game.start_mut().push(crate::Move::normal(Pawn, C2, C4)).unwrap().slot();
 
         game.track_changes(true);
         assert!(!game.start_mut().promote(e4).unwrap());
@@ -429,17 +465,17 @@ mod tests {
     fn apply_public_patch() {
         let mut game = Game::new(Position::start());
         game.track_changes(true);
-        game.set_outcome(Outcome::Draw);
+        game.set_outcome(Some(Outcome::Draw(None)));
 
         let draw = game.public.clone();
         let change = game.changes().unwrap()[0].clone();
         game.apply(&-change).unwrap();
-        assert_eq!(game.outcome(), Outcome::Unknown);
+        assert_eq!(game.outcome(), None);
         assert_eq!(game.changes().unwrap().len(), 1);
 
-        let change = Patch::Game(draw).reversible(&game).unwrap();
+        let change = Patch::Game(Box::new(draw)).reversible(&game).unwrap();
         game.apply(&change).unwrap();
-        assert_eq!(game.outcome(), Outcome::Draw);
+        assert_eq!(game.outcome(), Some(Outcome::Draw(None)));
         assert_eq!(game.changes().unwrap().len(), 1);
     }
 
@@ -447,17 +483,17 @@ mod tests {
     fn patch_records_actual_state() {
         let mut game = Game::new(Position::start());
         let mut public = game.public.clone();
-        public.outcome = Outcome::Draw;
-        game.patch(Patch::Game(public.clone())).unwrap();
+        public.outcome = Some(Outcome::Draw(None));
+        game.patch(Patch::Game(Box::new(public.clone()))).unwrap();
         assert!(game.changes().is_none());
 
         game.track_changes(true);
-        public.outcome = Outcome::White;
-        game.patch(Patch::Game(public)).unwrap();
+        public.outcome = Some(Outcome::White(None));
+        game.patch(Patch::Game(Box::new(public))).unwrap();
 
         let Change::Game { before, after } = &game.changes().unwrap()[0] else { panic!() };
-        assert_eq!(before.outcome, Outcome::Draw);
-        assert_eq!(after.outcome, Outcome::White);
+        assert_eq!(before.outcome, Some(Outcome::Draw(None)));
+        assert_eq!(after.outcome, Some(Outcome::White(None)));
     }
 
     #[test]
@@ -465,25 +501,57 @@ mod tests {
         let mut game = Game::new(Position::start());
         let base = game.clone();
         game.track_changes(true);
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.play_mut(e4).unwrap().set_comment(Some("King's pawn".parse().unwrap()));
         game.play_mut(e4).unwrap().position_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
-        game.set_outcome(Outcome::Draw);
+        game.set_outcome(Some(Outcome::Draw(None)));
+
+        let patches = game
+            .changes()
+            .unwrap()
+            .iter()
+            .map(|change| {
+                let encoded_change = serde_json::to_string(change).unwrap();
+                let decoded_change: Change = serde_json::from_str(&encoded_change).unwrap();
+                assert!(decoded_change == *change);
+
+                let patch = change.forward();
+                let encoded_patch = serde_json::to_string(&patch).unwrap();
+                let decoded_patch: Patch = serde_json::from_str(&encoded_patch).unwrap();
+                assert!(decoded_patch == patch);
+                decoded_patch
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            serde_json::to_value(&patches[0]).unwrap(),
+            serde_json::json!({
+                "Insert": {"position": 0, "index": 0, "branch": {"slot": 1, "play": "e2-e4"}}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&game.changes().unwrap()[1]).unwrap(),
+            serde_json::json!({
+                "Position": {"slot": 1, "before": {}, "after": {"comment": "King's pawn"}}
+            })
+        );
 
         let mut replay = base;
-        for change in game.changes().unwrap() {
-            replay.apply(change).unwrap();
+        replay.track_changes(true);
+        for patch in patches {
+            replay.patch(patch).unwrap();
         }
 
+        assert!(replay.changes() == game.changes());
         assert_eq!(Pgn::from(replay), Pgn::from(game));
     }
 
     #[test]
     fn apply_order_patch() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
-        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().id();
-        let c4 = game.start_mut().push(crate::Move::normal(Pawn, C2, C4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
+        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().slot();
+        let c4 = game.start_mut().push(crate::Move::normal(Pawn, C2, C4)).unwrap().slot();
         game.track_changes(true);
         game.start_mut().promote(c4).unwrap();
 
@@ -496,14 +564,14 @@ mod tests {
     #[test]
     fn apply_remove_patch() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let e5 = game
             .play_mut(e4)
             .unwrap()
             .position_mut()
             .push(crate::Move::normal(Pawn, E7, E5))
             .unwrap()
-            .id();
+            .slot();
         game.track_changes(true);
 
         game.patch(Patch::Remove(e4)).unwrap();
@@ -515,58 +583,58 @@ mod tests {
         };
         assert_eq!(*position, START);
         assert_eq!(*index, 0);
-        assert_eq!(branch.id, e4);
-        assert_eq!(branch.options[0].id, e5);
+        assert_eq!(branch.slot, e4);
+        assert_eq!(branch.options[0].slot, e5);
     }
 
     #[test]
     fn branch_capture() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let e5 = game
             .play_mut(e4)
             .unwrap()
             .position_mut()
             .push(crate::Move::normal(Pawn, E7, E5))
             .unwrap()
-            .id();
+            .slot();
         let c5 = game
             .play_mut(e4)
             .unwrap()
             .position_mut()
             .push(crate::Move::normal(Pawn, C7, C5))
             .unwrap()
-            .id();
+            .slot();
         let nf3 = game
             .play_mut(e5)
             .unwrap()
             .position_mut()
             .push(crate::Move::normal(Knight, G1, F3))
             .unwrap()
-            .id();
+            .slot();
         game.play_mut(e4).unwrap().set_intro(Some("Intro".parse().unwrap()));
         game.play_mut(e4).unwrap().set_comment(Some("Comment".parse().unwrap()));
 
         let branch = game.tree.branch(e4);
-        assert_eq!(branch.id, e4);
+        assert_eq!(branch.slot, e4);
         assert_eq!(branch.play, crate::Move::normal(Pawn, E2, E4));
         assert!(branch.public.play.affixes.intro.is_some());
         assert!(branch.public.position.comment.is_some());
-        assert_eq!(branch.options.iter().map(|branch| branch.id).collect::<Vec<_>>(), [e5, c5]);
-        assert_eq!(branch.options[0].options[0].id, nf3);
+        assert_eq!(branch.options.iter().map(|branch| branch.slot).collect::<Vec<_>>(), [e5, c5]);
+        assert_eq!(branch.options[0].options[0].slot, nf3);
     }
 
     #[test]
     fn remove_patch() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let e5 = game
             .play_mut(e4)
             .unwrap()
             .position_mut()
             .push(crate::Move::normal(Pawn, E7, E5))
             .unwrap()
-            .id();
+            .slot();
 
         game.track_changes(true);
         game.start_mut().remove(e4).unwrap();
@@ -579,8 +647,8 @@ mod tests {
         };
         assert_eq!(*position, START);
         assert_eq!(*index, 0);
-        assert_eq!(branch.id, e4);
-        assert_eq!(branch.options[0].id, e5);
+        assert_eq!(branch.slot, e4);
+        assert_eq!(branch.options[0].slot, e5);
 
         assert!(game.start_mut().remove(e4).is_err());
         assert_eq!(game.changes().unwrap().len(), 1);
@@ -592,10 +660,10 @@ mod tests {
         let play = crate::Move::normal(Pawn, E2, E4);
         game.track_changes(true);
 
-        let e4 = game.start_mut().push(play).unwrap().id();
+        let e4 = game.start_mut().push(play).unwrap().slot();
         assert_eq!(game.changes().unwrap().len(), 1);
         let Change::Insert { branch, .. } = &game.changes().unwrap()[0] else { panic!() };
-        assert_eq!(branch.id, e4);
+        assert_eq!(branch.slot, e4);
         assert_eq!(game.start().options(), [e4]);
 
         assert!(game.start_mut().push(play).is_err());
@@ -605,14 +673,14 @@ mod tests {
     #[test]
     fn insert_branch_round_trip() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let e5 = game
             .play_mut(e4)
             .unwrap()
             .position_mut()
             .push(crate::Move::normal(Pawn, E7, E5))
             .unwrap()
-            .id();
+            .slot();
         game.play_mut(e4).unwrap().position_mut().push(crate::Move::normal(Pawn, C7, C5)).unwrap();
         game.play_mut(e5)
             .unwrap()
@@ -633,7 +701,7 @@ mod tests {
     #[test]
     fn failed_insert_is_atomic() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.play_mut(e4).unwrap().position_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
         let mut branch = game.tree.branch(e4);
         game.start_mut().remove(e4).unwrap();
@@ -652,7 +720,7 @@ mod tests {
     #[test]
     fn unavailable_insert_is_atomic() {
         let mut source = Game::new(Position::start());
-        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let branch = source.tree.branch(e4);
 
         let mut game = Game::new(Position::start());
@@ -663,7 +731,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            game::Error::Change(Error::Insert(Insert::Unavailable(id))) if id == e4
+            game::Error::Change(Error::Insert(Insert::Unavailable(slot))) if slot == e4
         ));
         assert!(game == before);
     }
@@ -671,20 +739,20 @@ mod tests {
     #[test]
     fn into_game() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
-        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
+        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().slot();
         let e5 = game
             .play_mut(e4)
             .unwrap()
             .position_mut()
             .push(crate::Move::normal(Pawn, E7, E5))
             .unwrap()
-            .id();
+            .slot();
 
         let mut position = game.play(e4).unwrap().position().into_game();
         assert!(position.start().options().is_empty());
         let position_e5 =
-            position.start_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap().id();
+            position.start_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap().slot();
         assert_eq!(position_e5, e5.next().unwrap());
 
         let mut play = game.play(e4).unwrap().into_game();
@@ -698,7 +766,7 @@ mod tests {
             .position_mut()
             .push(crate::Move::normal(Pawn, E7, E5))
             .unwrap()
-            .id();
+            .slot();
         assert_eq!(play_e5, e5.next().unwrap());
     }
 
@@ -711,11 +779,11 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut input = Unstructured::new(&bytes);
             let Ok(mut game) = Game::arbitrary(&mut input) else { continue };
-            let Some(id) = game.start().iter().next().map(|play| play.id()) else { continue };
+            let Some(slot) = game.start().iter().next().map(|play| play.slot()) else { continue };
 
             let before = game.clone();
-            let branch = game.tree.branch(id);
-            game.start_mut().remove(id).unwrap();
+            let branch = game.tree.branch(slot);
+            game.start_mut().remove(slot).unwrap();
             game.patch(Patch::Insert { position: START, index: 0, branch }).unwrap();
             assert!(game == before);
 
@@ -730,7 +798,7 @@ mod tests {
     #[test]
     fn insert_branch_at_deep_nonzero_index() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.play_mut(e4).unwrap().position_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
         let c5 = game
             .play_mut(e4)
@@ -738,7 +806,7 @@ mod tests {
             .position_mut()
             .push(crate::Move::normal(Pawn, C7, C5))
             .unwrap()
-            .id();
+            .slot();
         let before = game.clone();
         let branch = game.tree.branch(c5);
 
@@ -751,7 +819,7 @@ mod tests {
     #[test]
     fn insert_branch_records_one_change() {
         let mut source = Game::new(Position::start());
-        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         source
             .play_mut(e4)
             .unwrap()
@@ -767,14 +835,14 @@ mod tests {
         assert_eq!(game.changes().unwrap().len(), 1);
         assert!(matches!(
             game.changes().unwrap()[0],
-            Change::Insert { ref branch, .. } if branch.id == e4
+            Change::Insert { ref branch, .. } if branch.slot == e4
         ));
     }
 
     #[test]
     fn out_of_range_insert_is_atomic() {
         let mut source = Game::new(Position::start());
-        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let branch = source.tree.branch(e4);
 
         let mut game = Game::new(Position::start());
@@ -791,9 +859,9 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_branch_id_is_atomic() {
+    fn duplicate_branch_slot_is_atomic() {
         let mut source = Game::new(Position::start());
-        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = source.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         source
             .play_mut(e4)
             .unwrap()
@@ -801,7 +869,7 @@ mod tests {
             .push(crate::Move::normal(Pawn, E7, E5))
             .unwrap();
         let mut branch = source.tree.branch(e4);
-        branch.options[0].id = e4;
+        branch.options[0].slot = e4;
 
         let mut game = Game::new(Position::start());
         let before = game.clone();
@@ -809,7 +877,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            game::Error::Change(Error::Insert(Insert::Unavailable(id))) if id == e4
+            game::Error::Change(Error::Insert(Insert::Unavailable(slot))) if slot == e4
         ));
         assert!(game == before);
     }
@@ -818,31 +886,31 @@ mod tests {
     fn undo_public_mutation() {
         let mut game = Game::new(Position::start());
         game.track_changes(true);
-        game.set_outcome(Outcome::Draw);
+        game.set_outcome(Some(Outcome::Draw(None)));
 
         game.undo().unwrap();
-        assert_eq!(game.outcome(), Outcome::Unknown);
+        assert_eq!(game.outcome(), None);
         assert!(game.changes().unwrap().is_empty());
         game.undo().unwrap();
     }
 
     #[test]
-    fn compact_clears_history() {
+    fn reslot_clears_history() {
         let mut game = Game::new(Position::start());
         game.track_changes(true);
         game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap();
 
-        game.compact(Layout::Pgn);
+        game.reslot(Layout::Pgn);
 
         assert!(game.changes().unwrap().is_empty());
-        game.set_outcome(Outcome::Draw);
+        game.set_outcome(Some(Outcome::Draw(None)));
         assert_eq!(game.changes().unwrap().len(), 1);
     }
 
     #[test]
     fn undo_branch_removal() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.play_mut(e4).unwrap().position_mut().push(crate::Move::normal(Pawn, E7, E5)).unwrap();
         game.track_changes(true);
         let before = game.clone();
@@ -858,11 +926,11 @@ mod tests {
         let mut game = Game::new(Position::start());
         game.track_changes(true);
         game.set_orientation(Player::Black);
-        game.set_outcome(Outcome::Draw);
+        game.set_outcome(Some(Outcome::Draw(None)));
 
         game.restore(1).unwrap();
         assert_eq!(game.orientation(), Player::Black);
-        assert_eq!(game.outcome(), Outcome::Unknown);
+        assert_eq!(game.outcome(), None);
         assert_eq!(game.changes().unwrap().len(), 1);
 
         game.restore(2).unwrap();
@@ -876,7 +944,7 @@ mod tests {
     #[test]
     fn undo_position_and_move_public() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.track_changes(true);
 
         game.start_mut().set_comment(Some("Position".parse().unwrap()));
@@ -891,7 +959,7 @@ mod tests {
     fn undo_pushed_move() {
         let mut game = Game::new(Position::start());
         game.track_changes(true);
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
 
         game.undo().unwrap();
         assert!(game.start().options().is_empty());
@@ -901,9 +969,9 @@ mod tests {
     #[test]
     fn undo_option_order() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
-        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().id();
-        let c4 = game.start_mut().push(crate::Move::normal(Pawn, C2, C4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
+        let d4 = game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap().slot();
+        let c4 = game.start_mut().push(crate::Move::normal(Pawn, C2, C4)).unwrap().slot();
         game.track_changes(true);
         let before = game.clone();
 
@@ -917,7 +985,7 @@ mod tests {
     #[test]
     fn failed_undo_restores_change() {
         let mut game = Game::new(Position::start());
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let branch = game.tree.branch(e4);
         game.start_mut().remove(e4).unwrap();
         game.track_changes(true);
@@ -927,11 +995,11 @@ mod tests {
 
         assert!(matches!(
             error,
-            game::Error::Traversal(traversal::Error::Move(id)) if id == e4
+            game::Error::Traversal(traversal::Error::Move(slot)) if slot == e4
         ));
         assert!(matches!(
             game.changes().unwrap(),
-            [Change::Insert { branch, .. }] if branch.id == e4
+            [Change::Insert { branch, .. }] if branch.slot == e4
         ));
     }
 }

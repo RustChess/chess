@@ -134,6 +134,7 @@ pub struct Header {
 }
 
 impl Header {
+    pub const SHORT_LEN: usize = 10;
     pub const LEN: usize = 26;
 }
 

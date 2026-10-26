@@ -1,7 +1,7 @@
 use core::{fmt, str};
 
 use crate::{
-    Square, finite_for,
+    Position, Square, finite_for,
     square::{File, Rank},
 };
 
@@ -17,7 +17,9 @@ use File::*;
 /// Reinhard Scharnagl's enumeration of all 960 starting positions.
 ///
 /// Standard chess is position 518.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
 pub struct Scharnagl(u16);
 
 impl Scharnagl {
@@ -98,11 +100,70 @@ impl Scharnagl {
     pub fn from_board(board: Board) -> Option<Self> {
         (0..960).map(Self).find(|scharnagl| scharnagl.board() == board)
     }
+
+    pub fn from_position(position: Position) -> Option<Self> {
+        if position.en_passant().is_some()
+            || position.round().get() != 1
+            || position.reversible() != 0
+        {
+            return None;
+        }
+
+        #[cfg(rust_chess_compute_scharnagl_prefixes)]
+        return (0..960).map(Self).find(|&scharnagl| position == Position::freestyle(scharnagl));
+
+        #[cfg(not(rust_chess_compute_scharnagl_prefixes))]
+        {
+            const PREFIXES: [([u8; 3], Scharnagl); 960] = include!("SCHARNAGL-PREFIXES.rs");
+            let prefix = prefix(position);
+            let index = PREFIXES.binary_search_by_key(&prefix, |&(prefix, _)| prefix).ok()?;
+            let scharnagl = PREFIXES[index].1;
+            (position == Position::freestyle(scharnagl)).then_some(scharnagl)
+        }
+    }
+
+    pub const fn compute_prefixes() -> [([u8; 3], Self); 960] {
+        const fn prefix_value(prefix: [u8; 3]) -> u32 {
+            u32::from_be_bytes([0, prefix[0], prefix[1], prefix[2]])
+        }
+
+        let mut prefixes = [([0; 3], Self(0)); 960];
+        let mut i = 0;
+        while i < prefixes.len() {
+            let scharnagl = Self(i as u16);
+            prefixes[i] = (prefix(Position::freestyle(scharnagl)), scharnagl);
+            i += 1;
+        }
+
+        i = 1;
+        while i < prefixes.len() {
+            let current = prefixes[i];
+            let mut j = i;
+            while j > 0 && prefix_value(prefixes[j - 1].0) > prefix_value(current.0) {
+                prefixes[j] = prefixes[j - 1];
+                j -= 1;
+            }
+            prefixes[j] = current;
+            i += 1;
+        }
+        prefixes
+    }
+}
+
+const fn prefix(position: Position) -> [u8; 3] {
+    let key = position.key().be_bytes();
+    [key[0], key[1], key[2]]
 }
 
 impl fmt::Display for Scharnagl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl From<Scharnagl> for u16 {
+    fn from(scharnagl: Scharnagl) -> Self {
+        scharnagl.0
     }
 }
 
@@ -131,9 +192,10 @@ fn freestyle_positions() {
         "rkrnnqbb/pppppppp/8/8/8/8/PPPPPPPP/RKRNNQBB"
     );
     assert_eq!(Scharnagl::from_board(Board::EMPTY), None);
-    for index in 0..960 {
-        let scharnagl = Scharnagl(index);
+    for i in 0..960 {
+        let scharnagl = Scharnagl(i);
         assert_eq!(Scharnagl::from_board(scharnagl.board()), Some(scharnagl));
+        assert_eq!(Scharnagl::from_position(Position::freestyle(scharnagl)), Some(scharnagl));
     }
 
     let position = Position::freestyle(Scharnagl::CHESS);
@@ -142,4 +204,21 @@ fn freestyle_positions() {
     assert_eq!(position.castles().get(White, Side::King), Some(H));
     assert_eq!(position.castles().get(Black, Side::Queen), Some(A));
     assert_eq!(position.castles().get(Black, Side::King), Some(H));
+}
+
+#[test]
+fn freestyle_position_key_prefix() {
+    use std::collections::BTreeSet;
+
+    use crate::Position;
+
+    let unique = |len| {
+        (0..960)
+            .map(|i| Position::freestyle(Scharnagl(i)).key().be_bytes()[..len].to_vec())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == 960
+    };
+    assert!(!unique(2));
+    assert!(unique(3));
 }

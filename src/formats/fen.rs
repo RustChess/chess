@@ -1,4 +1,9 @@
-use core::{fmt, num::NonZeroU32, str::FromStr};
+use core::{
+    fmt,
+    num::NonZeroU32,
+    ops::{Deref, DerefMut},
+    str::FromStr,
+};
 
 use crate::{
     board::{self, Bitboard, Board, Piece, Player, PlayerTable},
@@ -7,7 +12,15 @@ use crate::{
     square::{File, Rank, Square},
 };
 
-use super::{StrInput as Input, prelude::*};
+use super::str_prelude::*;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid FEN: {0}")]
+    Invalid(String),
+}
+
+pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 // There's a choice to be made whether to require in-between whitespace or not,
 // we accept "compact" FEN without it. The "board" parser finishes once the
@@ -18,13 +31,19 @@ use super::{StrInput as Input, prelude::*};
 )]
 pub struct Fen(pub Position);
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("invalid FEN: {0}")]
-    Invalid(String),
+impl Deref for Fen {
+    type Target = Position;
+
+    fn deref(&self) -> &Position {
+        &self.0
+    }
 }
 
-pub type Result<T, E = Error> = core::result::Result<T, E>;
+impl DerefMut for Fen {
+    fn deref_mut(&mut self) -> &mut Position {
+        &mut self.0
+    }
+}
 
 impl fmt::Display for Fen {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

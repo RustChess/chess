@@ -1,56 +1,30 @@
 //! Chessbase player file format
 
-use crate::formats::{ByteInput as Input, prelude::*};
+use crate::formats::bytes_prelude::*;
 
 use super::{
-    cstr,
-    table::{Header, header},
+    common::{Header, Node, header, node},
+    text,
 };
 
 /// ChessBase player filename suffix.
 pub const SUFFIX: &str = "cbp";
 
-// numbers where -1 mean missing or unknown
-// fn optional1<T: Default + PartialEq>(x: T) -> Option<T> {
-//     (x != T::default()).then_some(x)
-// }
-fn optional1(x: i32) -> Option<Option<usize>> {
-    match x {
-        -1 => Some(None),
-        0.. => Some(Some(x as usize)),
-        _ => None,
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Player {
     pub deleted: bool,
-    pub first_name: String,
-    pub last_name: String,
+    pub first_name: Option<Text>,
+    pub last_name: Option<Text>,
     pub games: usize,
     pub first_game: usize,
 }
 
 pub fn player(input: &mut Input<'_>) -> ModalResult<Player> {
-    let (left_child, deleted) =
-        le_i32
-            .verify_map(|x| {
-                if x == -999 { Some((None, true)) } else { optional1(x).map(|x| (x, false)) }
-            })
-            .parse_next(input)?;
-    let (right_child, next_deleted) = le_i32
-        .verify_map(|x| {
-            if deleted { optional1(x).map(|x| (None, x)) } else { optional1(x).map(|x| (x, None)) }
-        })
-        .parse_next(input)?;
-    let _right_height_minus_left_height =
-        i8.verify(|height| !deleted || *height == 0).parse_next(input)?;
-    let last_name = take(30u8).map(cstr).parse_next(input)?;
-    let first_name = take(20u8).map(cstr).parse_next(input)?;
+    let Node { deleted } = node.parse_next(input)?;
+    let last_name = take(30u8).map(text).parse_next(input)?;
+    let first_name = take(20u8).map(text).parse_next(input)?;
     let games = le_u32.parse_next(input)? as usize;
     let first_game = le_u32.parse_next(input)? as usize;
-
-    let _ = (left_child, right_child, next_deleted);
 
     Ok(Player { deleted, first_name, last_name, games, first_game })
 }
@@ -63,7 +37,7 @@ pub struct Players {
 
 pub fn players(input: &mut Input<'_>) -> ModalResult<Players> {
     let header = header.parse_next(input)?;
-    let players: Vec<Player> = repeat(..=header.len, player).parse_next(input)?;
+    let players: Vec<Player> = repeat(header.len, player).parse_next(input)?;
     Ok(Players { header, players })
 }
 
@@ -103,8 +77,8 @@ mod tests {
 
         let player = super::player.parse(INPUT.as_slice()).expect("can parse CBP player");
         assert!(!player.deleted);
-        assert_eq!(player.first_name, "J");
-        assert_eq!(player.last_name, "Aagaard");
+        assert_eq!(player.first_name.as_deref(), Some("J"));
+        assert_eq!(player.last_name.as_deref(), Some("Aagaard"));
         assert_eq!(player.games, 5);
         assert_eq!(player.first_game, 3056);
     }

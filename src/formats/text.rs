@@ -1,6 +1,6 @@
 use core::{fmt, ops::Deref, str::FromStr};
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct Text(String);
 

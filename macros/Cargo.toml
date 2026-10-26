@@ -9,13 +9,19 @@ name = "macros"
 
 [features]
 default = []
-arbitrary = ["dep:derive_arbitrary"]
-clap = ["dep:clap_derive"]
-serde = ["dep:serde_derive", "macros-impl/serde"]
+arbitrary = ["dep:arbitrary", "dep:derive_arbitrary"]
+clap = ["dep:clap_derive", "macros-impl/clap"]
+serde = ["dep:serde", "dep:serde_derive", "macros-impl/serde"]
 
 [dependencies]
 macros-impl.workspace = true
 
+arbitrary = { workspace = true, optional = true }
 clap_derive = { workspace = true, optional = true }
 derive_arbitrary = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 serde_derive = { workspace = true, optional = true }
+
+[dev-dependencies]
+arbitrary = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }

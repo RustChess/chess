@@ -1,10 +1,11 @@
+use winnow::token::rest;
+
 use crate::{
-    formats::Text,
-    game::{Command, Nag, Outcome, Tag as OtherTag},
+    formats::{Text, san, str_prelude::*},
+    game::{Nag, Outcome},
 };
 
 use super::*;
-use crate::formats::{StrInput as Input, fen, prelude::*, san};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("PGN error at line {line}, column {column}: {message}")]
@@ -17,16 +18,30 @@ pub struct Error {
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 pub fn pgn(input: &mut Input<'_>) -> ModalResult<Pgn> {
-    delimited(multispace0, (tags, comments, repeat(0.., play), opt(outcome)), multispace0)
-        .map(|(tags, intro, plays, outcome)| Pgn {
-            start: start_position(&tags),
-            tags,
-            intro,
-            moves: plays,
-            outcome: outcome.unwrap_or(Outcome::Unknown),
-        })
+    delimited(multispace0, game, multispace0)
         .context(StrContext::Label("PGN game"))
         .parse_next(input)
+}
+
+fn game(input: &mut Input<'_>) -> ModalResult<Pgn> {
+    let tags = tags(input)?;
+    let mut intro = comments(input)?;
+    let moves = if opt(intro_placeholder).parse_next(input)?.is_some() {
+        if let Some(comment) = comments(input)? {
+            merge_comments(&mut intro, comment);
+        }
+        Vec::new()
+    } else {
+        repeat(0.., play).parse_next(input)?
+    };
+    let outcome = opt(outcome).parse_next(input)?.flatten();
+    let outro = comments(input)?;
+    Ok(Pgn { start: start_position(&tags), tags: tags.into(), intro, moves, outcome, outro })
+}
+
+// Some imports use a leading null move to hold an introduction without a played line.
+fn intro_placeholder(input: &mut Input<'_>) -> ModalResult<()> {
+    preceded((multispace0, skip_move_number, multispace0), "--").value(()).parse_next(input)
 }
 
 impl Error {
@@ -74,6 +89,10 @@ pub fn tag_start_ok(mut input: &str) -> bool {
 
 pub fn tags(input: &mut Input<'_>) -> ModalResult<Vec<Tag>> {
     repeat(0.., tag).parse_next(input)
+}
+
+pub fn tag_section(input: &mut Input<'_>) -> ModalResult<Vec<Tag>> {
+    terminated(tags, rest).parse_next(input)
 }
 
 pub fn tag(input: &mut Input<'_>) -> ModalResult<Tag> {
@@ -133,12 +152,7 @@ fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Comment>, Vec<Annotation>)
             || (None, Vec::new()),
             |(mut comment, mut annotations), item| {
                 match item {
-                    Tail::Comment(MoveComment { commands, text }) => {
-                        annotations.extend(commands.into_iter().map(annotation));
-                        if let Some(text) = text {
-                            merge_comments(&mut comment, text);
-                        }
-                    }
+                    Tail::Comment(item) => merge_comments(&mut comment, item),
                     Tail::Annotation(annotation) => annotations.push(annotation),
                 }
                 (comment, annotations)
@@ -148,7 +162,7 @@ fn tail(input: &mut Input<'_>) -> ModalResult<(Option<Comment>, Vec<Annotation>)
 }
 
 enum Tail {
-    Comment(MoveComment),
+    Comment(Comment),
     Annotation(Annotation),
 }
 
@@ -181,28 +195,7 @@ fn skip_move_number(input: &mut Input<'_>) -> ModalResult<()> {
 }
 
 fn tag_from_pair(key: Text, value: String) -> Option<Tag> {
-    Some(match key.as_ref() {
-        "Event" => Tag::Event(value),
-        "Site" => Tag::Site(value),
-        "Date" => Tag::Date(value),
-        "Round" => Tag::Round(value),
-        "White" => Tag::White(value),
-        "Black" => Tag::Black(value),
-        "Result" => Tag::Outcome(outcome.parse(value.as_str()).ok()?),
-        "FEN" => Tag::Fen(fen::parts.parse(value.as_str()).ok()?),
-        "SetUp" => Tag::SetUp(match value.as_str() {
-            "0" => false,
-            "1" => true,
-            _ => return None,
-        }),
-        "Variant" => Tag::Variant(value),
-        "Orientation" => Tag::Orientation(value.parse().ok()?),
-        "Valuation" => value
-            .parse()
-            .map(Tag::Valuation)
-            .unwrap_or_else(|_| Tag::Other(OtherTag { key, value })),
-        _ => Tag::Other(OtherTag { key, value }),
-    })
+    Tag::from_pair(key, value)
 }
 
 fn tag_value(input: &mut Input<'_>) -> ModalResult<String> {
@@ -239,12 +232,13 @@ fn symbol_nag(input: &mut Input<'_>) -> ModalResult<Nag> {
 
 pub fn comment(input: &mut Input<'_>) -> ModalResult<Option<Comment>> {
     alt((bracket_comment, semicolon_comment))
-        .map(|comment| Text::new(comment).ok().map(Comment))
+        .map(split_comment)
+        .map(|comment| (!comment.is_empty()).then_some(comment))
         .context(StrContext::Label("PGN comment"))
         .parse_next(input)
 }
 
-fn move_comment(input: &mut Input<'_>) -> ModalResult<MoveComment> {
+fn move_comment(input: &mut Input<'_>) -> ModalResult<Comment> {
     alt((bracket_comment, semicolon_comment))
         .map(split_comment)
         .context(StrContext::Label("PGN comment"))
@@ -259,8 +253,8 @@ fn semicolon_comment(input: &mut Input<'_>) -> ModalResult<String> {
     preceded(';', take_till(0.., '\n')).map(ToString::to_string).parse_next(input)
 }
 
-fn split_comment(raw: String) -> MoveComment {
-    let mut commands = Vec::new();
+fn split_comment(raw: String) -> Comment {
+    let mut commands = Commands::default();
     let mut comment = String::new();
     let mut rest: Input<'_> = raw.as_str();
 
@@ -285,28 +279,17 @@ fn split_comment(raw: String) -> MoveComment {
     }
 
     comment.push_str(rest);
-    MoveComment { commands, text: Text::new(comment).ok().map(Comment) }
+    Comment { commands, text: Text::new(comment).ok() }
 }
 
-fn command(input: &mut Input<'_>) -> ModalResult<Command> {
+pub fn command(input: &mut Input<'_>) -> ModalResult<Command> {
     delimited("[%", (name, opt(preceded(space1, parameters))), (space0, ']'))
-        .map(|(command, parameters): (Text, Option<Vec<String>>)| Command {
+        .map(|(command, parameters): (Text, Option<Vec<String>>)| command::Other {
             command,
             parameters: parameters.unwrap_or_default(),
         })
+        .map(Command::from_other)
         .parse_next(input)
-}
-
-fn annotation(command: Command) -> Annotation {
-    evaluation(&command).map_or(Annotation::Command(command), Annotation::Valuation)
-}
-
-pub fn evaluation(command: &Command) -> Option<Valuation> {
-    if command.command.as_ref() != "eval" || !(1..=2).contains(&command.parameters.len()) {
-        return None;
-    }
-
-    command.parameters.join(",").parse().ok()
 }
 
 fn parameters(input: &mut Input<'_>) -> ModalResult<Vec<String>> {
@@ -328,18 +311,24 @@ fn unquoted_parameter(input: &mut Input<'_>) -> ModalResult<String> {
 }
 
 fn merge_comments(into: &mut Option<Comment>, comment: Comment) {
+    if comment.is_empty() {
+        return;
+    }
     match into {
         Some(into) => into.merge(&comment),
         None => *into = Some(comment),
     }
 }
 
-fn outcome(input: &mut Input<'_>) -> ModalResult<Outcome> {
-    use Outcome::*;
-
+fn outcome(input: &mut Input<'_>) -> ModalResult<Option<Outcome>> {
     preceded(
         multispace0,
-        alt(("1/2-1/2".value(Draw), "1-0".value(White), "0-1".value(Black), "*".value(Unknown))),
+        alt((
+            "1/2-1/2".value(Some(Outcome::Draw(None))),
+            "1-0".value(Some(Outcome::White(None))),
+            "0-1".value(Some(Outcome::Black(None))),
+            '*'.value(None),
+        )),
     )
     .context(StrContext::Label("PGN outcome"))
     .parse_next(input)

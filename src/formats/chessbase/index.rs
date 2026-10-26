@@ -1,5 +1,7 @@
 //! Chessbase header file format (CBH)
 
+use core::fmt;
+
 // https://talkchess.com/forum/viewtopic.php?topic_view=threads&p=287896
 //
 // cbh_codec.cpp, doOpen
@@ -7,7 +9,7 @@
 // Header: 46 B
 // Records: 46 B
 
-use crate::formats::{Bits, ByteInput as Input, prelude::*};
+use crate::formats::{Bits, bytes_prelude::*};
 
 use super::optional;
 
@@ -71,7 +73,6 @@ pub struct Date {
 pub struct Eco {
     pub volume: Volume,
     pub number: Number,
-    pub sub: Option<Number>,
 }
 
 // A - E
@@ -190,6 +191,24 @@ impl Date {
     }
 }
 
+impl fmt::Display for Eco {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{:02}", self.volume, self.number.0)
+    }
+}
+
+impl fmt::Display for Volume {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::C => "C",
+            Self::D => "D",
+            Self::E => "E",
+        })
+    }
+}
+
 // fn be_u24(data: &[u8]) -> u32 {
 //     let mut bytes = [0u8; 4];
 //     bytes[1..].copy_from_slice(data);
@@ -282,14 +301,7 @@ pub fn eco(input: &mut Input<'_>) -> ModalResult<Option<Eco>> {
             _ => unreachable!(),
         };
         let number = Number(((code - 1) % 100) as u8);
-        // At least in TWIC 1616, this doesn't seem to be set
-        let sub = bits.unsigned(7).ok_or_else(backtrack)?;
-        if sub >= 100 {
-            return Err(backtrack());
-        }
-        // assert!(sub == 0);
-        // TODO: subcode in bits.unsigned(7) from 00 to 99
-        Some(Eco { volume, number, sub: Some(Number(sub as u8)) })
+        Some(Eco { volume, number })
     })
 }
 
@@ -378,10 +390,7 @@ mod tests {
         assert_eq!(game.subround, Some(37));
         assert_eq!(game.white_elo, Some(2596));
         assert_eq!(game.black_elo, Some(2759));
-        assert_eq!(
-            game.eco,
-            Some(Eco { volume: Volume::E, number: Number(10), sub: Some(Number(0)) })
-        );
+        assert_eq!(game.eco, Some(Eco { volume: Volume::E, number: Number(10) }));
     }
 
     #[test]

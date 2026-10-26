@@ -316,7 +316,7 @@ macro_rules! finite_set {
     ) => {
         $(#[$name_meta])*
         #[repr(u8)]
-        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay)]
+        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
         pub enum $name {
             $(
                 $(#[$variant_meta])*

@@ -3,22 +3,32 @@ rustfmt := "rustfmt --edition 2024 --style-edition 2024"
 import "common.just"
 
 build: common-build
+    just macros/ build
+    just macros-impl/ build
 
 check: common-check
+    just macros/ check
+    just macros-impl/ check
 
 depcheck: common-depcheck
 
 fmt: common-fmt
     just --justfile common.just --fmt
-    {{ rustfmt }} scripts/{polyglot-basis,slider-sights,standard-basis}.rs
+    {{ rustfmt }} scripts/{polyglot-basis,scharnagl-prefixes,slider-sights,standard-basis}.rs
+    just macros/ fmt
+    just macros-impl/ fmt
 
 install: common-install
 
 lint: common-lint
     just --justfile common.just --fmt --check
-    {{ rustfmt }} --check scripts/{polyglot-basis,slider-sights,standard-basis}.rs
+    {{ rustfmt }} --check scripts/{polyglot-basis,scharnagl-prefixes,slider-sights,standard-basis}.rs
+    just macros/ lint
+    just macros-impl/ lint
 
 test: common-test
+    just macros/ test
+    just macros-impl/ test
 
 deep-test *tests:
     cargo nextest run --release {{ cargo_spec }} --run-ignored ignored-only {{ tests }}
@@ -41,6 +51,9 @@ standard-basis:
 
 polyglot-basis:
     RUSTFLAGS="--cfg rust_chess_compile_time_polyglot_basis" rust-script scripts/polyglot-basis.rs
+
+scharnagl-prefixes:
+    RUSTFLAGS="--cfg rust_chess_compute_scharnagl_prefixes" rust-script scripts/scharnagl-prefixes.rs
 
 clean:
     rm -f *.cb{a,c,e,g,h,j,l,m,p,s,t,tt,ini} *.{flags,ini}

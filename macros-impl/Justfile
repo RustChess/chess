@@ -1,0 +1,18 @@
+package := "rust-chess-macros-impl"
+import "../common.just"
+
+build: common-build
+
+check: common-check
+
+fmt: common-fmt
+
+install: common-install
+
+lint: common-lint
+
+test: common-test
+
+uninstall: common-uninstall
+
+update: common-update

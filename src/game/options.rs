@@ -16,15 +16,15 @@ pub enum Insert {
     Duplicate(usize),
     #[error("illegal move")]
     Illegal,
-    #[error("move ID space exhausted")]
+    #[error("move slot space exhausted")]
     Exhausted,
 }
 
 /// An error from removing an option.
 #[derive(Debug, thiserror::Error)]
 pub enum Remove {
-    #[error("position ID {0} may not be removed")]
-    Unremovable(PositionId),
+    #[error("position slot {0} may not be removed")]
+    Unremovable(PositionSlot),
 }
 
 /// A result of mutating the options in a game tree.
@@ -33,28 +33,28 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 /// Options Mutation API
 impl<'g> PositionMut<'g> {
     pub fn push(&mut self, play: chess::Move) -> Result<MoveMut<'_>> {
-        let id = self.insert_at(self.options().len(), play)?;
-        Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
+        let slot = self.insert_at(self.options().len(), play)?;
+        Ok(MoveMut { game: self.game, slot, protected: self.protected.clone() })
     }
 
     pub fn into_push(mut self, play: chess::Move) -> Result<MoveMut<'g>> {
-        let id = self.insert_at(self.options().len(), play)?;
-        Ok(MoveMut { game: self.game, id, protected: self.protected })
+        let slot = self.insert_at(self.options().len(), play)?;
+        Ok(MoveMut { game: self.game, slot, protected: self.protected })
     }
 
     // the natural same implementation as in into_option_or_push does
     // not work here due to borrow checker limitations - even though
     // it is "obviously" correct.
     pub fn option_mut_or_push(&mut self, play: chess::Move) -> Result<MoveMut<'_>> {
-        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
+        if let Ok(slot) = self.as_ref().option(play).map(|option| option.slot()) {
+            return Ok(MoveMut { game: self.game, slot, protected: self.protected.clone() });
         }
         self.push(play)
     }
 
     pub fn into_option_or_push(self, play: chess::Move) -> Result<MoveMut<'g>> {
-        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(MoveMut { game: self.game, id, protected: self.protected });
+        if let Ok(slot) = self.as_ref().option(play).map(|option| option.slot()) {
+            return Ok(MoveMut { game: self.game, slot, protected: self.protected });
         }
         self.into_push(play)
     }
@@ -65,8 +65,8 @@ impl<'g> PositionMut<'g> {
         play: chess::Move,
     ) -> game::Result<MoveMut<'_>> {
         let index = self.as_ref().index(option)?;
-        let id = self.insert_at(index, play)?;
-        Ok(MoveMut { game: self.game, id, protected: self.protected.clone() })
+        let slot = self.insert_at(index, play)?;
+        Ok(MoveMut { game: self.game, slot, protected: self.protected.clone() })
     }
 
     pub fn into_insert_before(
@@ -75,8 +75,8 @@ impl<'g> PositionMut<'g> {
         play: chess::Move,
     ) -> game::Result<MoveMut<'g>> {
         let index = self.as_ref().index(option)?;
-        let id = self.insert_at(index, play)?;
-        Ok(MoveMut { game: self.game, id, protected: self.protected })
+        let slot = self.insert_at(index, play)?;
+        Ok(MoveMut { game: self.game, slot, protected: self.protected })
     }
 
     pub fn option_mut_or_insert_before(
@@ -84,8 +84,8 @@ impl<'g> PositionMut<'g> {
         option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'_>> {
-        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
+        if let Ok(slot) = self.as_ref().option(play).map(|option| option.slot()) {
+            return Ok(MoveMut { game: self.game, slot, protected: self.protected.clone() });
         }
         self.insert_before(option, play)
     }
@@ -95,8 +95,8 @@ impl<'g> PositionMut<'g> {
         option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'g>> {
-        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(MoveMut { game: self.game, id, protected: self.protected });
+        if let Ok(slot) = self.as_ref().option(play).map(|option| option.slot()) {
+            return Ok(MoveMut { game: self.game, slot, protected: self.protected });
         }
         self.into_insert_before(option, play)
     }
@@ -132,8 +132,8 @@ impl<'g> PositionMut<'g> {
         option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'_>> {
-        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(MoveMut { game: self.game, id, protected: self.protected.clone() });
+        if let Ok(slot) = self.as_ref().option(play).map(|option| option.slot()) {
+            return Ok(MoveMut { game: self.game, slot, protected: self.protected.clone() });
         }
         self.insert_after(option, play)
     }
@@ -143,8 +143,8 @@ impl<'g> PositionMut<'g> {
         option: impl Choose,
         play: chess::Move,
     ) -> game::Result<MoveMut<'g>> {
-        if let Ok(id) = self.as_ref().option(play).map(|option| option.id()) {
-            return Ok(MoveMut { game: self.game, id, protected: self.protected });
+        if let Ok(slot) = self.as_ref().option(play).map(|option| option.slot()) {
+            return Ok(MoveMut { game: self.game, slot, protected: self.protected });
         }
         self.into_insert_after(option, play)
     }
@@ -155,27 +155,32 @@ impl<'g> PositionMut<'g> {
 
     pub fn remove(&mut self, option: impl Choose) -> game::Result<()> {
         let index = self.as_ref().index(option)?;
-        let id = self.position().options[index];
-        if let Some(id) =
-            self.protected.unremovable.iter().copied().find(|at| self.game.order(*at) >= id.into())
+        let slot = self.position().options[index];
+        if let Some(slot) = self
+            .protected
+            .unremovable
+            .iter()
+            .copied()
+            .find(|at| self.game.order(*at) >= slot.into())
         {
-            return Err(Error::from(Remove::Unremovable(id)).into());
+            return Err(Error::from(Remove::Unremovable(slot)).into());
         }
 
-        let branch = self.game.tracks_changes().then(|| self.game.tree.branch(id));
+        let branch = self.game.tracks_changes().then(|| self.game.tree.branch(slot));
         self.remove_untracked(index)?;
         if let Some(branch) = branch {
-            self.game.track(change::Patch::Insert { position: self.id, index, branch });
+            self.game.track(change::Patch::Insert { position: self.slot, index, branch });
         }
         Ok(())
     }
 
     pub fn into_remove_play(self) -> game::Result<PositionMut<'g>> {
         let play = self.as_ref().play()?;
-        let id = play.id();
-        let previous = play.previous().id();
-        let mut position = PositionMut { game: self.game, id: previous, protected: self.protected };
-        position.remove(id)?;
+        let slot = play.slot();
+        let previous = play.previous().slot();
+        let mut position =
+            PositionMut { game: self.game, slot: previous, protected: self.protected };
+        position.remove(slot)?;
         Ok(position)
     }
 
@@ -185,7 +190,7 @@ impl<'g> PositionMut<'g> {
         let b = position.index(b)?;
         let changed = self.swap_untracked(a, b)?;
         if self.game.tracks_changes() && changed {
-            self.game.track(change::Patch::Swap { position: self.id, a, b });
+            self.game.track(change::Patch::Swap { position: self.slot, a, b });
         }
         Ok(changed)
     }
@@ -219,20 +224,20 @@ impl<'g> PositionMut<'g> {
         self.drag(index, last)
     }
 
-    fn insert_at(&mut self, index: usize, play: chess::Move) -> Result<MoveId> {
-        let id = self.insert_at_untracked(None, index, play)?;
+    fn insert_at(&mut self, index: usize, play: chess::Move) -> Result<MoveSlot> {
+        let slot = self.insert_at_untracked(None, index, play)?;
         if self.game.tracks_changes() {
-            self.game.track(change::Patch::Remove(id));
+            self.game.track(change::Patch::Remove(slot));
         }
-        Ok(id)
+        Ok(slot)
     }
 
     pub(in crate::game) fn insert_at_untracked(
         &mut self,
-        id: Option<MoveId>,
+        slot: Option<MoveSlot>,
         index: usize,
         play: chess::Move,
-    ) -> Result<MoveId> {
+    ) -> Result<MoveSlot> {
         let node = {
             let position = self.as_ref();
             if let Ok(index) = position.index(play) {
@@ -243,7 +248,7 @@ impl<'g> PositionMut<'g> {
             }
 
             let play = Move {
-                previous: self.id,
+                previous: self.slot,
                 play,
                 short: Short::new(position.legal(), play),
                 public: MovePublic::default(),
@@ -252,19 +257,19 @@ impl<'g> PositionMut<'g> {
             Node { position: Position::new(position), play: Some(play) }
         };
 
-        let id = match id {
-            Some(id) => {
-                if id.next().is_none() {
+        let slot = match slot {
+            Some(slot) => {
+                if slot.next().is_none() {
                     return Err(Insert::Exhausted.into());
                 }
-                let inserted = self.game.tree.insert_at(id, node);
-                assert!(inserted, "move ID unavailable");
-                id
+                let inserted = self.game.tree.insert_at(slot, node);
+                assert!(inserted, "move slot unavailable");
+                slot
             }
             None => self.game.tree.insert(node).ok_or(Insert::Exhausted)?,
         };
-        self.position_mut().options.insert(index, id);
-        Ok(id)
+        self.position_mut().options.insert(index, slot);
+        Ok(slot)
     }
 
     pub(in crate::game) fn remove_untracked(
@@ -272,9 +277,9 @@ impl<'g> PositionMut<'g> {
         option: impl Choose,
     ) -> traversal::Result<()> {
         let index = self.as_ref().index(option)?;
-        let id = self.position().options[index];
+        let slot = self.position().options[index];
         self.position_mut().options.remove(index);
-        let removed = self.game.tree.remove(id);
+        let removed = self.game.tree.remove(slot);
         debug_assert!(removed);
         Ok(())
     }
@@ -316,7 +321,7 @@ impl<'g> PositionMut<'g> {
         let to = position.index(to)?;
         let changed = self.drag_untracked(from, to)?;
         if self.game.tracks_changes() && changed {
-            self.game.track(change::Patch::Drag { position: self.id, from: to, to: from });
+            self.game.track(change::Patch::Drag { position: self.slot, from: to, to: from });
         }
         Ok(changed)
     }
@@ -325,23 +330,23 @@ impl<'g> PositionMut<'g> {
 /// Options Mutation API.
 impl MoveMut<'_> {
     pub fn raise(&mut self) -> bool {
-        let id = self.id;
-        self.previous_mut().raise(id).expect("move exists in previous position")
+        let slot = self.slot;
+        self.previous_mut().raise(slot).expect("move exists in previous position")
     }
 
     pub fn lower(&mut self) -> bool {
-        let id = self.id;
-        self.previous_mut().lower(id).expect("move exists in previous position")
+        let slot = self.slot;
+        self.previous_mut().lower(slot).expect("move exists in previous position")
     }
 
     pub fn promote(&mut self) -> bool {
-        let id = self.id;
-        self.previous_mut().promote(id).expect("move exists in previous position")
+        let slot = self.slot;
+        self.previous_mut().promote(slot).expect("move exists in previous position")
     }
 
     pub fn demote(&mut self) -> bool {
-        let id = self.id;
-        self.previous_mut().demote(id).expect("move exists in previous position")
+        let slot = self.slot;
+        self.previous_mut().demote(slot).expect("move exists in previous position")
     }
 }
 
@@ -359,37 +364,40 @@ mod tests {
         let c4 = chess::Move::normal(Pawn, C2, C4);
         let f4 = chess::Move::normal(Pawn, F2, F4);
 
-        let e4_id = game.start_mut().push(e4).unwrap().id();
-        let d4_id = game.start_mut().option_mut_or_push(d4).unwrap().id();
-        let existing = game.start_mut().option_mut_or_insert_after(d4_id, e4).unwrap().id();
-        assert_eq!(existing, e4_id);
-        assert_eq!(game.start().iter().map(|play| play.id()).collect::<Vec<_>>(), [e4_id, d4_id]);
-
-        let c4_id = game.start_mut().option_mut_or_insert_before(d4_id, c4).unwrap().id();
-        let f4_id = game.start_mut().into_option_or_insert_after(c4_id, f4).unwrap().id();
+        let e4_slot = game.start_mut().push(e4).unwrap().slot();
+        let d4_slot = game.start_mut().option_mut_or_push(d4).unwrap().slot();
+        let existing = game.start_mut().option_mut_or_insert_after(d4_slot, e4).unwrap().slot();
+        assert_eq!(existing, e4_slot);
         assert_eq!(
-            game.start().iter().map(|play| play.id()).collect::<Vec<_>>(),
-            [e4_id, c4_id, f4_id, d4_id]
+            game.start().iter().map(|play| play.slot()).collect::<Vec<_>>(),
+            [e4_slot, d4_slot]
         );
 
-        let existing = game.start_mut().into_option_or_push(e4).unwrap().id();
-        assert_eq!(existing, e4_id);
+        let c4_slot = game.start_mut().option_mut_or_insert_before(d4_slot, c4).unwrap().slot();
+        let f4_slot = game.start_mut().into_option_or_insert_after(c4_slot, f4).unwrap().slot();
+        assert_eq!(
+            game.start().iter().map(|play| play.slot()).collect::<Vec<_>>(),
+            [e4_slot, c4_slot, f4_slot, d4_slot]
+        );
+
+        let existing = game.start_mut().into_option_or_push(e4).unwrap().slot();
+        assert_eq!(existing, e4_slot);
     }
 
     #[test]
     fn remove_play() {
         let mut game = Game::new(chess::Position::start());
-        let e4 = game.start_mut().push(chess::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(chess::Move::normal(Pawn, E2, E4)).unwrap().slot();
         let e5 = game
             .play_mut(e4)
             .unwrap()
             .into_position()
             .into_push(chess::Move::normal(Pawn, E7, E5))
             .unwrap()
-            .id();
+            .slot();
 
         let previous = game.position_mut(e5.into()).unwrap().into_remove_play().unwrap();
-        assert_eq!(previous.id(), e4.into());
+        assert_eq!(previous.slot(), e4.into());
         assert!(!previous.as_ref().has_options());
         assert!(previous.game().play(e5).is_err());
     }

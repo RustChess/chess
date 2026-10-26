@@ -7,140 +7,162 @@ pub mod standard;
 use crate::{
     board::{Board, Player, PlayerTable, Role, RoleTable},
     finite::Empty as _,
-    game::Game,
-    position::{Castles, EnPassant, EnPassantTable, Position, Side},
+    game::{Game, Line},
+    position::{Castles, EnPassant, EnPassantTable, Move, Position, Side},
     square::{FileTable, SquareTable},
 };
 
-/// Type of globally unique identifiers.
+/// Type of chess lookup keys.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Id(pub u128);
+pub struct Key(pub u128);
 
-// Our standard basis has 802 consistent Ids:
+// Our standard basis has 802 consistent keys:
 // - board: 64 * 2 * 6 = 768
 // - turn: 2, castle: 2 * 8 = 16, en-passant: 16 squares
 //
-// Polyglot basis has 781 "random" IDs:
+// Polyglot basis has 781 "random" keys:
 // - pieces: 12 * 64 = 768
 // - side to move: 1, castling: 4, en-passant files: 8
 // We set zeros and repeated values to achieve compatibility.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Basis {
-    pub board: BoardTable<Id>,
-    pub turn: PlayerTable<Id>,
-    pub castle: CastleTable<Id>,
-    pub en_passant: EnPassantTable<Id>,
+    pub board: BoardTable<Key>,
+    pub turn: PlayerTable<Key>,
+    pub castle: CastleTable<Key>,
+    pub en_passant: EnPassantTable<Key>,
 }
 
 impl Position {
-    // standard ID plus counters
-    pub fn id(self) -> Id {
-        self.standard_id()
-            .xor(counter_id("reversible", self.reversible()))
-            .xor(counter_id("round", self.round().get()))
-    }
-
     // our 128-bit replacement of the classical Polyglot hash
-    pub const fn standard_id(self) -> Id {
-        self.transposition_id(Basis::standard())
+    pub const fn key(self) -> Key {
+        self.key_with_basis(Basis::standard())
     }
 
     // the classical Polyglot hash, just embedded into u128
-    pub const fn polyglot_id(self) -> Id {
-        self.transposition_id(Basis::polyglot())
+    pub const fn polyglot_key(self) -> Key {
+        self.key_with_basis(Basis::polyglot())
     }
 
-    pub const fn transposition_id(self, basis: &Basis) -> Id {
+    pub const fn key_with_basis(self, basis: &Basis) -> Key {
         // In validated positions, en_passant is normalized to effective rights.
-        self.apparent_id(basis)
-            .xor(castle_id(basis, self.castles()))
-            .xor(en_passant_id(basis, self.en_passant()))
+        self.apparent_key(basis)
+            .xor(castle_key(basis, self.castles()))
+            .xor(en_passant_key(basis, self.en_passant()))
     }
+
     // What one typically sees in a depicted position: The board, and the player to move
-    pub const fn apparent_id(self, basis: &Basis) -> Id {
-        self.board().id(basis).xor(turn_id(basis, self.turn()))
+    pub const fn apparent_key(self, basis: &Basis) -> Key {
+        self.board().key_with_basis(basis).xor(turn_key(basis, self.turn()))
+    }
+
+    // standard key plus counters
+    pub fn full_key(self) -> Key {
+        self.key()
+            .xor(counter_key("reversible", self.reversible()))
+            .xor(counter_key("round", self.round().get()))
     }
 }
 
 impl Board {
-    pub const fn polyglot_id(self) -> Id {
-        self.id(Basis::polyglot())
+    pub const fn polyglot_key(self) -> Key {
+        self.key_with_basis(Basis::polyglot())
     }
 
-    pub const fn standard_id(self) -> Id {
-        self.id(Basis::standard())
+    pub const fn key(self) -> Key {
+        self.key_with_basis(Basis::standard())
     }
 
-    pub const fn id(self, basis: &Basis) -> Id {
-        let mut id = Id(0);
+    pub const fn key_with_basis(self, basis: &Basis) -> Key {
+        let mut key = Key(0);
 
         finite_for!(player in Player {
             finite_for!(role in Role {
                 let mut squares = self.player(player).intersection(self.role(role));
                 while let Some(square) = squares.pop_first() {
-                    id = id.xor(basis.board.get(square).get(player).get(role));
+                    key = key.xor(basis.board.get(square).get(player).get(role));
                 }
             });
         });
 
-        id
+        key
     }
 }
 
 impl Game {
-    // Experimental: A globally unique ID for all games
-    pub fn id(&self) -> Id {
-        let mut hash = sha2_const::Sha256::new()
-            .update(b"game:")
-            .update(&self.start().position().id().u128().to_be_bytes());
-
+    pub fn mainline_key(&self) -> Key {
         let mut position = self.start();
-        while let Ok(play) = position.main() {
-            hash = hash.update(b":").update(play.play().uci_960().to_string().as_bytes());
-            position = play.position();
-        }
-
-        Id(fold(hash.finalize()))
+        line_key(
+            position.position(),
+            core::iter::from_fn(|| {
+                let play = position.main().ok()?;
+                position = play.position();
+                Some(play.play())
+            }),
+        )
     }
 
-    // // TODO: This is probably a bad idea
-    // //
-    // // start:2iHiqJgL4hH1Qqqng6VaDF:move:e2e4 => AipYeC9ie6GSVAKwJsVkvB
-    // // play:MSVFqF2aDcnN8CziQZQmqY:move:e7e5 => J3bJ2SruB518B2qn9QKKgs
-    // // play:8pxD8BKK3A9XZuDzrcuexd:move:g1f3 => 26BuaaRqhKHZVs9YRHvLzb
-    // // play:4r2FcZ9jEJukZ3wEGPn3h:move:e7e8q => C6VatJhT8ZjDrsToNGJh4N
-    // fn play_id(&self, previous: Option<Id>, play: Move) -> Id {
-    //     if let Some(previous) = previous {
-    //         hash(format!("play:{previous}:move:{}", play.uci()).as_bytes())
-    //     } else {
-    //         hash(format!("start:{}:move:{}", self.start().id(), play.uci()).as_bytes())
-    //     }
-    // }
+    pub fn mainline_keys(&self) -> Vec<Key> {
+        let mut position = self.start();
+        let mut hash = line_hash(position.position());
+        let mut keys = vec![Key(fold(hash.finalize()))];
+        while let Ok(play) = position.main() {
+            hash = line_hash_play(hash, play.play());
+            keys.push(Key(fold(hash.finalize())));
+            position = play.position();
+        }
+        keys
+    }
 }
 
-impl Id {
-    pub const fn xor(self, other: Id) -> Id {
-        Id(self.0 ^ other.0)
+impl Line<Position, Move> {
+    pub fn key(&self) -> Key {
+        line_key(self.position, self.moves.iter().copied())
+    }
+}
+
+fn line_key(position: Position, moves: impl IntoIterator<Item = Move>) -> Key {
+    let mut hash = line_hash(position);
+    for play in moves {
+        hash = line_hash_play(hash, play);
+    }
+    Key(fold(hash.finalize()))
+}
+
+fn line_hash(position: Position) -> sha2_const::Sha256 {
+    sha2_const::Sha256::new().update(b"line:").update(position.key().to_string().as_bytes())
+}
+
+fn line_hash_play(hash: sha2_const::Sha256, play: Move) -> sha2_const::Sha256 {
+    hash.update(b":").update(play.to_string().as_bytes())
+}
+
+impl Key {
+    pub const fn xor(self, other: Key) -> Key {
+        Key(self.0 ^ other.0)
     }
 
     pub const fn u128(self) -> u128 {
         self.0
     }
 
+    pub const fn be_bytes(self) -> [u8; 16] {
+        self.0.to_be_bytes()
+    }
+
     pub fn nonce() -> Self {
         let nonce = base58::Base58::random_str(12);
         let bytes = nonce.as_bytes();
-        let mut id = [0; 16];
-        let start = id.len() - bytes.len();
-        id[start..].copy_from_slice(bytes);
-        Id(u128::from_be_bytes(id))
+        let mut key = [0; 16];
+        let start = key.len() - bytes.len();
+        key[start..].copy_from_slice(bytes);
+        Key(u128::from_be_bytes(key))
     }
 }
 
 type U256 = [u8; 32];
 
-pub const fn hash(bytes: &[u8]) -> Id {
-    Id(fold(sha256(bytes)))
+pub const fn hash(bytes: &[u8]) -> Key {
+    Key(fold(sha256(bytes)))
 }
 
 const fn sha256(bytes: &[u8]) -> U256 {
@@ -183,7 +205,7 @@ impl Basis {
         #[cfg(rust_chess_compile_time_polyglot_basis)]
         static BASIS: Basis = polyglot::compute_basis();
         #[cfg(not(rust_chess_compile_time_polyglot_basis))]
-        static BASIS: Basis = include!("id/POLYGLOT-BASIS.rs");
+        static BASIS: Basis = include!("key/POLYGLOT-BASIS.rs");
 
         &BASIS
     }
@@ -193,39 +215,39 @@ impl Basis {
         #[allow(long_running_const_eval)]
         static BASIS: Basis = standard::compute_table();
         #[cfg(not(rust_chess_compile_time_standard_basis))]
-        static BASIS: Basis = include!("id/STANDARD-BASIS.rs");
+        static BASIS: Basis = include!("key/STANDARD-BASIS.rs");
 
         &BASIS
     }
 }
 
-fn counter_id(prefix: &str, counter: u32) -> Id {
+fn counter_key(prefix: &str, counter: u32) -> Key {
     hash(format!("{prefix}:{counter}").as_bytes())
 }
 
-const fn turn_id(basis: &Basis, turn: Player) -> Id {
+const fn turn_key(basis: &Basis, turn: Player) -> Key {
     basis.turn.get(turn)
 }
 
-const fn en_passant_id(basis: &Basis, en_passant: Option<EnPassant>) -> Id {
+const fn en_passant_key(basis: &Basis, en_passant: Option<EnPassant>) -> Key {
     match en_passant {
         Some(square) => basis.en_passant.get(square),
-        None => Id(0),
+        None => Key(0),
     }
 }
 
-const fn castle_id(basis: &Basis, castles: Castles) -> Id {
-    let mut id = Id(0);
+const fn castle_key(basis: &Basis, castles: Castles) -> Key {
+    let mut key = Key(0);
 
     finite_for!(player in Player {
         finite_for!(side in Side {
             if let Some(file) = castles.get(player, side) {
-                id = id.xor(basis.castle.get(player).get(file));
+                key = key.xor(basis.castle.get(player).get(file));
             }
         });
     });
 
-    id
+    key
 }
 
 #[cfg(test)]
@@ -244,32 +266,58 @@ mod tests {
     const START: Position = Position::start();
 
     #[test]
-    fn document_game_ids() {
+    fn document_line_keys() {
+        let d4 = Move::normal(Pawn, D2, D4);
+        let e4 = Move::normal(Pawn, E2, E4);
+        let e5 = Move::normal(Pawn, E7, E5);
+        let c5 = Move::normal(Pawn, C7, C5);
+        let nf3 = Move::normal(Knight, G1, F3);
+        let key =
+            |moves: &[Move]| Line { position: START, moves: moves.to_vec() }.key().to_string();
+
+        assert_eq!(key(&[]), "Y4LCEFvKgeZxrQoFJeeQZ8");
+        assert_eq!(key(&[e4]), "95asNCfiG3MeWa1q5jsZ1n");
+        assert_eq!(key(&[e4, c5]), "JQt9mENjV4RUbvog6oWGtb");
+        assert_eq!(key(&[e4, e5, nf3]), "LR2zFDKgxYWDcLHp9nME2i");
+        assert_eq!(key(&[nf3, d4]), "75SZLN4dvpcbErRJaDcnKR");
+    }
+
+    #[test]
+    fn document_game_mainline_keys() {
         use crate::formats::{Parser as _, pgn};
 
         // start position, no moves
         let game = Game::chess(START).unwrap();
-        let id = game.id();
-        assert_eq!(id.to_string(), "36MkWJmbeTWaYEDrfrGxNn");
-        assert_eq!(id.u128(), 22523061550585735571242541243028587795);
+        let key = game.mainline_key();
+        assert_eq!(key.to_string(), "Y4LCEFvKgeZxrQoFJeeQZ8");
 
         // 1. e4 on start position
         let mut cursor = Cursor::new(game);
-        cursor.option_mut_or_push(Move::normal(Pawn, E2, E4)).unwrap();
-        let e4 = cursor.into_game();
-        assert_eq!(e4.id().to_string(), "46osJVmEGh3XxSk2FKcFbr");
-        assert_eq!(e4.id().u128(), 33370984391190127392068542153345756661);
+        let e4 = Move::normal(Pawn, E2, E4);
+        let e5 = Move::normal(Pawn, E7, E5);
+        cursor.option_mut_or_push(e4).unwrap();
+        let e4_game = cursor.game().clone();
+        assert_eq!(e4_game.mainline_key().to_string(), "95asNCfiG3MeWa1q5jsZ1n");
+
+        cursor.option_mut_or_push(e5).unwrap();
+        assert_eq!(
+            cursor.game().mainline_keys(),
+            [
+                Line { position: START, moves: vec![] }.key(),
+                Line { position: START, moves: vec![e4] }.key(),
+                Line { position: START, moves: vec![e4, e5] }.key(),
+            ],
+        );
 
         // The weird game
         let pgn = pgn::pgn.parse(COLLISION_GAME).unwrap();
         let game: Game = pgn.try_into().unwrap();
-        assert_eq!(game.id().to_string(), "DL7b2eDrC8LVtpBQFL9BYT");
-        assert_eq!(game.id().u128(), 132719545793121815798994835819316023416);
+        assert_eq!(game.mainline_key().to_string(), "FtnuJA6Hk95K9GM4Ay8yN3");
     }
 
     #[test]
     fn document_polyglot_start_position_hash() {
-        assert_eq!(START.polyglot_id(), Id(0x463b_9618_1691_fc9c));
+        assert_eq!(START.polyglot_key(), Key(0x463b_9618_1691_fc9c));
     }
 
     #[test]
@@ -280,8 +328,8 @@ mod tests {
         let start = Position::start();
         let position = Position::from_fen(COLLISION_FEN).unwrap();
 
-        assert_eq!(position.polyglot_id(), start.polyglot_id());
-        assert_ne!(position.standard_id(), start.standard_id());
+        assert_eq!(position.polyglot_key(), start.polyglot_key());
+        assert_ne!(position.key(), start.key());
     }
 
     #[test]
@@ -301,8 +349,8 @@ mod tests {
 
         assert_eq!(constructed.fen(), expected.fen());
         assert_eq!(constructed.transposition_fen(), expected.transposition_fen());
-        assert_eq!(constructed.standard_id(), expected.standard_id());
-        assert_eq!(constructed.polyglot_id(), expected.polyglot_id());
+        assert_eq!(constructed.key(), expected.key());
+        assert_eq!(constructed.polyglot_key(), expected.polyglot_key());
     }
 
     #[test]
@@ -313,7 +361,7 @@ mod tests {
         let position =
             Position::from_fen("2b1k3/4p3/3p1p2/p2P2p1/P2P4/2P2PP1/4P3/2NQKB2 b - - 0 1").unwrap();
 
-        assert_eq!(position.polyglot_id(), Id(0));
-        assert_ne!(position.transposition_id(Basis::standard()), Id(0));
+        assert_eq!(position.polyglot_key(), Key(0));
+        assert_ne!(position.key_with_basis(Basis::standard()), Key(0));
     }
 }

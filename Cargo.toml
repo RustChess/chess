@@ -17,6 +17,7 @@ encoding_rs.workspace = true
 rand.workspace = true
 sha2-const.workspace = true
 thiserror.workspace = true
+time.workspace = true
 macros.workspace = true
 winnow.workspace = true
 
@@ -33,14 +34,16 @@ serde_json.workspace = true
 
 [package.metadata.cargo-shear]
 ignored-paths = [
+  "src/board/SCHARNAGL-PREFIXES.rs",
   "src/game/storage.rs",
-  "src/id/POLYGLOT-BASIS.rs",
-  "src/id/STANDARD-BASIS.rs",
+  "src/key/POLYGLOT-BASIS.rs",
+  "src/key/STANDARD-BASIS.rs",
   "src/square/SLIDER-SIGHTS.rs",
 ]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
+  "cfg(rust_chess_compute_scharnagl_prefixes)",
   "cfg(rust_chess_compile_time_polyglot_basis)",
   "cfg(rust_chess_compile_time_slider_sights)",
   "cfg(rust_chess_compile_time_standard_basis)",
@@ -75,6 +78,7 @@ serde_derive = "1"
 serde_json = "1"
 sha2-const = "0.1"
 thiserror = "2"
+time = "0.3"
 tracing = "0.1"
 syn = "3"
 winnow = "1"

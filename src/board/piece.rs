@@ -20,6 +20,7 @@ pub struct Piece {
 
 crate::finite_set!(
     /// Black and white
+    #[derive(DeserializeFromStr, SerializeDisplay)]
     Player,
     Players,
     PlayerTable,

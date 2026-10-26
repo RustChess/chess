@@ -42,6 +42,7 @@ crate::finite_set!(
 
 crate::finite_set!(
     /// The squares of a chess board.
+    #[derive(DeserializeFromStr, SerializeDisplay)]
     Square,
     SquareTable {
         A1 = 0 as a1,

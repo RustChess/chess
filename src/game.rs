@@ -4,10 +4,13 @@ use std::collections::{BTreeMap as Map, BTreeSet as Set};
 
 use crate as chess;
 use crate::{
-    Player,
-    formats::{Text, san::Check},
+    Player, Square,
+    formats::Text,
+    position::{self, Analysis, Check, ScoredLine, Vec1},
     square::{File, Rank},
 };
+
+pub use crate::formats::pgn::{command, tag};
 
 use self::layout::Layout as _;
 
@@ -20,11 +23,14 @@ pub mod traversal;
 
 mod cursor;
 mod layout;
+mod merge;
 pub(in crate::game) mod tree;
 
 /// An error from accessing or editing a game tree.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("games have different starting positions or modes")]
+    DifferentStart,
     #[error(transparent)]
     Start(#[from] start::Error),
     #[error(transparent)]
@@ -58,48 +64,61 @@ pub struct Game {
     public: GamePublic,
 }
 
+/// A position followed by a linear sequence of moves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Line<P, M> {
+    pub position: P,
+    pub moves: Vec<M>,
+}
+
 /// Public data associated with a game.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub struct GamePublic {
+    #[serde(default, skip_serializing_if = "macros::is_default")]
+    pub title: Option<Text>,
     pub orientation: Player,
-    pub outcome: Outcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Outcome>,
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub roster: Roster,
-    pub tags: Vec<Tag>,
+    #[serde(default, skip_serializing_if = "macros::is_default")]
+    pub tags: Vec<tag::Other>,
 }
 
 impl Default for GamePublic {
     fn default() -> Self {
         Self {
+            title: None,
             orientation: Player::White,
-            outcome: Outcome::default(),
+            outcome: None,
             roster: Roster::default(),
             tags: Vec::new(),
         }
     }
 }
 
-/// The stable identity of a position within a game.
+/// The allocated slot of a position within a game.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, PartialOrd, Eq, Ord, Serialize)]
 #[serde(from = "u32", into = "u32")]
-pub enum PositionId {
+pub enum PositionSlot {
     #[default]
     Start,
-    Move(MoveId),
+    Move(MoveSlot),
 }
 
-/// The stable identity of a move within a game.
+/// The allocated slot of a move within a game.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, PartialOrd, Eq, Ord, Serialize)]
 #[serde(transparent)]
-pub struct MoveId(NonZeroU32);
+pub struct MoveSlot(NonZeroU32);
 
-/// The starting position identity.
-pub const START: PositionId = PositionId::Start;
+/// The starting position slot.
+pub const START: PositionSlot = PositionSlot::Start;
 
-/// A position in a game, with its derived and public data.
+/// A position in a game, with its derived, analysis, and public data.
 #[derive(Clone, PartialEq)]
 pub struct Position {
     // pointers right
-    options: Vec<MoveId>,
+    options: Vec<MoveSlot>,
 
     // core datum
     position: chess::Position,
@@ -108,22 +127,33 @@ pub struct Position {
     check: Option<Check>,
     legal: Vec<chess::Move>,
 
+    // analysis data
+    analysis: Option<Analysis>,
+
+    // public data
     pub public: PositionPublic,
 }
 
 /// Public data associated with a position.
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 pub struct PositionPublic {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arrows: Vec<Arrow>,
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub comment: Option<Text>,
-    pub valuation: Option<Valuation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<command::Other>,
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub expanded: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
 }
 
 /// A move in a game, with its derived and public data.
 #[derive(Clone, PartialEq)]
 pub struct Move {
     // pointer left
-    previous: PositionId,
+    previous: PositionSlot,
 
     // core datum
     play: chess::Move,
@@ -135,10 +165,11 @@ pub struct Move {
 }
 
 /// Public data associated with a move.
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 pub struct MovePublic {
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub affixes: Affixes,
-    pub commands: Vec<Command>,
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub nags: Vec<Nag>,
 }
 
@@ -146,13 +177,13 @@ pub struct MovePublic {
 #[derive(Clone, Copy)]
 pub struct PositionRef<'g> {
     game: &'g Game,
-    id: PositionId,
+    slot: PositionSlot,
 }
 
 /// A mutable reference to a position in a game.
 pub struct PositionMut<'g> {
     game: &'g mut Game,
-    id: PositionId,
+    slot: PositionSlot,
     protected: Protected,
 }
 
@@ -160,13 +191,13 @@ pub struct PositionMut<'g> {
 #[derive(Clone, Copy)]
 pub struct MoveRef<'g> {
     game: &'g Game,
-    id: MoveId,
+    slot: MoveSlot,
 }
 
 /// A mutable reference to a move in a game.
 pub struct MoveMut<'g> {
     game: &'g mut Game,
-    id: MoveId,
+    slot: MoveSlot,
     protected: Protected,
 }
 
@@ -174,8 +205,8 @@ pub struct MoveMut<'g> {
 #[derive(Clone, PartialEq)]
 pub struct Cursor<G = Game> {
     game: G,
-    id: PositionId,
-    preserve: Set<PositionId>,
+    slot: PositionSlot,
+    preserve: Set<PositionSlot>,
 }
 
 /// A cursor over an immutably borrowed game.
@@ -185,9 +216,11 @@ pub type CursorRef<'g> = Cursor<&'g Game>;
 pub type CursorMut<'g> = Cursor<&'g mut Game>;
 
 /// Comments surrounding an option in PGN movetext.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Affixes {
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub intro: Option<Text>,
+    #[serde(default, skip_serializing_if = "macros::is_default")]
     pub outro: Option<Text>,
 }
 
@@ -198,17 +231,27 @@ struct Ambiguity {
     rank: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct Command {
-    pub command: Text,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub parameters: Vec<String>,
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Arrow {
+    pub from: Square,
+    pub to: Square,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
 }
 
-/// A detached, injective mapping from every pre-compaction move ID to its compact ID.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Color {
+    Red,
+    Green,
+    Blue,
+    Yellow,
+}
+
+/// A detached, injective mapping from one slot allocation to another.
 ///
-/// Moreover, each compact move ID is greater than the ID of the position containing it as an option.
-pub struct Compact(Map<MoveId, MoveId>);
+/// Moreover, each new move slot is greater than the slot of the position containing it as an option.
+pub struct Reslot(Map<MoveSlot, MoveSlot>);
 
 /// Canonical tree-slot assignment order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,17 +259,16 @@ pub struct Compact(Map<MoveId, MoveId>);
 pub enum Layout {
     /// The move encounter order used while constructing a game from PGN.
     ///
-    /// For `1. e4 (1. d4 d5) e5`, IDs are assigned to `e4`, `d4`, `d5`, then `e5`
+    /// For `1. e4 (1. d4 d5) e5`, slots are assigned to `e4`, `d4`, `d5`, then `e5`
     /// consecutively as 1, 2, 3, 4.
     Pgn,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Valuation {
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Marker {
+    pub square: Square,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub depth: Option<u32>,
-    #[serde(flatten)]
-    pub score: Score,
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -237,26 +279,187 @@ pub enum Mode {
     Freestyle,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(untagged)]
 pub enum Nag {
     Numeric(u32),
     Symbol(String),
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
+#[non_exhaustive]
 pub enum Outcome {
-    White,
-    Black,
-    Draw,
-    #[default]
-    Unknown,
+    White(Option<Win>),
+    Black(Option<Win>),
+    Draw(Option<Draw>),
+}
+
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
+#[non_exhaustive]
+pub enum Win {
+    Checkmate,
+    Resignation,
+    FlagFall,
+    Forfeit,
+    Abandonment,
+}
+
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
+#[non_exhaustive]
+pub enum Draw {
+    Agreement,
+    Stalemate,
+    DeadPosition,
+    ThreefoldRepetition,
+    FivefoldRepetition,
+    Repetition,
+    FiftyMoves,
+    SeventyFiveMoves,
+    FlagFall,
+}
+
+impl Outcome {
+    pub const fn result(self) -> &'static str {
+        match self {
+            Self::White(_) => "1-0",
+            Self::Black(_) => "0-1",
+            Self::Draw(_) => "1/2-1/2",
+        }
+    }
+
+    pub fn from_result(result: &str) -> Option<Self> {
+        use Outcome::*;
+        Some(match result {
+            "1-0" => White(None),
+            "0-1" => Black(None),
+            "1/2-1/2" => Draw(None),
+            _ => return None,
+        })
+    }
+
+    pub const fn winner(self) -> Option<Player> {
+        use Outcome::*;
+        match self {
+            White(_) => Some(Player::White),
+            Black(_) => Some(Player::Black),
+            Draw(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Outcome::*;
+        match self {
+            White(None) => f.write_str("white:win"),
+            White(Some(reason)) => write!(f, "white:win:{reason}"),
+            Black(None) => f.write_str("black:win"),
+            Black(Some(reason)) => write!(f, "black:win:{reason}"),
+            Draw(None) => f.write_str("draw"),
+            Draw(Some(reason)) => write!(f, "draw:{reason}"),
+        }
+    }
+}
+
+impl FromStr for Outcome {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> core::result::Result<Self, Self::Err> {
+        use Outcome::*;
+        Ok(if value == "white:win" {
+            White(None)
+        } else if let Some(reason) = value.strip_prefix("white:win:") {
+            White(Some(reason.parse()?))
+        } else if value == "black:win" {
+            Black(None)
+        } else if let Some(reason) = value.strip_prefix("black:win:") {
+            Black(Some(reason.parse()?))
+        } else if value == "draw" {
+            Draw(None)
+        } else if let Some(reason) = value.strip_prefix("draw:") {
+            Draw(Some(reason.parse()?))
+        } else {
+            return Err("unknown game outcome");
+        })
+    }
+}
+
+impl fmt::Display for Win {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Win::*;
+        f.write_str(match self {
+            Checkmate => "checkmate",
+            Resignation => "resignation",
+            FlagFall => "flag-fall",
+            Forfeit => "forfeit",
+            Abandonment => "abandonment",
+        })
+    }
+}
+
+impl FromStr for Win {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> core::result::Result<Self, Self::Err> {
+        use Win::*;
+        Ok(match value {
+            "checkmate" => Checkmate,
+            "resignation" => Resignation,
+            "flag-fall" => FlagFall,
+            "forfeit" => Forfeit,
+            "abandonment" => Abandonment,
+            _ => return Err("unknown win reason"),
+        })
+    }
+}
+
+impl fmt::Display for Draw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Draw::*;
+        f.write_str(match self {
+            Agreement => "agreement",
+            Stalemate => "stalemate",
+            DeadPosition => "dead-position",
+            ThreefoldRepetition => "threefold-repetition",
+            FivefoldRepetition => "fivefold-repetition",
+            Repetition => "repetition",
+            FiftyMoves => "fifty-moves",
+            SeventyFiveMoves => "seventy-five-moves",
+            FlagFall => "flag-fall",
+        })
+    }
+}
+
+impl FromStr for Draw {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> core::result::Result<Self, Self::Err> {
+        use Draw::*;
+        Ok(match value {
+            "agreement" => Agreement,
+            "stalemate" => Stalemate,
+            "dead-position" => DeadPosition,
+            "threefold-repetition" => ThreefoldRepetition,
+            "fivefold-repetition" => FivefoldRepetition,
+            "repetition" => Repetition,
+            "fifty-moves" => FiftyMoves,
+            "seventy-five-moves" => SeventyFiveMoves,
+            "flag-fall" => FlagFall,
+            _ => return Err("unknown draw reason"),
+        })
+    }
 }
 
 /// Positions retained by attached mutable values.
 #[derive(Clone)]
 pub struct Protected {
-    pub unremovable: Set<PositionId>,
+    pub unremovable: Set<PositionSlot>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -275,23 +478,10 @@ pub struct Roster {
     pub black: Option<Text>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Score {
-    Centipawns(i32),
-    Mate(i32),
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Short {
     pub file: Option<File>,
     pub rank: Option<Rank>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct Tag {
-    pub key: Text,
-    pub value: String,
 }
 
 impl Game {
@@ -313,17 +503,17 @@ impl Game {
         Self::unchecked_with_mode(position, Mode::Freestyle)
     }
 
-    /// Reassigns move IDs in a prescribed layout and returns the old-to-new mapping.
+    /// Reassigns move slots in a prescribed layout and returns the old-to-new mapping.
     ///
-    /// Tracked changes are discarded, as they use the the old IDs.
+    /// Tracked changes are discarded, as they use the the old slots.
     /// Change tracking remains enabled or disabled as configured.
-    pub fn compact(&mut self, layout: Layout) -> Compact {
-        let compact = layout.compact(self);
-        self.tree.compact(&compact);
+    pub fn reslot(&mut self, layout: Layout) -> Reslot {
+        let reslot = layout.reslot(self);
+        self.tree.reslot(&reslot);
         if let Some(changes) = self.changes.as_mut() {
             changes.clear();
         }
-        compact
+        reslot
     }
 
     pub const fn mode(&self) -> Mode {
@@ -350,15 +540,23 @@ impl Game {
         self.changes.as_ref().map(Vec::len)
     }
 
+    pub fn clear_analyses(&mut self) {
+        self.tree.clear_analyses();
+    }
+
     pub const fn public(&self) -> &GamePublic {
         &self.public
+    }
+
+    pub const fn title(&self) -> Option<&Text> {
+        self.public.title.as_ref()
     }
 
     pub const fn orientation(&self) -> Player {
         self.public.orientation
     }
 
-    pub const fn outcome(&self) -> Outcome {
+    pub const fn outcome(&self) -> Option<Outcome> {
         self.public.outcome
     }
 
@@ -366,7 +564,7 @@ impl Game {
         &self.public.roster
     }
 
-    pub const fn tags(&self) -> &[Tag] {
+    pub const fn tags(&self) -> &[tag::Other] {
         self.public.tags.as_slice()
     }
 
@@ -374,7 +572,11 @@ impl Game {
         self.update_public(|public| public.orientation = orientation);
     }
 
-    pub fn set_outcome(&mut self, outcome: Outcome) {
+    pub fn set_title(&mut self, title: Option<Text>) {
+        self.update_public(|public| public.title = title);
+    }
+
+    pub fn set_outcome(&mut self, outcome: Option<Outcome>) {
         self.update_public(|public| public.outcome = outcome);
     }
 
@@ -382,7 +584,7 @@ impl Game {
         self.update_public(|public| update(&mut public.roster));
     }
 
-    pub fn update_tags(&mut self, update: impl FnOnce(&mut Vec<Tag>)) {
+    pub fn update_tags(&mut self, update: impl FnOnce(&mut Vec<tag::Other>)) {
         self.update_public(|public| update(&mut public.tags));
     }
 
@@ -392,15 +594,15 @@ impl Game {
         if let Some(before) = before
             && before != self.public
         {
-            self.track(change::Patch::Game(before));
+            self.track(change::Patch::Game(Box::new(before)));
         }
     }
 
     fn unchecked_with_mode(position: chess::Position, mode: Mode) -> Self {
-        Self::unchecked_with_mode_next(position, mode, MoveId::MIN)
+        Self::unchecked_with_mode_next(position, mode, MoveSlot::MIN)
     }
 
-    fn unchecked_with_mode_next(position: chess::Position, mode: Mode, next: MoveId) -> Self {
+    fn unchecked_with_mode_next(position: chess::Position, mode: Mode, next: MoveSlot) -> Self {
         Self {
             mode,
             changes: None,
@@ -415,10 +617,21 @@ impl Position {
         let legal = position.legal_plays();
         let check = Check::new(position.is_check(), legal.is_empty());
 
-        Self { options: Vec::new(), position, check, legal, public: PositionPublic::default() }
+        Self {
+            options: Vec::new(),
+            position,
+            check,
+            legal,
+            analysis: None,
+            public: PositionPublic::default(),
+        }
     }
 
-    pub const fn options(&self) -> &[MoveId] {
+    pub const fn arrows(&self) -> &[Arrow] {
+        self.public.arrows.as_slice()
+    }
+
+    pub const fn options(&self) -> &[MoveSlot] {
         self.options.as_slice()
     }
 
@@ -430,8 +643,12 @@ impl Position {
         self.public.comment.as_ref()
     }
 
-    pub const fn valuation(&self) -> Option<Valuation> {
-        self.public.valuation
+    pub const fn commands(&self) -> &[command::Other] {
+        self.public.commands.as_slice()
+    }
+
+    pub const fn analysis(&self) -> Option<&Analysis> {
+        self.analysis.as_ref()
     }
 
     pub const fn expanded(&self) -> bool {
@@ -442,16 +659,28 @@ impl Position {
         self.legal.as_slice()
     }
 
+    pub const fn markers(&self) -> &[Marker] {
+        self.public.markers.as_slice()
+    }
+
     pub const fn check(&self) -> Option<Check> {
         self.check
     }
 
+    pub const fn is_terminal(&self) -> bool {
+        self.legal.is_empty()
+    }
+
+    pub const fn terminal(&self) -> Option<position::Terminal> {
+        position::Terminal::new(self.check.is_some(), self.is_terminal())
+    }
+
     pub const fn is_checkmate(&self) -> bool {
-        matches!(self.check, Some(Check::Checkmate))
+        matches!(self.terminal(), Some(position::Terminal::Checkmate))
     }
 
     pub const fn is_stalemate(&self) -> bool {
-        self.check.is_none() && self.legal.is_empty()
+        matches!(self.terminal(), Some(position::Terminal::Stalemate))
     }
 }
 
@@ -468,15 +697,11 @@ impl Move {
         &self.public.affixes
     }
 
-    pub const fn commands(&self) -> &[Command] {
-        self.public.commands.as_slice()
-    }
-
     pub const fn nags(&self) -> &[Nag] {
         self.public.nags.as_slice()
     }
 
-    pub const fn previous(&self) -> PositionId {
+    pub const fn previous(&self) -> PositionSlot {
         self.previous
     }
 
@@ -514,18 +739,39 @@ impl Ambiguity {
     }
 }
 
-impl Command {
-    pub fn expanded() -> Self {
-        Self {
-            command: Text::new("cgexp").expect("literal is non-empty"),
-            parameters: vec!["true".to_string()],
+impl<M> position::Line<M> {
+    pub fn resolve<N>(
+        &self,
+        position: PositionRef<'_>,
+        resolver: impl Fn(PositionRef<'_>, &[M]) -> Vec<N>,
+    ) -> Option<position::Line<N>> {
+        let moves = resolver(position, self.as_slice());
+        if moves.len() != self.len() {
+            return None;
         }
+        Some(position::Line(Vec1::new(moves).expect("source line has moves")))
     }
+}
 
-    pub fn is_expanded(&self) -> bool {
-        self.command.as_ref() == "cgexp"
-            && self.parameters.len() == 1
-            && self.parameters[0] == "true"
+impl<M> ScoredLine<M> {
+    pub fn resolve<N>(
+        &self,
+        position: PositionRef<'_>,
+        resolver: impl Fn(PositionRef<'_>, &[M]) -> Vec<N>,
+    ) -> Option<ScoredLine<N>> {
+        Some(ScoredLine { line: self.line.resolve(position, resolver)?, score: self.score })
+    }
+}
+
+impl<M> Vec1<ScoredLine<M>> {
+    pub fn resolve<N>(
+        &self,
+        position: PositionRef<'_>,
+        resolver: impl Fn(PositionRef<'_>, &[M]) -> Vec<N> + Copy,
+    ) -> Option<Vec1<ScoredLine<N>>> {
+        let resolved =
+            self.iter().map(|line| line.resolve(position, resolver)).collect::<Option<_>>()?;
+        Some(Vec1::new(resolved).expect("evaluation has lines"))
     }
 }
 
@@ -541,26 +787,26 @@ impl From<bool> for Mode {
     }
 }
 
-impl PositionId {
+impl PositionSlot {
     pub const fn is_start(&self) -> bool {
         matches!(self, Self::Start)
     }
 }
 
-impl MoveId {
+impl MoveSlot {
     pub const MIN: Self = Self(NonZeroU32::MIN);
     pub const MAX: Self = Self(NonZeroU32::MAX);
 
     pub const fn next(self) -> Option<Self> {
         match self.0.checked_add(1) {
-            Some(id) => Some(Self(id)),
+            Some(slot) => Some(Self(slot)),
             None => None,
         }
     }
 
     pub const fn prev(self) -> Option<Self> {
         match NonZeroU32::new(self.0.get() - 1) {
-            Some(id) => Some(Self(id)),
+            Some(slot) => Some(Self(slot)),
             None => None,
         }
     }
@@ -568,18 +814,18 @@ impl MoveId {
     /// Maps iterator.enumerate() indices 0, 1, 2...
     /// to Self::MIN = 1, Self::MIN + 1 = 2, etc.
     pub fn from_index(index: usize) -> Option<Self> {
-        let id = u32::try_from(index).ok()?.checked_add(1)?;
-        Some(Self(NonZeroU32::new(id)?))
+        let slot = u32::try_from(index).ok()?.checked_add(1)?;
+        Some(Self(NonZeroU32::new(slot)?))
     }
 }
 
-impl fmt::Display for MoveId {
+impl fmt::Display for MoveSlot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl FromStr for MoveId {
+impl FromStr for MoveSlot {
     type Err = <NonZeroU32 as FromStr>::Err;
 
     fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
@@ -587,13 +833,13 @@ impl FromStr for MoveId {
     }
 }
 
-impl fmt::Display for PositionId {
+impl fmt::Display for PositionSlot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", u32::from(*self))
     }
 }
 
-impl FromStr for PositionId {
+impl FromStr for PositionSlot {
     type Err = <u32 as FromStr>::Err;
 
     fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
@@ -601,43 +847,43 @@ impl FromStr for PositionId {
     }
 }
 
-impl From<MoveId> for PositionId {
-    fn from(id: MoveId) -> Self {
-        Self::Move(id)
+impl From<MoveSlot> for PositionSlot {
+    fn from(slot: MoveSlot) -> Self {
+        Self::Move(slot)
     }
 }
 
-impl From<NonZeroU32> for MoveId {
-    fn from(id: NonZeroU32) -> Self {
-        Self(id)
+impl From<NonZeroU32> for MoveSlot {
+    fn from(slot: NonZeroU32) -> Self {
+        Self(slot)
     }
 }
 
-impl From<MoveId> for NonZeroU32 {
-    fn from(id: MoveId) -> Self {
-        id.0
+impl From<MoveSlot> for NonZeroU32 {
+    fn from(slot: MoveSlot) -> Self {
+        slot.0
     }
 }
 
-impl From<u32> for PositionId {
-    fn from(id: u32) -> Self {
-        match NonZeroU32::new(id) {
-            Some(id) => Self::Move(MoveId(id)),
+impl From<u32> for PositionSlot {
+    fn from(slot: u32) -> Self {
+        match NonZeroU32::new(slot) {
+            Some(slot) => Self::Move(MoveSlot(slot)),
             None => Self::Start,
         }
     }
 }
 
-impl From<PositionId> for u32 {
-    fn from(id: PositionId) -> Self {
-        match id {
-            PositionId::Move(id) => id.0.get(),
-            PositionId::Start => 0,
+impl From<PositionSlot> for u32 {
+    fn from(slot: PositionSlot) -> Self {
+        match slot {
+            PositionSlot::Move(slot) => slot.0.get(),
+            PositionSlot::Start => 0,
         }
     }
 }
 
-impl Compact {
+impl Reslot {
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -646,18 +892,18 @@ impl Compact {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (MoveId, MoveId)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (MoveSlot, MoveSlot)> + '_ {
         self.0.iter().map(|(&before, &after)| (before, after))
     }
 
-    pub fn play(&self, id: MoveId) -> Option<MoveId> {
-        self.0.get(&id).copied()
+    pub fn play(&self, slot: MoveSlot) -> Option<MoveSlot> {
+        self.0.get(&slot).copied()
     }
 
-    pub fn position(&self, id: PositionId) -> Option<PositionId> {
-        match id {
-            PositionId::Move(id) => self.play(id).map(Into::into),
-            PositionId::Start => Some(PositionId::Start),
+    pub fn position(&self, slot: PositionSlot) -> Option<PositionSlot> {
+        match slot {
+            PositionSlot::Move(slot) => self.play(slot).map(Into::into),
+            PositionSlot::Start => Some(PositionSlot::Start),
         }
     }
 }
@@ -673,19 +919,10 @@ impl Protected {
         Self { unremovable: Set::new() }
     }
 
-    pub fn with_unremovable(&self, id: PositionId) -> Self {
+    pub fn with_unremovable(&self, slot: PositionSlot) -> Self {
         let mut protected = self.clone();
-        protected.unremovable.insert(id);
+        protected.unremovable.insert(slot);
         protected
-    }
-}
-
-impl Score {
-    pub const fn flip(self) -> Self {
-        match self {
-            Self::Centipawns(value) => Self::Centipawns(-value),
-            Self::Mate(value) => Self::Mate(-value),
-        }
     }
 }
 
@@ -725,54 +962,98 @@ mod tests {
 
     #[test]
     fn start_sorts_before_moves() {
-        // Tree compaction derives the next move ID from the greatest position ID.
-        assert!(PositionId::Start < PositionId::Move(MoveId::MIN));
+        // Tree reslot derives the next move slot from the greatest position slot.
+        assert!(PositionSlot::Start < PositionSlot::Move(MoveSlot::MIN));
     }
 
     #[test]
-    fn position_ids_are_u32s() {
+    fn position_slots_are_u32s() {
         for (position, integer) in [
-            (PositionId::Start, 0),
-            (PositionId::Move(MoveId::MIN), 1),
-            (PositionId::Move(MoveId::MAX), u32::MAX),
+            (PositionSlot::Start, 0),
+            (PositionSlot::Move(MoveSlot::MIN), 1),
+            (PositionSlot::Move(MoveSlot::MAX), u32::MAX),
         ] {
-            assert_eq!(PositionId::from(integer), position);
+            assert_eq!(PositionSlot::from(integer), position);
             assert_eq!(u32::from(position), integer);
         }
     }
 
     #[test]
-    fn move_ids_are_nonzero_u32s() {
+    fn move_slots_are_nonzero_u32s() {
         for integer in [NonZeroU32::MIN, NonZeroU32::MAX] {
-            let id = MoveId::from(integer);
-            assert_eq!(NonZeroU32::from(id), integer);
+            let slot = MoveSlot::from(integer);
+            assert_eq!(NonZeroU32::from(slot), integer);
         }
     }
 
     #[test]
-    fn ids_are_numeric_text() {
-        let play = MoveId::from_index(21).unwrap();
+    fn slots_are_numeric_text() {
+        let play = MoveSlot::from_index(21).unwrap();
 
         assert_eq!(play.to_string(), "22");
-        assert_eq!("22".parse::<MoveId>().unwrap(), play);
-        assert!("0".parse::<MoveId>().is_err());
+        assert_eq!("22".parse::<MoveSlot>().unwrap(), play);
+        assert!("0".parse::<MoveSlot>().is_err());
 
-        assert_eq!(PositionId::Start.to_string(), "0");
-        assert_eq!("0".parse::<PositionId>().unwrap(), PositionId::Start);
-        assert_eq!(PositionId::Move(play).to_string(), "22");
-        assert_eq!("22".parse::<PositionId>().unwrap(), PositionId::Move(play));
+        assert_eq!(PositionSlot::Start.to_string(), "0");
+        assert_eq!("0".parse::<PositionSlot>().unwrap(), PositionSlot::Start);
+        assert_eq!(PositionSlot::Move(play).to_string(), "22");
+        assert_eq!("22".parse::<PositionSlot>().unwrap(), PositionSlot::Move(play));
     }
 
     #[test]
-    fn ids_are_json_numbers() {
-        let play = MoveId::from_index(21).unwrap();
+    fn outcome_text() {
+        use Draw::*;
+
+        for (outcome, text) in [
+            (Outcome::White(None), "white:win"),
+            (Outcome::White(Some(Win::Checkmate)), "white:win:checkmate"),
+            (Outcome::White(Some(Win::Resignation)), "white:win:resignation"),
+            (Outcome::White(Some(Win::FlagFall)), "white:win:flag-fall"),
+            (Outcome::White(Some(Win::Forfeit)), "white:win:forfeit"),
+            (Outcome::Black(Some(Win::Abandonment)), "black:win:abandonment"),
+            (Outcome::Draw(None), "draw"),
+            (Outcome::Draw(Some(Agreement)), "draw:agreement"),
+            (Outcome::Draw(Some(Stalemate)), "draw:stalemate"),
+            (Outcome::Draw(Some(DeadPosition)), "draw:dead-position"),
+            (Outcome::Draw(Some(ThreefoldRepetition)), "draw:threefold-repetition"),
+            (Outcome::Draw(Some(FivefoldRepetition)), "draw:fivefold-repetition"),
+            (Outcome::Draw(Some(Repetition)), "draw:repetition"),
+            (Outcome::Draw(Some(FiftyMoves)), "draw:fifty-moves"),
+            (Outcome::Draw(Some(SeventyFiveMoves)), "draw:seventy-five-moves"),
+            (Outcome::Draw(Some(FlagFall)), "draw:flag-fall"),
+        ] {
+            assert_eq!(outcome.to_string(), text);
+            assert_eq!(text.parse(), Ok(outcome));
+            assert_eq!(serde_json::to_string(&outcome).unwrap(), format!("\"{text}\""));
+        }
+    }
+
+    #[test]
+    fn outcome_results() {
+        use Outcome::*;
+
+        for (outcome, result, winner) in [
+            (White(None), "1-0", Some(Player::White)),
+            (Black(None), "0-1", Some(Player::Black)),
+            (Draw(None), "1/2-1/2", None),
+        ] {
+            assert_eq!(outcome.result(), result);
+            assert_eq!(Outcome::from_result(result), Some(outcome));
+            assert_eq!(outcome.winner(), winner);
+        }
+        assert_eq!(Outcome::from_result("*"), None);
+    }
+
+    #[test]
+    fn slots_are_json_numbers() {
+        let play = MoveSlot::from_index(21).unwrap();
 
         assert_eq!(serde_json::to_string(&play).unwrap(), "22");
-        assert_eq!(serde_json::from_str::<MoveId>("22").unwrap(), play);
+        assert_eq!(serde_json::from_str::<MoveSlot>("22").unwrap(), play);
 
-        assert_eq!(serde_json::to_string(&PositionId::Start).unwrap(), "0");
-        assert_eq!(serde_json::from_str::<PositionId>("0").unwrap(), PositionId::Start);
-        assert_eq!(serde_json::to_string(&PositionId::Move(play)).unwrap(), "22");
-        assert_eq!(serde_json::from_str::<PositionId>("22").unwrap(), PositionId::Move(play));
+        assert_eq!(serde_json::to_string(&PositionSlot::Start).unwrap(), "0");
+        assert_eq!(serde_json::from_str::<PositionSlot>("0").unwrap(), PositionSlot::Start);
+        assert_eq!(serde_json::to_string(&PositionSlot::Move(play)).unwrap(), "22");
+        assert_eq!(serde_json::from_str::<PositionSlot>("22").unwrap(), PositionSlot::Move(play));
     }
 }

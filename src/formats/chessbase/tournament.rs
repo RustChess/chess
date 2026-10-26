@@ -1,12 +1,13 @@
 //! Chessbase tournament file format (CBT)
 
-use crate::formats::{ByteInput as Input, prelude::*};
+use core::fmt;
+
+use crate::formats::bytes_prelude::*;
 
 use super::{
-    cstr,
+    common::{Header, header},
     index::{Date, le_date},
-    optional,
-    table::{Header, header},
+    optional, text,
 };
 
 /// ChessBase tournament filename suffix.
@@ -14,11 +15,11 @@ pub const SUFFIX: &str = "cbt";
 
 #[derive(Clone, Debug)]
 pub struct Tournament {
-    pub title: String,
-    pub place: String,
+    pub title: Option<Text>,
+    pub place: Option<Text>,
     pub date: Date,
     pub mode: Option<Mode>,
-    pub speed: Option<Speed>,
+    pub speed: Speed,
     pub nation: Option<u8>,
     pub category: Option<u8>,
     pub rounds: Option<u8>,
@@ -36,8 +37,8 @@ pub fn tournament(input: &mut Input<'_>) -> ModalResult<Tournament> {
     // assert!(what == 0x19FC || what == 0xFFFF);
     let _ = take(7u8).parse_next(input)?;
 
-    let title = take(40u8).map(cstr).parse_next(input)?;
-    let place = take(30u8).map(cstr).parse_next(input)?;
+    let title = take(40u8).map(text).parse_next(input)?;
+    let place = take(30u8).map(text).parse_next(input)?;
 
     let date = le_date.parse_next(input)?;
 
@@ -56,18 +57,7 @@ pub fn tournament(input: &mut Input<'_>) -> ModalResult<Tournament> {
     let games = le_u32.parse_next(input)? as usize;
     let first_game = le_u32.parse_next(input)? as usize;
 
-    Ok(Tournament {
-        title,
-        place,
-        date,
-        mode,
-        speed: Some(speed),
-        nation,
-        category,
-        rounds,
-        games,
-        first_game,
-    })
+    Ok(Tournament { title, place, date, mode, speed, nation, category, rounds, games, first_game })
 }
 
 #[repr(u8)]
@@ -90,6 +80,32 @@ pub enum Speed {
     Blitz,
     Rapid,
     Correspondence,
+}
+
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Game => "game",
+            Self::Match => "match",
+            Self::Tournament => "tournament",
+            Self::Swiss => "swiss",
+            Self::Team => "team",
+            Self::Knockout => "knockout",
+            Self::Simultaneous => "simultaneous",
+            Self::Scheveningen => "scheveningen",
+        })
+    }
+}
+
+impl fmt::Display for Speed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Normal => "normal",
+            Self::Blitz => "blitz",
+            Self::Rapid => "rapid",
+            Self::Correspondence => "correspondence",
+        })
+    }
 }
 
 fn byte83(byte: u8) -> Option<(Option<Mode>, Speed)> {
@@ -138,7 +154,7 @@ pub struct Tournaments {
 
 pub fn tournaments(input: &mut Input<'_>) -> ModalResult<Tournaments> {
     let header = header.verify(|header| header.record_len == 90).parse_next(input)?;
-    let tournaments: Vec<Tournament> = repeat(..=header.len, tournament).parse_next(input)?;
+    let tournaments: Vec<Tournament> = repeat(header.len, tournament).parse_next(input)?;
     Ok(Tournaments { header, tournaments })
 }
 
@@ -181,11 +197,11 @@ mod tests {
 
         let tournament =
             super::tournament.parse(INPUT.as_slice()).expect("can parse CBT tournament");
-        assert_eq!(tournament.title, "12th Beirut Open 2025");
-        assert_eq!(tournament.place, "Beirut LBN");
+        assert_eq!(tournament.title.as_deref(), Some("12th Beirut Open 2025"));
+        assert_eq!(tournament.place.as_deref(), Some("Beirut LBN"));
         assert_eq!(tournament.date, Date { year: Some(2025), month: Some(10), day: Some(18) });
         assert!(matches!(tournament.mode, Some(Mode::Swiss)));
-        assert!(matches!(tournament.speed, Some(Speed::Normal)));
+        assert!(matches!(tournament.speed, Speed::Normal));
         assert_eq!(tournament.nation, Some(82));
         assert_eq!(tournament.category, None);
         assert_eq!(tournament.rounds, Some(9));

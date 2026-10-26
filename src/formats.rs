@@ -7,10 +7,12 @@ pub use winnow::Parser;
 
 mod bits;
 
+pub mod aix;
 pub mod chessbase;
 pub mod fen;
 pub mod pgn;
 pub mod san;
+pub mod tcn;
 pub mod text;
 pub mod uci;
 
@@ -30,6 +32,10 @@ pub use san::San;
 impl StrFormat for San {}
 
 #[doc(inline)]
+pub use tcn::Tcn;
+impl StrFormat for Tcn {}
+
+#[doc(inline)]
 pub use text::Text;
 impl StrFormat for Text {}
 
@@ -39,6 +45,16 @@ pub type ByteInput<'a> = &'a [u8];
 /// Slice of UTF-8 text.
 pub type StrInput<'a> = &'a str;
 
+pub(crate) mod bytes_prelude {
+    pub use super::{ByteInput as Input, prelude::*};
+    pub use winnow::binary::{be_u16, be_u24, be_u32, i8, le_i32, le_u16, le_u24, le_u32, u8};
+}
+
+pub(crate) mod str_prelude {
+    pub use super::{StrInput as Input, prelude::*};
+    pub use winnow::ascii::{dec_uint, multispace0, multispace1, space0, space1};
+}
+
 /// Complete text format with parsing, formatting, and format-specific errors.
 pub trait StrFormat: fmt::Display + FromStr
 where
@@ -46,16 +62,16 @@ where
 {
 }
 
-mod prelude {
+pub(crate) mod prelude {
     use std::io::{self, Read};
 
-    use super::ByteInput as Input;
+    use super::ByteInput;
+
+    pub use super::Text;
 
     pub use winnow::{
         ModalResult,
         Parser,
-        ascii::{dec_uint, multispace0, multispace1, space0, space1},
-        binary::{be_u16, be_u24, be_u32, i8, le_i32, le_u16, le_u24, le_u32, u8},
         combinator::{
             alt, backtrack_err, cut_err, delimited, opt, preceded, repeat, separated,
             separated_pair, seq, terminated,
@@ -90,9 +106,9 @@ mod prelude {
     ) -> core::result::Result<T, FrameError<E>>
     where
         Header: Framed,
-        H: for<'a> Parser<Input<'a>, Header, E>,
+        H: for<'a> Parser<ByteInput<'a>, Header, E>,
         P: FnOnce(Header) -> F,
-        F: for<'a> Parser<Input<'a>, T, E>,
+        F: for<'a> Parser<ByteInput<'a>, T, E>,
     {
         data.resize(Header::LEN, 0);
         input.read_exact(data).map_err(FrameError::Io)?;

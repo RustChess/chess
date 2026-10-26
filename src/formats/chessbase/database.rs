@@ -8,12 +8,13 @@ use std::{
 
 use crate::{
     formats::{Text, prelude::*},
-    game::{self as native, Tag},
+    game::{self as native, tag::Other},
 };
 
 use super::{
+    annotation, annotator,
     archive::{self, Access, Kind, Member},
-    game, index, player, table, tournament,
+    common, country, game, index, player, secondary, source, team, tournament,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -65,8 +66,7 @@ pub struct Archive<I> {
     pub members: Vec<Member>,
     pub games_header: game::Header,
     pub index_header: index::Header,
-    pub players_header: Option<table::Header>,
-    pub tournaments_header: Option<table::Header>,
+    headers: Headers,
 }
 
 /// A standalone ChessBase game file.
@@ -81,10 +81,46 @@ pub struct Bundle<I> {
     pub games_header: game::Header,
     pub index: I,
     pub index_header: index::Header,
-    pub players: Option<I>,
-    pub players_header: Option<table::Header>,
-    pub tournaments: Option<I>,
-    pub tournaments_header: Option<table::Header>,
+    tables: Tables<I>,
+}
+
+struct Table<I, H> {
+    input: I,
+    header: H,
+}
+
+struct Tables<I> {
+    annotations: Option<I>,
+    annotators: Option<Table<I, common::Header>>,
+    players: Option<Table<I, common::Header>>,
+    secondary: Option<Table<I, secondary::Header>>,
+    sources: Option<Table<I, common::Header>>,
+    teams: Option<Table<I, common::Header>>,
+    tournaments: Option<Table<I, common::Header>>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Headers {
+    annotators: Option<common::Header>,
+    players: Option<common::Header>,
+    secondary: Option<secondary::Header>,
+    sources: Option<common::Header>,
+    teams: Option<common::Header>,
+    tournaments: Option<common::Header>,
+}
+
+impl<I> Default for Tables<I> {
+    fn default() -> Self {
+        Self {
+            annotations: None,
+            annotators: None,
+            players: None,
+            secondary: None,
+            sources: None,
+            teams: None,
+            tournaments: None,
+        }
+    }
 }
 
 /// Input accepted by a ChessBase database reader.
@@ -99,9 +135,14 @@ pub struct Entry {
 /// Data joined to a game through its ChessBase index entry.
 pub struct Indexed {
     pub index: index::Game,
+    pub annotations: Option<annotation::Annotations>,
+    pub annotator: Option<annotator::Annotator>,
     pub black: Option<player::Player>,
+    pub black_team: Option<team::Team>,
+    pub source: Option<source::Source>,
     pub tournament: Option<tournament::Tournament>,
     pub white: Option<player::Player>,
+    pub white_team: Option<team::Team>,
 }
 
 /// Iterator over standalone ChessBase game records.
@@ -118,8 +159,7 @@ pub struct BundleEntries<'a, I> {
     games: &'a mut I,
     index: &'a mut I,
     index_len: usize,
-    players: Option<(&'a mut I, table::Header)>,
-    tournaments: Option<(&'a mut I, table::Header)>,
+    tables: &'a mut Tables<I>,
     body: Vec<u8>,
     count: usize,
     failed: bool,
@@ -130,8 +170,7 @@ pub struct ArchiveEntries<'a, I> {
     index: archive::Reader<'a, I>,
     data: &'a mut Access<I>,
     index_len: usize,
-    players_header: Option<table::Header>,
-    tournaments_header: Option<table::Header>,
+    headers: Headers,
     body: Vec<u8>,
     count: usize,
     failed: bool,
@@ -151,8 +190,10 @@ impl<R: IndexReader> Database<R> {
 
 impl Entry {
     fn into_game(self) -> Result<crate::Game> {
-        let mut game = crate::Game::from_chessbase(self.game)?;
-        if let Some(indexed) = self.index {
+        let mut indexed = self.index;
+        let annotations = indexed.as_mut().and_then(|indexed| indexed.annotations.take());
+        let mut game = game::convert::convert(self.game, annotations)?;
+        if let Some(indexed) = indexed {
             indexed.enrich(&mut game);
         }
         Ok(game)
@@ -161,7 +202,17 @@ impl Entry {
 
 impl Indexed {
     fn enrich(self, game: &mut crate::Game) {
-        let Self { index, black, tournament, white } = self;
+        let Self {
+            index,
+            annotations,
+            annotator,
+            black,
+            black_team,
+            source,
+            tournament,
+            white,
+            white_team,
+        } = self;
 
         game.update_roster(|roster| {
             roster.white = white.and_then(player_name);
@@ -170,10 +221,10 @@ impl Indexed {
             roster.round = round(index.round, index.subround);
         });
         game.set_outcome(match index.outcome {
-            index::Outcome::WhiteWins => native::Outcome::White,
-            index::Outcome::BlackWins => native::Outcome::Black,
-            index::Outcome::Draw => native::Outcome::Draw,
-            _ => native::Outcome::Unknown,
+            index::Outcome::WhiteWins => Some(native::Outcome::White(None)),
+            index::Outcome::BlackWins => Some(native::Outcome::Black(None)),
+            index::Outcome::Draw => Some(native::Outcome::Draw(None)),
+            _ => None,
         });
 
         if let Some(white_elo) = index.white_elo {
@@ -182,31 +233,127 @@ impl Indexed {
         if let Some(black_elo) = index.black_elo {
             game.update_tags(|tags| tags.push(tag("BlackElo", black_elo)));
         }
+        if let Some(eco) = index.eco {
+            game.update_tags(|tags| tags.push(tag("ECO", eco)));
+        }
+        if let Some(name) = annotator.and_then(|annotator| annotator.name) {
+            game.update_tags(|tags| tags.push(tag("Annotator", name)));
+        }
         if let Some(tournament) = tournament {
             game.update_roster(|roster| {
-                roster.event = Text::new(tournament.title).ok();
-                roster.site = Text::new(tournament.place).ok();
+                roster.event = tournament.title.clone();
+                roster.site = tournament.place.clone();
             });
-            if let Some(date) = date(tournament.date) {
-                game.update_tags(|tags| {
-                    tags.push(Tag {
-                        key: Text::new("EventDate").expect("tag name is non-empty"),
-                        value: date.to_string(),
-                    });
-                });
-            }
+            game.update_tags(|tags| {
+                if let Some(date) = date(tournament.date) {
+                    tags.push(tag("EventDate", date));
+                }
+                if let Some(mode) = tournament.mode {
+                    tags.push(tag("EventType", mode));
+                }
+                if let Some(category) = tournament.category {
+                    tags.push(tag(
+                        "EventCategory",
+                        roman(category.into()).expect("ChessBase category fits Roman numerals"),
+                    ));
+                }
+                if let Some(rounds) = tournament.rounds {
+                    tags.push(tag("EventRounds", rounds));
+                }
+                if let Some(country) = tournament.nation.and_then(country::code) {
+                    tags.push(tag("EventCountry", country));
+                }
+                tags.push(tag("TimeType", tournament.speed));
+            });
         }
+        if let Some(source) = source {
+            game.update_tags(|tags| {
+                if let Some(title) = source.title {
+                    tags.push(tag("Source", title));
+                }
+                if let Some(date) = date(source.date) {
+                    tags.push(tag("SourceDate", date));
+                }
+                if let Some(publisher) = source.publisher {
+                    tags.push(tag("Publisher", publisher));
+                }
+            });
+        }
+        add_team(game, "WhiteTeam", "WhiteTeamCountry", white_team);
+        add_team(game, "BlackTeam", "BlackTeamCountry", black_team);
+        debug_assert!(annotations.is_none());
     }
 }
 
+fn add_team(
+    game: &mut crate::Game,
+    name: &'static str,
+    nation: &'static str,
+    team: Option<team::Team>,
+) {
+    let Some(team) = team else { return };
+    game.update_tags(|tags| {
+        if let Some(title) = team_title(&team) {
+            tags.push(tag(name, title));
+        }
+        if let Some(country) = team.nation.and_then(country::code) {
+            tags.push(tag(nation, country));
+        }
+    });
+}
+
+fn team_title(team: &team::Team) -> Option<Text> {
+    let mut title = team.title.as_ref()?.to_string();
+    if let Some(number) = team.number {
+        let number = roman(number).unwrap_or_else(|| number.to_string());
+        title = format!("{title} {number}");
+    }
+    if let Some(year) = team.year {
+        title = if team.season {
+            format!("{title} {year}/{:02}", (year + 1) % 100)
+        } else {
+            format!("{title} {year}")
+        };
+    }
+    Text::new(title).ok()
+}
+
+fn roman(mut number: u32) -> Option<String> {
+    if !(1..=3999).contains(&number) {
+        return None;
+    }
+    const NUMERALS: &[(u32, &str)] = &[
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut value = String::new();
+    for &(arabic, roman) in NUMERALS {
+        while number >= arabic {
+            value.push_str(roman);
+            number -= arabic;
+        }
+    }
+    Some(value)
+}
+
 fn player_name(player: player::Player) -> Option<Text> {
-    let name = match (player.last_name.is_empty(), player.first_name.is_empty()) {
-        (false, false) => format!("{},{}", player.last_name, player.first_name),
-        (false, true) => player.last_name,
-        (true, false) => player.first_name,
-        (true, true) => return None,
-    };
-    Text::new(name).ok()
+    match (player.last_name, player.first_name) {
+        (Some(last), Some(first)) => Text::new(format!("{last},{first}")).ok(),
+        (Some(last), None) => Some(last),
+        (None, Some(first)) => Some(first),
+        (None, None) => None,
+    }
 }
 
 fn date(date: index::Date) -> Option<Text> {
@@ -223,8 +370,8 @@ fn round(round: Option<u8>, subround: Option<u8>) -> Option<Text> {
     }
 }
 
-fn tag(key: &'static str, value: impl ToString) -> Tag {
-    Tag { key: Text::new(key).expect("tag name is non-empty"), value: value.to_string() }
+fn tag(key: &'static str, value: impl ToString) -> Other {
+    Other { key: Text::new(key).expect("tag name is non-empty"), value: value.to_string() }
 }
 
 impl<T: Read + Seek> ReadSeek for T {}
@@ -352,31 +499,80 @@ impl<I: ReadSeek> BundleEntries<'_, I> {
     fn next_entry(&mut self) -> Result<Entry> {
         let indexed = read_index(self.index)?;
         let game = read_game(self.games, indexed.offsets.data, &mut self.body)?;
-
-        let white = match self.players.as_mut() {
-            Some((input, header)) => {
-                Some(read_table(input, *header, indexed.offsets.white, player::player)?)
-            }
-            None => None,
-        };
-        let black = match self.players.as_mut() {
-            Some((input, header)) => {
-                Some(read_table(input, *header, indexed.offsets.black, player::player)?)
-            }
-            None => None,
-        };
-        let tournament = match self.tournaments.as_mut() {
-            Some((input, header)) => Some(read_table(
-                input,
-                *header,
-                indexed.offsets.tournament,
-                tournament::tournament,
-            )?),
-            None => None,
-        };
+        let annotations = self.annotations(indexed.offsets.annotation)?;
+        let annotator = self.annotator(indexed.offsets.annotator)?;
+        let white = self.player(indexed.offsets.white)?;
+        let black = self.player(indexed.offsets.black)?;
+        let tournament = self.tournament(indexed.offsets.tournament)?;
+        let source = self.source(indexed.offsets.source)?;
+        let secondary = self.secondary()?;
+        let white_team = self.team(secondary.and_then(|value| value.white_team))?;
+        let black_team = self.team(secondary.and_then(|value| value.black_team))?;
 
         self.count += 1;
-        Ok(Entry { game, index: Some(Indexed { index: indexed, black, tournament, white }) })
+        Ok(Entry {
+            game,
+            index: Some(Indexed {
+                index: indexed,
+                annotations,
+                annotator,
+                black,
+                black_team,
+                source,
+                tournament,
+                white,
+                white_team,
+            }),
+        })
+    }
+
+    fn annotations(&mut self, offset: Option<usize>) -> Result<Option<annotation::Annotations>> {
+        let (Some(input), Some(offset)) = (&mut self.tables.annotations, offset) else {
+            return Ok(None);
+        };
+        read_annotations(input, offset, &mut self.body).map(Some)
+    }
+
+    fn annotator(&mut self, index: Option<usize>) -> Result<Option<annotator::Annotator>> {
+        let (Some(table), Some(index)) = (&mut self.tables.annotators, index) else {
+            return Ok(None);
+        };
+        read_table(&mut table.input, table.header, index, annotator::annotator).map(Some)
+    }
+
+    fn player(&mut self, index: usize) -> Result<Option<player::Player>> {
+        let Some(table) = &mut self.tables.players else {
+            return Ok(None);
+        };
+        read_table(&mut table.input, table.header, index, player::player).map(Some)
+    }
+
+    fn secondary(&mut self) -> Result<Option<secondary::Secondary>> {
+        let Some(table) = &mut self.tables.secondary else {
+            return Ok(None);
+        };
+        read_secondary(&mut table.input, table.header, self.count).map(Some)
+    }
+
+    fn source(&mut self, index: usize) -> Result<Option<source::Source>> {
+        let Some(table) = &mut self.tables.sources else {
+            return Ok(None);
+        };
+        read_table(&mut table.input, table.header, index, source::source).map(Some)
+    }
+
+    fn team(&mut self, index: Option<usize>) -> Result<Option<team::Team>> {
+        let (Some(table), Some(index)) = (&mut self.tables.teams, index) else {
+            return Ok(None);
+        };
+        read_table(&mut table.input, table.header, index, team::team).map(Some)
+    }
+
+    fn tournament(&mut self, index: usize) -> Result<Option<tournament::Tournament>> {
+        let Some(table) = &mut self.tables.tournaments else {
+            return Ok(None);
+        };
+        read_table(&mut table.input, table.header, index, tournament::tournament).map(Some)
     }
 }
 
@@ -399,39 +595,91 @@ impl<I: ReadSeek> Iterator for ArchiveEntries<'_, I> {
 impl<I: ReadSeek> ArchiveEntries<'_, I> {
     fn next_entry(&mut self) -> Result<Entry> {
         let indexed = read_index(&mut self.index)?;
-        let game = {
-            let mut games = self.data.reader(Kind::Games).ok_or(Error::Data)?;
-            read_game(&mut games, indexed.offsets.data, &mut self.body)?
-        };
-        let white = match self.players_header {
-            Some(header) => {
-                let mut players = self.data.reader(Kind::Players).ok_or(Error::Data)?;
-                Some(read_table(&mut players, header, indexed.offsets.white, player::player)?)
-            }
-            None => None,
-        };
-        let black = match self.players_header {
-            Some(header) => {
-                let mut players = self.data.reader(Kind::Players).ok_or(Error::Data)?;
-                Some(read_table(&mut players, header, indexed.offsets.black, player::player)?)
-            }
-            None => None,
-        };
-        let tournament = match self.tournaments_header {
-            Some(header) => {
-                let mut tournaments = self.data.reader(Kind::Tournaments).ok_or(Error::Data)?;
-                Some(read_table(
-                    &mut tournaments,
-                    header,
-                    indexed.offsets.tournament,
-                    tournament::tournament,
-                )?)
-            }
-            None => None,
-        };
+        let game = self.game(indexed.offsets.data)?;
+        let annotations = self.annotations(indexed.offsets.annotation)?;
+        let annotator = self.annotator(indexed.offsets.annotator)?;
+        let white = self.player(indexed.offsets.white)?;
+        let black = self.player(indexed.offsets.black)?;
+        let tournament = self.tournament(indexed.offsets.tournament)?;
+        let source = self.source(indexed.offsets.source)?;
+        let secondary = self.secondary()?;
+        let white_team = self.team(secondary.and_then(|value| value.white_team))?;
+        let black_team = self.team(secondary.and_then(|value| value.black_team))?;
 
         self.count += 1;
-        Ok(Entry { game, index: Some(Indexed { index: indexed, black, tournament, white }) })
+        Ok(Entry {
+            game,
+            index: Some(Indexed {
+                index: indexed,
+                annotations,
+                annotator,
+                black,
+                black_team,
+                source,
+                tournament,
+                white,
+                white_team,
+            }),
+        })
+    }
+
+    fn annotations(&mut self, offset: Option<usize>) -> Result<Option<annotation::Annotations>> {
+        let Some(offset) = offset else { return Ok(None) };
+        let mut input = self.data.reader(Kind::Annotations).ok_or(Error::Data)?;
+        read_annotations(&mut input, offset, &mut self.body).map(Some)
+    }
+
+    fn annotator(&mut self, index: Option<usize>) -> Result<Option<annotator::Annotator>> {
+        let (Some(header), Some(index)) = (self.headers.annotators, index) else {
+            return Ok(None);
+        };
+        let mut input = self.data.reader(Kind::Annotators).ok_or(Error::Data)?;
+        read_table(&mut input, header, index, annotator::annotator).map(Some)
+    }
+
+    fn game(&mut self, offset: usize) -> Result<game::Game> {
+        let mut input = self.data.reader(Kind::Games).ok_or(Error::Data)?;
+        read_game(&mut input, offset, &mut self.body)
+    }
+
+    fn player(&mut self, index: usize) -> Result<Option<player::Player>> {
+        let Some(header) = self.headers.players else {
+            return Ok(None);
+        };
+        let mut input = self.data.reader(Kind::Players).ok_or(Error::Data)?;
+        read_table(&mut input, header, index, player::player).map(Some)
+    }
+
+    fn secondary(&mut self) -> Result<Option<secondary::Secondary>> {
+        let Some(header) = self.headers.secondary else {
+            return Ok(None);
+        };
+        let mut input = self.data.reader(Kind::Secondary).ok_or(Error::Data)?;
+        read_secondary(&mut input, header, self.count).map(Some)
+    }
+
+    fn source(&mut self, index: usize) -> Result<Option<source::Source>> {
+        let Some(header) = self.headers.sources else {
+            return Ok(None);
+        };
+        let mut input = self.data.reader(Kind::Sources).ok_or(Error::Data)?;
+        read_table(&mut input, header, index, source::source).map(Some)
+    }
+
+    fn team(&mut self, index: Option<usize>) -> Result<Option<team::Team>> {
+        let (Some(header), Some(index)) = (self.headers.teams, index) else {
+            return Ok(None);
+        };
+        let mut input = self.data.reader(Kind::Teams).ok_or(Error::Data)?;
+        read_table(&mut input, header, index, team::team).map(Some)
+    }
+
+    fn tournament(&mut self, index: usize) -> Result<Option<tournament::Tournament>> {
+        let Some(header) = self.headers.tournaments else {
+            return Ok(None);
+        };
+        let mut input = self.data.reader(Kind::Tournaments).ok_or(Error::Data)?;
+        read_table(&mut input, header, index, tournament::tournament).map(Some)
     }
 }
 
@@ -446,13 +694,40 @@ fn read_game(input: &mut impl ReadSeek, offset: usize, body: &mut Vec<u8>) -> Re
     Ok(framed(input, body, game::info, game::game)?)
 }
 
+fn read_annotations(
+    input: &mut impl ReadSeek,
+    offset: usize,
+    body: &mut Vec<u8>,
+) -> Result<annotation::Annotations> {
+    input.seek(SeekFrom::Start(offset as u64)).map_err(|_| Error::Data)?;
+    Ok(framed(input, body, annotation::info, |_| annotation::annotations)?)
+}
+
+fn read_secondary(
+    input: &mut impl ReadSeek,
+    header: secondary::Header,
+    index: usize,
+) -> Result<secondary::Secondary> {
+    if index >= header.len {
+        return Err(Error::Data);
+    }
+    let offset = index
+        .checked_mul(header.record_len)
+        .and_then(|offset| offset.checked_add(secondary::Header::LEN))
+        .ok_or(Error::Data)?;
+    input.seek(SeekFrom::Start(offset as u64)).map_err(|_| Error::Data)?;
+    let mut bytes = vec![0; header.record_len];
+    input.read_exact(&mut bytes).map_err(|_| Error::Data)?;
+    secondary::secondary(header.record_len).parse(bytes.as_slice()).map_err(|_| Error::Data)
+}
+
 fn read_table<I: ReadSeek, T>(
     input: &mut I,
-    header: table::Header,
+    header: common::Header,
     index: usize,
     mut parser: impl FnMut(&mut &[u8]) -> winnow::ModalResult<T>,
 ) -> Result<T> {
-    if index > header.len {
+    if index >= header.len {
         return Err(Error::Data);
     }
     let len = header.record_len + 9;
@@ -468,10 +743,7 @@ fn read_table<I: ReadSeek, T>(
 
 impl Archive<File> {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        Self::new(
-            File::open(path.as_ref()).map_err(|_| Error::Data)?,
-            File::open(path).map_err(|_| Error::Data)?,
-        )
+        Self::new(File::open(path.as_ref())?, File::open(path)?)
     }
 }
 
@@ -490,8 +762,7 @@ impl<I: ReadSeek> Archive<I> {
             index,
             data: &mut self.data,
             index_len: self.index_header.len,
-            players_header: self.players_header,
-            tournaments_header: self.tournaments_header,
+            headers: self.headers,
             body: Vec::new(),
             count,
             failed: false,
@@ -512,11 +783,30 @@ impl<I: ReadSeek> Archive<I> {
             let mut input = index.reader(Kind::Index).ok_or(Error::Data)?;
             read_header::<{ index::Header::LEN }, _, _>(&mut input, index::header)?
         };
-        let players_header = match data.reader(Kind::Players) {
+        let annotators = match data.reader(Kind::Annotators) {
+            Some(mut annotators) => Some(read_table_header(&mut annotators)?),
+            None => None,
+        };
+        let players = match data.reader(Kind::Players) {
             Some(mut players) => Some(read_table_header(&mut players)?),
             None => None,
         };
-        let tournaments_header = match data.reader(Kind::Tournaments) {
+        let secondary = match data.reader(Kind::Secondary) {
+            Some(mut secondary) => Some(read_header::<{ secondary::Header::LEN }, _, _>(
+                &mut secondary,
+                secondary::header,
+            )?),
+            None => None,
+        };
+        let sources = match data.reader(Kind::Sources) {
+            Some(mut sources) => Some(read_table_header(&mut sources)?),
+            None => None,
+        };
+        let teams = match data.reader(Kind::Teams) {
+            Some(mut teams) => Some(read_table_header(&mut teams)?),
+            None => None,
+        };
+        let tournaments = match data.reader(Kind::Tournaments) {
             Some(mut tournaments) => Some(read_table_header(&mut tournaments)?),
             None => None,
         };
@@ -526,8 +816,7 @@ impl<I: ReadSeek> Archive<I> {
             members,
             games_header,
             index_header,
-            players_header,
-            tournaments_header,
+            headers: Headers { annotators, players, secondary, sources, teams, tournaments },
         })
     }
 }
@@ -537,14 +826,14 @@ impl<I: ReadSeek> Games<I> {
         input.rewind().map_err(|_| Error::Data)?;
         let mut bytes = [0; 26];
         input.read_exact(&mut bytes).map_err(|_| Error::Data)?;
-        let header = game::header.parse(bytes.as_slice()).map_err(|_| Error::Data)?;
+        let header = game::header.parse_next(&mut bytes.as_slice()).map_err(|_| Error::Data)?;
         Ok(Self { input, header })
     }
 }
 
 impl Games<File> {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        Self::new(File::open(path).map_err(|_| Error::Data)?)
+        Self::new(File::open(path)?)
     }
 }
 
@@ -562,8 +851,7 @@ impl<I: ReadSeek> Bundle<I> {
             games: &mut self.games,
             index: &mut self.index,
             index_len: self.index_header.len,
-            players: self.players.as_mut().zip(self.players_header),
-            tournaments: self.tournaments.as_mut().zip(self.tournaments_header),
+            tables: &mut self.tables,
             body: Vec::new(),
             count,
             failed: false,
@@ -573,46 +861,88 @@ impl<I: ReadSeek> Bundle<I> {
     pub fn new(mut games: I, mut index: I) -> Result<Self> {
         let games_header = read_header::<{ game::Header::LEN }, _, _>(&mut games, game::header)?;
         let index_header = read_header::<{ index::Header::LEN }, _, _>(&mut index, index::header)?;
-        Ok(Self {
-            games,
-            games_header,
-            index,
-            index_header,
-            players: None,
-            players_header: None,
-            tournaments: None,
-            tournaments_header: None,
-        })
+        Ok(Self { games, games_header, index, index_header, tables: Tables::default() })
+    }
+
+    fn set_annotations(&mut self, input: I) {
+        self.tables.annotations = Some(input);
+    }
+
+    fn set_annotators(&mut self, mut input: I) -> Result<()> {
+        let header = read_table_header(&mut input)?;
+        self.tables.annotators = Some(Table { input, header });
+        Ok(())
     }
 
     fn set_players(&mut self, mut input: I) -> Result<()> {
-        self.players_header = Some(read_table_header(&mut input)?);
-        self.players = Some(input);
+        let header = read_table_header(&mut input)?;
+        self.tables.players = Some(Table { input, header });
+        Ok(())
+    }
+
+    fn set_secondary(&mut self, mut input: I) -> Result<()> {
+        let header =
+            read_header::<{ secondary::Header::LEN }, _, _>(&mut input, secondary::header)?;
+        self.tables.secondary = Some(Table { input, header });
+        Ok(())
+    }
+
+    fn set_sources(&mut self, mut input: I) -> Result<()> {
+        let header = read_table_header(&mut input)?;
+        self.tables.sources = Some(Table { input, header });
+        Ok(())
+    }
+
+    fn set_teams(&mut self, mut input: I) -> Result<()> {
+        let header = read_table_header(&mut input)?;
+        self.tables.teams = Some(Table { input, header });
         Ok(())
     }
 
     fn set_tournaments(&mut self, mut input: I) -> Result<()> {
-        self.tournaments_header = Some(read_table_header(&mut input)?);
-        self.tournaments = Some(input);
+        let header = read_table_header(&mut input)?;
+        self.tables.tournaments = Some(Table { input, header });
         Ok(())
     }
 }
 
 impl Bundle<File> {
     pub fn from_files(games: impl AsRef<Path>, index: impl AsRef<Path>) -> Result<Self> {
-        Self::new(
-            File::open(games).map_err(|_| Error::Data)?,
-            File::open(index).map_err(|_| Error::Data)?,
-        )
+        Self::new(File::open(games)?, File::open(index)?)
+    }
+
+    pub fn with_annotations(mut self, annotations: impl AsRef<Path>) -> Result<Self> {
+        self.set_annotations(File::open(annotations)?);
+        Ok(self)
+    }
+
+    pub fn with_annotators(mut self, annotators: impl AsRef<Path>) -> Result<Self> {
+        self.set_annotators(File::open(annotators)?)?;
+        Ok(self)
     }
 
     pub fn with_players(mut self, players: impl AsRef<Path>) -> Result<Self> {
-        self.set_players(File::open(players).map_err(|_| Error::Data)?)?;
+        self.set_players(File::open(players)?)?;
+        Ok(self)
+    }
+
+    pub fn with_secondary(mut self, secondary: impl AsRef<Path>) -> Result<Self> {
+        self.set_secondary(File::open(secondary)?)?;
+        Ok(self)
+    }
+
+    pub fn with_sources(mut self, sources: impl AsRef<Path>) -> Result<Self> {
+        self.set_sources(File::open(sources)?)?;
+        Ok(self)
+    }
+
+    pub fn with_teams(mut self, teams: impl AsRef<Path>) -> Result<Self> {
+        self.set_teams(File::open(teams)?)?;
         Ok(self)
     }
 
     pub fn with_tournaments(mut self, tournaments: impl AsRef<Path>) -> Result<Self> {
-        self.set_tournaments(File::open(tournaments).map_err(|_| Error::Data)?)?;
+        self.set_tournaments(File::open(tournaments)?)?;
         Ok(self)
     }
 }
@@ -622,8 +952,33 @@ impl<'a> Bundle<Cursor<&'a [u8]>> {
         Self::new(Cursor::new(games), Cursor::new(index))
     }
 
+    pub fn with_annotations(mut self, annotations: &'a [u8]) -> Result<Self> {
+        self.set_annotations(Cursor::new(annotations));
+        Ok(self)
+    }
+
+    pub fn with_annotators(mut self, annotators: &'a [u8]) -> Result<Self> {
+        self.set_annotators(Cursor::new(annotators))?;
+        Ok(self)
+    }
+
     pub fn with_players(mut self, players: &'a [u8]) -> Result<Self> {
         self.set_players(Cursor::new(players))?;
+        Ok(self)
+    }
+
+    pub fn with_secondary(mut self, secondary: &'a [u8]) -> Result<Self> {
+        self.set_secondary(Cursor::new(secondary))?;
+        Ok(self)
+    }
+
+    pub fn with_sources(mut self, sources: &'a [u8]) -> Result<Self> {
+        self.set_sources(Cursor::new(sources))?;
+        Ok(self)
+    }
+
+    pub fn with_teams(mut self, teams: &'a [u8]) -> Result<Self> {
+        self.set_teams(Cursor::new(teams))?;
         Ok(self)
     }
 
@@ -643,11 +998,11 @@ fn read_header<const N: usize, I: ReadSeek, T>(
     parser(&mut bytes.as_slice()).map_err(|_| Error::Data)
 }
 
-fn read_table_header(input: &mut impl ReadSeek) -> Result<table::Header> {
+fn read_table_header(input: &mut impl ReadSeek) -> Result<common::Header> {
     input.rewind().map_err(|_| Error::Data)?;
-    let mut bytes = [0; 32];
-    input.read_exact(&mut bytes).map_err(|_| Error::Data)?;
-    table::header.parse_next(&mut bytes.as_slice()).map_err(|_| Error::Data)
+    let mut bytes = Vec::with_capacity(32);
+    input.take(32).read_to_end(&mut bytes).map_err(|_| Error::Data)?;
+    common::header.parse_next(&mut bytes.as_slice()).map_err(|_| Error::Data)
 }
 
 fn index_offset(index: usize) -> Result<u64> {
@@ -712,7 +1067,7 @@ mod tests {
     }
 
     fn table(records: &[&[u8]], record_len: u32) -> Vec<u8> {
-        let len = u32::try_from(records.len() - 1).expect("compact table length fits u32");
+        let len = u32::try_from(records.len()).expect("compact table length fits u32");
         let mut input = Vec::new();
         input.extend(len.to_le_bytes());
         input.extend(0u32.to_le_bytes());
@@ -725,6 +1080,19 @@ mod tests {
             input.extend_from_slice(record);
         }
         input
+    }
+
+    #[test]
+    fn empty_table_header() {
+        const INPUT: [u8; 28] = hex!(
+            "0000000000000000d20296493f000000
+             ffffffff0000000000000000"
+        );
+        let mut input = Cursor::new(INPUT);
+        let header = read_table_header(&mut input).unwrap();
+        assert_eq!(header.first_record, 28);
+        assert_eq!(header.record_len, 63);
+        assert_eq!(header.len_existing, 0);
     }
 
     #[test]
@@ -821,14 +1189,29 @@ mod tests {
     #[ignore = "exhaustive comparison against the external TWIC fixture"]
     fn twic_archive_bundle() {
         let cbv = twic::data(1616, "cbv");
+        let cba = twic::data(1616, "cba");
         let cbg = twic::data(1616, "cbg");
         let cbh = twic::data(1616, "cbh");
+        let cbc = twic::data(1616, "cbc");
+        let cbj = twic::data(1616, "cbj");
+        let cbe = twic::data(1616, "cbe");
         let cbp = twic::data(1616, "cbp");
+        let cbs = twic::data(1616, "cbs");
         let cbt = twic::data(1616, "cbt");
         let archive = Archive::from_slice(cbv.as_slice()).unwrap();
         let bundle = Bundle::from_slices(cbg.as_slice(), cbh.as_slice())
             .unwrap()
+            .with_annotations(cba.as_slice())
+            .unwrap()
+            .with_annotators(cbc.as_slice())
+            .unwrap()
             .with_players(cbp.as_slice())
+            .unwrap()
+            .with_secondary(cbj.as_slice())
+            .unwrap()
+            .with_sources(cbs.as_slice())
+            .unwrap()
+            .with_teams(cbe.as_slice())
             .unwrap()
             .with_tournaments(cbt.as_slice())
             .unwrap();

@@ -5,7 +5,7 @@ use winnow::binary::bits::{self, Bits as BitInput};
 use crate::{
     Player, Side,
     board::{Piece, Role},
-    formats::{ByteInput as Input, prelude::*},
+    formats::bytes_prelude::*,
     position::SideTable,
     square::{File, Rank, Square},
 };
@@ -17,15 +17,21 @@ pub fn header(input: &mut Input<'_>) -> ModalResult<Header> {
     let len = be_u32.parse_next(input)?;
     // Accumulated change in game-record byte lengths.
     let accum = be_u32.parse_next(input)?;
-    let zero1 = be_u32.parse_next(input)?;
-    let len2 = be_u32.parse_next(input)?;
-    let zero2 = be_u32.parse_next(input)?;
-    let accum2 = be_u32.parse_next(input)?;
+    match usize::from(first_game) {
+        Header::SHORT_LEN => {}
+        Header::LEN => {
+            let zero1 = be_u32.parse_next(input)?;
+            let len2 = be_u32.parse_next(input)?;
+            let zero2 = be_u32.parse_next(input)?;
+            let accum2 = be_u32.parse_next(input)?;
 
-    debug_assert_eq!(len, len2);
-    debug_assert_eq!(accum, accum2);
-    debug_assert_eq!(zero1, 0);
-    debug_assert_eq!(zero2, 0);
+            debug_assert_eq!(len, len2);
+            debug_assert_eq!(accum, accum2);
+            debug_assert_eq!(zero1, 0);
+            debug_assert_eq!(zero2, 0);
+        }
+        _ => return Err(backtrack()),
+    }
 
     Ok(Header { first_game, len })
 }
@@ -441,6 +447,19 @@ mod tests {
                 encoded
             })
             .collect()
+    }
+
+    #[test]
+    fn headers() {
+        let short = hex!("000a0000107800000000");
+        let header = super::header.parse(short.as_slice()).unwrap();
+        assert_eq!(header.first_game, 10);
+        assert_eq!(header.len, 4216);
+
+        let extended = hex!("001a000000870000000000000000000000870000000000000000");
+        let header = super::header.parse(extended.as_slice()).unwrap();
+        assert_eq!(header.first_game, 26);
+        assert_eq!(header.len, 135);
     }
 
     fn mainline(game: &crate::Game) -> Vec<crate::Move> {

@@ -1,23 +1,25 @@
 //! Standard Algebraic Notation.
 
-use core::{fmt, str::FromStr};
+use core::{borrow::BorrowMut, fmt, str::FromStr};
 
 use crate::{
     board::Role,
     game,
-    position::Side,
+    position::{Check, Side},
     square::{File, Rank, Square},
 };
 
-use super::{StrInput as Input, prelude::*};
+use super::str_prelude::*;
 
-#[derive(Clone, Copy, Debug, DeserializeFromStr, Eq, PartialEq, SerializeDisplay)]
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
 pub struct San {
     pub play: Move,
     pub check: Option<Check>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Move {
     Normal {
         role: Role,
@@ -30,22 +32,6 @@ pub enum Move {
     Castle(Side),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Check {
-    Check,
-    Checkmate,
-}
-
-impl Check {
-    pub const fn new(is_check: bool, no_moves: bool) -> Option<Self> {
-        if !is_check {
-            return None;
-        }
-        let check = if no_moves { Self::Checkmate } else { Self::Check };
-        Some(check)
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid SAN move")]
@@ -54,6 +40,14 @@ pub enum Error {
     Illegal,
     #[error("ambiguous SAN move")]
     Ambiguous,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Apply {
+    #[error(transparent)]
+    San(#[from] Error),
+    #[error(transparent)]
+    Options(#[from] game::options::Error),
 }
 
 impl fmt::Display for San {
@@ -180,14 +174,60 @@ impl game::MoveMut<'_> {
     }
 }
 
+impl<'g> game::PositionMut<'g> {
+    pub fn push_san(&mut self, san: &San) -> Result<game::MoveMut<'_>, Apply> {
+        let play = san.resolve(self.legal())?;
+        Ok(self.push(play)?)
+    }
+
+    pub fn into_push_san(self, san: &San) -> Result<game::MoveMut<'g>, Apply> {
+        let play = san.resolve(self.legal())?;
+        Ok(self.into_push(play)?)
+    }
+}
+
+impl<G: BorrowMut<crate::Game>> game::Cursor<G> {
+    pub fn push_san(&mut self, san: &San) -> Result<game::MoveRef<'_>, Apply> {
+        let play = san.resolve(self.position().legal())?;
+        self.option_mut_or_push(play)?;
+        Ok(self.play().expect("cursor advanced to move"))
+    }
+
+    pub fn append_sans(&mut self, sans: impl IntoIterator<Item = San>) -> Result<(), Apply> {
+        for san in sans {
+            self.push_san(&san)?;
+        }
+        Ok(())
+    }
+}
+
 impl San {
     pub fn resolve(&self, legal: &[crate::Move]) -> Result<crate::Move, Error> {
         // We ignore incorrect check(mate) annotations.
-        // crate::Move is converted to SAN, and compared against the input move.
+        // Source disambiguation may be redundant, but must still match the move.
         let resolves_to_self = |play: &crate::Move| {
-            // Check/checkmate markers are notation adornments. The concrete move
-            // is resolved from the SAN move body and the legal moves in this state.
-            play.san(game::Short::new(legal, *play), None).play == self.play
+            let canonical = play.san(game::Short::new(legal, *play), None).play;
+            match (self.play, canonical) {
+                (Move::Castle(input), Move::Castle(actual)) => input == actual,
+                (
+                    Move::Normal { role, file, rank, capture, to, promotion },
+                    Move::Normal {
+                        role: actual_role,
+                        capture: actual_capture,
+                        to: actual_to,
+                        promotion: actual_promotion,
+                        ..
+                    },
+                ) => {
+                    role == actual_role
+                        && capture == actual_capture
+                        && to == actual_to
+                        && promotion == actual_promotion
+                        && file.is_none_or(|file| file == play.from.file())
+                        && rank.is_none_or(|rank| rank == play.from.rank())
+                }
+                _ => false,
+            }
         };
         // legal crate moves that would match the input SAN move
         let mut matches = legal.iter().copied().filter(resolves_to_self);
@@ -354,6 +394,12 @@ mod tests {
         board::Role::*,
         square::{File::*, Square::*},
     };
+
+    #[test]
+    fn resolve_redundant_source_file() {
+        let pgn = "1. d4 d5 2. Nc3 Nf6 3. Bf4 e6 4. e3 Bb4 5. Bd3 c5 6. dxc5 Nbd7 7. Nge2 Bxc5 *";
+        assert!(crate::Game::from_pgn(pgn.parse().unwrap()).is_ok());
+    }
 
     #[test]
     fn parse_pawn_play() {

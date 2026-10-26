@@ -5,7 +5,7 @@ use crate::{
     square::{File, FileTable, SquareTable},
 };
 
-use super::{Basis, Id};
+use super::{Basis, Key};
 
 pub const fn compute_basis() -> Basis {
     compute_basis_from(&RANDOM)
@@ -14,13 +14,13 @@ pub const fn compute_basis() -> Basis {
 pub const fn compute_basis_from(random: &[u64; 781]) -> Basis {
     Basis {
         board: board(random),
-        turn: PlayerTable::new([Id(0), id(random[780])]),
+        turn: PlayerTable::new([Key(0), key(random[780])]),
         castle: castle(random),
         en_passant: en_passant(random),
     }
 }
 
-const fn board(random: &[u64; 781]) -> SquareTable<PlayerTable<RoleTable<Id>>> {
+const fn board(random: &[u64; 781]) -> SquareTable<PlayerTable<RoleTable<Key>>> {
     let mut squares = SquareTable::empty();
     finite_for!(square in Square {
         let mut players = PlayerTable::empty();
@@ -29,7 +29,7 @@ const fn board(random: &[u64; 781]) -> SquareTable<PlayerTable<RoleTable<Id>>> {
             finite_for!(role in Role {
                 roles.set(
                     role,
-                    id(random[polyglot_piece(player, role) * 64 + square.index()]),
+                    key(random[polyglot_piece(player, role) * 64 + square.index()]),
                 );
             });
             players.set(player, roles);
@@ -39,25 +39,25 @@ const fn board(random: &[u64; 781]) -> SquareTable<PlayerTable<RoleTable<Id>>> {
     squares
 }
 
-const fn en_passant(random: &[u64; 781]) -> EnPassantTable<Id> {
+const fn en_passant(random: &[u64; 781]) -> EnPassantTable<Key> {
     let mut square = EnPassantTable::empty();
     finite_for!(en_passant in EnPassant {
-        square.set(en_passant, id(random[772 + en_passant.square().file().index()]));
+        square.set(en_passant, key(random[772 + en_passant.square().file().index()]));
     });
 
     square
 }
 
-const fn castle(random: &[u64; 781]) -> PlayerTable<FileTable<Id>> {
+const fn castle(random: &[u64; 781]) -> PlayerTable<FileTable<Key>> {
     let mut players = PlayerTable::empty();
     let mut black = FileTable::empty();
-    black.set(File::A, id(random[771]));
-    black.set(File::H, id(random[770]));
+    black.set(File::A, key(random[771]));
+    black.set(File::H, key(random[770]));
     players.set(Player::Black, black);
 
     let mut white = FileTable::empty();
-    white.set(File::A, id(random[769]));
-    white.set(File::H, id(random[768]));
+    white.set(File::A, key(random[769]));
+    white.set(File::H, key(random[768]));
     players.set(Player::White, white);
 
     players
@@ -67,8 +67,8 @@ const fn polyglot_piece(player: Player, role: Role) -> usize {
     role.index() * 2 + player.index()
 }
 
-const fn id(value: u64) -> Id {
-    Id(value as u128)
+const fn key(value: u64) -> Key {
+    Key(value as u128)
 }
 
 // Values from Polyglot's `random.c`:

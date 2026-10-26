@@ -1,6 +1,7 @@
 use crate::{
     formats::{Text, uci},
-    game::{self, MoveId, PositionId},
+    game::{self, MoveSlot, PositionSlot, tag::Other},
+    position::Analysis,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -16,36 +17,30 @@ pub struct Game {
     #[serde(default)]
     pub roster: game::Roster,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<game::Tag>,
+    pub tags: Vec<Other>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intro: Option<Text>,
-    #[serde(default, skip_serializing_if = "game::Outcome::is_unknown")]
-    pub outcome: game::Outcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<game::Outcome>,
     pub start: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub valuation: Option<game::Valuation>,
+    pub analysis: Option<Analysis>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<MoveId>,
+    pub options: Vec<MoveSlot>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Move {
-    pub id: MoveId,
-    #[serde(default, skip_serializing_if = "PositionId::is_start")]
-    pub previous: PositionId,
+    pub slot: MoveSlot,
+    #[serde(default, skip_serializing_if = "PositionSlot::is_start")]
+    pub previous: PositionSlot,
     #[serde(default, skip_serializing_if = "game::Meta::is_empty")]
     pub meta: game::Meta,
     pub play: uci::Move,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub valuation: Option<game::Valuation>,
+    pub analysis: Option<Analysis>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<MoveId>,
-}
-
-impl game::Outcome {
-    pub fn is_unknown(&self) -> bool {
-        matches!(self, game::Outcome::Unknown)
-    }
+    pub options: Vec<MoveSlot>,
 }
 
 impl game::Game {
@@ -69,7 +64,7 @@ impl From<&game::Game> for Game {
             intro: game.intro.clone(),
             outcome: game.outcome(),
             start: game.start().fen(),
-            valuation: game.start_options().state().valuation,
+            analysis: game.start_options().state().analysis.clone(),
             options: game.tree.start().to_vec(),
         }
     }
@@ -78,7 +73,7 @@ impl From<&game::Game> for Game {
 impl From<&game::Move> for Move {
     fn from(play: &game::Move) -> Self {
         Self {
-            id: play.id(),
+            slot: play.slot(),
             previous: play.previous(),
             meta: play.meta.clone(),
             play: uci::Move {
@@ -86,7 +81,7 @@ impl From<&game::Move> for Move {
                 to: play.play.to,
                 promotion: play.play.promotes(),
             },
-            valuation: play.state.valuation,
+            analysis: play.state.analysis.clone(),
             options: play.options.plays.clone(),
         }
     }

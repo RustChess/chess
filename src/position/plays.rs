@@ -254,8 +254,9 @@ impl Position {
 #[cfg(test)]
 mod tests {
     use crate::{
+        Game,
         Player::*,
-        position::Parts,
+        position::{Parts, Terminal},
         square::{File::*, Square::*},
     };
 
@@ -294,5 +295,21 @@ mod tests {
         let position = parts.validate().unwrap();
 
         assert!(!position.legal_castle_plays().contains(&Move::castle(White, C1, H)));
+    }
+
+    #[test]
+    fn classify_terminal() {
+        for (fen, expected) in [
+            ("7k/6Q1/5K2/8/8/8/8/8 b - - 0 1", Some(Terminal::Checkmate)),
+            ("7k/5K2/6Q1/8/8/8/8/8 b - - 0 1", Some(Terminal::Stalemate)),
+            ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", None),
+        ] {
+            let position = Position::from_fen(fen).unwrap();
+            assert_eq!(position.is_terminal(), expected.is_some());
+            assert_eq!(position.terminal(), expected);
+            let game = Game::new(position);
+            assert_eq!(game.start().is_terminal(), expected.is_some());
+            assert_eq!(game.start().terminal(), expected);
+        }
     }
 }

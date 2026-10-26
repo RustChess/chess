@@ -3,51 +3,51 @@ use std::collections::BTreeMap as Map;
 use super::{self as game, *};
 
 pub(in crate::game) trait Layout {
-    fn compact(self, game: &Game) -> Compact;
+    fn reslot(self, game: &Game) -> Reslot;
 }
 
 impl Layout for game::Layout {
-    fn compact(self, game: &Game) -> Compact {
+    fn reslot(self, game: &Game) -> Reslot {
         match self {
-            Self::Pgn => pgn::compact(game),
+            Self::Pgn => pgn::reslot(game),
         }
     }
 }
 
-impl Compact {
+impl Reslot {
     pub(in crate::game) fn options(&self, position: &mut Position) {
-        for id in &mut position.options {
-            *id = self.play(*id).expect("complete compaction");
+        for slot in &mut position.options {
+            *slot = self.play(*slot).expect("complete reslot");
         }
     }
 
-    fn insert(&mut self, id: MoveId) {
-        let next = MoveId::from_index(self.len()).expect("game tree fits in move IDs");
-        self.0.insert(id, next);
+    fn insert(&mut self, slot: MoveSlot) {
+        let next = MoveSlot::from_index(self.len()).expect("game tree fits in move slots");
+        self.0.insert(slot, next);
     }
 }
 
 mod pgn {
     use super::*;
 
-    pub fn compact(game: &Game) -> Compact {
-        let mut compact = Compact(Map::new());
-        line(game.start(), &mut compact);
-        compact
+    pub fn reslot(game: &Game) -> Reslot {
+        let mut reslot = Reslot(Map::new());
+        line(game.start(), &mut reslot);
+        reslot
     }
 
-    fn line(position: PositionRef<'_>, compact: &mut Compact) {
+    fn line(position: PositionRef<'_>, reslot: &mut Reslot) {
         let Ok(main) = position.main() else { return };
 
-        compact.insert(main.id());
+        reslot.insert(main.slot());
         for alternative in position.alternatives() {
-            variation(alternative, compact);
+            variation(alternative, reslot);
         }
-        line(main.position(), compact);
+        line(main.position(), reslot);
     }
 
-    fn variation(play: MoveRef<'_>, compact: &mut Compact) {
-        compact.insert(play.id());
-        line(play.position(), compact);
+    fn variation(play: MoveRef<'_>, reslot: &mut Reslot) {
+        reslot.insert(play.slot());
+        line(play.position(), reslot);
     }
 }

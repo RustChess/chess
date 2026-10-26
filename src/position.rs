@@ -13,7 +13,10 @@
 #[cfg(test)]
 extern crate alloc;
 
-use core::num::NonZeroU32;
+use core::{
+    num::{NonZeroI32, NonZeroU32},
+    ops::Deref,
+};
 
 use crate::{Board, Player, Role, Scharnagl, Square, board::Bitboard, square::File};
 
@@ -23,6 +26,7 @@ use Role::*;
 mod play;
 mod plays;
 mod rights;
+pub mod search;
 mod validate;
 
 pub use play::*;
@@ -113,6 +117,57 @@ pub struct Parts {
     pub round: NonZeroU32,
 }
 
+#[macros::data]
+#[serde(untagged)]
+pub enum Analysis<T = search::Evaluation> {
+    Evaluation(T),
+    Terminal(Terminal),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Check {
+    Check,
+    Checkmate,
+}
+
+#[macros::data]
+#[serde(transparent)]
+pub struct Line<M = Move>(pub Vec1<M>);
+
+#[macros::data]
+#[derive(Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Score {
+    Centipawns(i32),
+    Mate(NonZeroI32),
+}
+
+#[macros::data]
+pub struct ScoredLine<M = Move> {
+    pub line: Line<M>,
+    #[serde(flatten)]
+    pub score: Score,
+}
+
+#[macros::data]
+pub struct ScoredMove<M = Move, S = Score> {
+    pub play: M,
+    pub score: S,
+}
+
+/// Why a position has no legal moves.
+#[macros::data]
+#[derive(Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Terminal {
+    Checkmate,
+    Stalemate,
+}
+
+#[macros::data]
+#[serde(try_from = "Vec<T>")]
+pub struct Vec1<T>(Vec<T>);
+
 impl Parts {
     pub const fn new(board: Board, turn: Player) -> Self {
         Self {
@@ -142,6 +197,17 @@ impl Default for Parts {
 }
 
 impl Position {
+    pub fn is_terminal(&self) -> bool {
+        self.legal_plays().is_empty()
+    }
+
+    pub fn terminal(&self) -> Option<Terminal> {
+        if !self.is_terminal() {
+            return None;
+        }
+        Terminal::new(self.is_check(), true)
+    }
+
     pub const fn start() -> Position {
         Position {
             board: Board::standard(),
@@ -327,6 +393,92 @@ impl Position {
                 self.castles.clear(player, side);
             }
         }
+    }
+}
+
+impl<T> Analysis<T> {
+    pub const fn checkmate() -> Self {
+        Self::Terminal(Terminal::Checkmate)
+    }
+
+    pub const fn stalemate() -> Self {
+        Self::Terminal(Terminal::Stalemate)
+    }
+}
+
+impl Check {
+    pub const fn new(is_check: bool, terminal: bool) -> Option<Self> {
+        if !is_check {
+            return None;
+        }
+        Some(if terminal { Self::Checkmate } else { Self::Check })
+    }
+}
+
+impl<M> Deref for Line<M> {
+    type Target = Vec1<M>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Score {
+    pub fn flip(self) -> Self {
+        match self {
+            Self::Centipawns(value) => Self::Centipawns(-value),
+            Self::Mate(value) => Self::Mate(-value),
+        }
+    }
+}
+
+impl<M> ScoredLine<M> {
+    pub fn bestmove(&self) -> &M {
+        self.line.first()
+    }
+
+    pub const fn score(&self) -> Score {
+        self.score
+    }
+}
+
+impl Terminal {
+    pub const fn new(is_check: bool, terminal: bool) -> Option<Self> {
+        if !terminal {
+            return None;
+        }
+        Some(if is_check { Self::Checkmate } else { Self::Stalemate })
+    }
+}
+
+impl<T> Vec1<T> {
+    pub fn new(values: Vec<T>) -> Option<Self> {
+        (!values.is_empty()).then_some(Self(values))
+    }
+
+    pub fn first(&self) -> &T {
+        self.0.first().expect("Vec1 is non-empty")
+    }
+
+    /// Returns the underlying non-empty vector.
+    pub fn into_vec(self) -> Vec<T> {
+        self.0
+    }
+}
+
+impl<T> Deref for Vec1<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> TryFrom<Vec<T>> for Vec1<T> {
+    type Error = &'static str;
+
+    fn try_from(values: Vec<T>) -> core::result::Result<Self, Self::Error> {
+        Self::new(values).ok_or("expected a non-empty array")
     }
 }
 

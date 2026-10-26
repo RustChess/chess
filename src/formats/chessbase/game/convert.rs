@@ -6,10 +6,12 @@ use crate::{
     square::{File, Rank, Square},
 };
 
-use super::{Game, Move, PawnMove, Pieces, Position, Token};
+use super::{super::annotation, Game, Move, PawnMove, Pieces, Position, Token};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Annotation(#[from] annotation::convert::Error),
     #[error("custom ChessBase starting positions are not supported yet")]
     Start,
     #[error("ChessBase null moves are not supported")]
@@ -38,37 +40,49 @@ impl TryFrom<Game> for crate::Game {
 
 impl crate::Game {
     pub fn from_chessbase(encoded: Game) -> Result<Self> {
-        let Game { position, tokens } = encoded;
-        let mut pieces = position.pieces;
-        let mut game = Self::new(crate::Position::try_from(position)?);
-        Self::decode_tokens(game.cursor_mut(), &mut tokens.into_iter(), &mut pieces)?;
-        Ok(game)
+        convert(encoded, None)
     }
+}
 
-    fn decode_tokens(
-        mut cursor: CursorMut<'_>,
-        tokens: &mut impl Iterator<Item = Token>,
-        pieces: &mut Pieces,
-    ) -> Result<()> {
-        while let Some(token) = tokens.next() {
-            match token {
-                Token::Move(encoded) => {
-                    let position = cursor.position();
-                    let play = pieces.resolve(&position, encoded)?;
-                    pieces.apply(&position, play);
-                    cursor.option_mut_or_push(play)?;
-                }
-                Token::Push => {
-                    let saved = *pieces;
-                    Self::decode_tokens(cursor.cursor_mut(), tokens, pieces)?;
-                    *pieces = saved;
-                }
-                Token::Pop => return Ok(()),
-                Token::Skip => {}
+pub fn convert(encoded: Game, annotations: Option<annotation::Annotations>) -> Result<crate::Game> {
+    let Game { position, tokens } = encoded;
+    let mut pieces = position.pieces;
+    let mut game = crate::Game::new(crate::Position::try_from(position)?);
+    let mut annotations = annotation::convert::Apply::new(annotations);
+    let mut cursor = game.cursor_mut();
+    annotations.root(&mut cursor);
+    decode_tokens(cursor, &mut tokens.into_iter(), &mut pieces, &mut annotations)?;
+    annotations.finish()?;
+    Ok(game)
+}
+
+fn decode_tokens(
+    mut cursor: CursorMut<'_>,
+    tokens: &mut impl Iterator<Item = Token>,
+    pieces: &mut Pieces,
+    annotations: &mut annotation::convert::Apply,
+) -> Result<()> {
+    while let Some(token) = tokens.next() {
+        match token {
+            Token::Move(encoded) => {
+                let annotated = annotations.before(&mut cursor);
+                let position = cursor.position();
+                let player = position.turn();
+                let play = pieces.resolve(&position, encoded)?;
+                pieces.apply(&position, play);
+                cursor.option_mut_or_push(play)?;
+                annotations.after(&mut cursor, annotated, player);
             }
+            Token::Push => {
+                let saved = *pieces;
+                decode_tokens(cursor.cursor_mut(), tokens, pieces, annotations)?;
+                *pieces = saved;
+            }
+            Token::Pop => return Ok(()),
+            Token::Skip => {}
         }
-        Ok(())
     }
+    Ok(())
 }
 
 impl TryFrom<Position> for crate::Position {

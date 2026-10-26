@@ -1,22 +1,27 @@
 //! PGN format
 
-use core::{fmt, str};
+use core::{fmt, ops, str};
 
 use winnow::Parser as _;
 
 use crate::{
     Player, Position, Scharnagl,
-    game::{self, Command, Mode, Nag, Outcome, Tag as OtherTag},
-    position::Parts,
+    game::{self, Mode, Nag, Outcome},
+    position::{self, Parts},
 };
 
 use super::{Text, san};
 
+pub mod command;
 pub mod convert;
+pub mod datetime;
 pub mod parse;
 pub mod stream;
+pub mod tag;
+pub mod time_control;
 
 pub use parse::pgn;
+pub use tag::Eco;
 
 use Mode::*;
 
@@ -32,40 +37,264 @@ use Mode::*;
 // https://chesstempo.com/manual/en/manual.html#pgnviewercommentannotations
 //
 
-#[derive(Clone, Debug, DeserializeFromStr, PartialEq, Eq, SerializeDisplay)]
+#[derive(Clone, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay)]
 pub struct Pgn {
-    pub tags: Vec<Tag>,
+    pub tags: Tags,
     pub start: Parts,
     pub intro: Option<Comment>,
     pub moves: Vec<Move>,
-    pub outcome: Outcome,
+    pub outcome: Option<Outcome>,
+    pub outro: Option<Comment>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Tags(Vec<Tag>);
+
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Commands(Vec<Command>);
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Command {
+    Clock(command::Clock),
+    ColoredArrows(command::ColoredArrows),
+    ColoredSquares(command::ColoredSquares),
+    ElapsedGame(command::ElapsedGame),
+    ElapsedMove(command::ElapsedMove),
+    Evaluation(Eval),
+    Expanded,
+    MechanicalClock(command::MechanicalClock),
+    Other(command::Other),
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Tag {
+    Title(String),
+    Annotator(Text),
     Event(String),
+    EventDate(Date),
+    EventType(Text),
+    EventCategory(Text),
+    EventRounds(Text),
+    EventCountry(Text),
+    Id(Text),
     Site(String),
-    Date(String),
+    Date(Date),
+    EndDate(Date),
+    EndTime(Time),
+    Time(Time),
+    TimeControl(TimeControl),
+    Timezone(Text),
+    UtcDate(Date),
+    UtcTime(Time),
     Round(String),
     White(String),
+    WhiteName(Text),
+    WhiteTitle(Text),
+    WhiteElo(u16),
+    WhiteFideId(u32),
+    WhiteTeam(Text),
+    WhiteTeamCountry(Text),
     Black(String),
-    Outcome(Outcome),
+    BlackName(Text),
+    BlackTitle(Text),
+    BlackElo(u16),
+    BlackFideId(u32),
+    BlackTeam(Text),
+    BlackTeamCountry(Text),
+    Outcome(Option<Outcome>),
+    Rated(bool),
+    Termination(Text),
+    Eco(Eco),
     Fen(Parts),
     SetUp(bool),
     Variant(String),
     Chess960Id(Scharnagl),
     Orientation(Player),
-    Valuation(Valuation),
-    Other(OtherTag),
+    TimeType(Text),
+    Source(Text),
+    SourceDate(Date),
+    Publisher(Text),
+    Valuation(Eval),
+    Other(tag::Other),
 }
 
-impl Tag {
-    pub fn freestyle() -> Self {
-        Tag::Variant("Fischerandom".to_string())
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Date {
+    year: [Option<u8>; 4],
+    month: [Option<u8>; 2],
+    day: [Option<u8>; 2],
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Time {
+    hour: [Option<u8>; 2],
+    minute: [Option<u8>; 2],
+    second: [Option<u8>; 2],
+}
+
+#[derive(Clone, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay)]
+pub enum TimeControl {
+    Unknown,
+    None,
+    Periods(Vec<Period>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Period {
+    Moves { moves: u32, seconds: u32 },
+    SuddenDeath { seconds: u32 },
+    Increment { seconds: u32, increment: u32 },
+    Hourglass { seconds: u32 },
+}
+
+/// PGN import settings.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Import {
+    pub eval: import::Eval,
+}
+
+pub mod import {
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub enum Eval {
+        Drop,
+        #[default]
+        Passthrough,
+    }
+}
+
+/// PGN export settings.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Export {
+    pub eval: export::Eval,
+}
+
+pub mod export {
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub enum Eval {
+        #[default]
+        Passthrough,
+        Overwrite,
+    }
+}
+
+impl Tags {
+    pub fn from_pgn(text: &str) -> Result<Self> {
+        parse::tag_section
+            .parse(text)
+            .map(Into::into)
+            .map_err(|error| parse::Error::from(text, 1, error).into())
     }
 
-    pub fn variant(&self) -> Option<&str> {
-        if let Tag::Variant(value) = self { Some(value) } else { None }
+    pub fn find(&self, name: &str) -> Option<&Tag> {
+        self.iter().find(|tag| tag.name() == name)
+    }
+
+    pub fn rfind(&self, name: &str) -> Option<&Tag> {
+        self.iter().rev().find(|tag| tag.name() == name)
+    }
+
+    pub fn date(&self) -> Option<Date> {
+        match self.rfind("Date")? {
+            Tag::Date(date) => Some(*date),
+            _ => None,
+        }
+    }
+
+    pub fn time(&self) -> Option<Time> {
+        match self.rfind("Time")? {
+            Tag::Time(time) => Some(*time),
+            _ => None,
+        }
+    }
+
+    pub fn time_control(&self) -> Option<&TimeControl> {
+        match self.rfind("TimeControl")? {
+            Tag::TimeControl(time_control) => Some(time_control),
+            _ => None,
+        }
+    }
+
+    pub fn utc_date(&self) -> Option<Date> {
+        match self.rfind("UTCDate")? {
+            Tag::UtcDate(date) => Some(*date),
+            _ => None,
+        }
+    }
+
+    pub fn utc_time(&self) -> Option<Time> {
+        match self.rfind("UTCTime")? {
+            Tag::UtcTime(time) => Some(*time),
+            _ => None,
+        }
+    }
+
+    pub fn utc_timestamp(&self) -> Option<::time::UtcDateTime> {
+        Some(self.utc_date()?.date()?.with_time(self.utc_time()?.time()?).as_utc())
+    }
+}
+
+impl From<Vec<Tag>> for Tags {
+    fn from(tags: Vec<Tag>) -> Self {
+        Self(tags)
+    }
+}
+
+impl ops::Deref for Tags {
+    type Target = Vec<Tag>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ops::DerefMut for Tags {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Commands {
+    pub fn colored_arrows(&self) -> impl Iterator<Item = &game::Arrow> {
+        self.iter().flat_map(|command| match command {
+            Command::ColoredArrows(arrows) => arrows.iter(),
+            _ => [].iter(),
+        })
+    }
+
+    pub fn colored_squares(&self) -> impl Iterator<Item = &game::Marker> {
+        self.iter().flat_map(|command| match command {
+            Command::ColoredSquares(markers) => markers.iter(),
+            _ => [].iter(),
+        })
+    }
+}
+
+impl From<Vec<Command>> for Commands {
+    fn from(commands: Vec<Command>) -> Self {
+        Self(commands)
+    }
+}
+
+impl ops::Deref for Commands {
+    type Target = Vec<Command>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ops::DerefMut for Commands {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl IntoIterator for Commands {
+    type Item = Command;
+    type IntoIter = std::vec::IntoIter<Command>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
@@ -82,10 +311,10 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 impl fmt::Display for Pgn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let shredder = self.mode().is_freestyle();
-        for tag in &self.tags {
+        for tag in self.tags.iter() {
             if let Tag::Fen(position) = tag {
                 let fen = if shredder { position.shredder_fen() } else { position.fen() };
-                write_tag(f, "FEN", &fen)?;
+                tag::write_tag(f, "FEN", &fen)?;
                 writeln!(f)?;
             } else {
                 writeln!(f, "{tag}")?;
@@ -99,7 +328,11 @@ impl fmt::Display for Pgn {
             wrap.token(intro)?;
         }
         write_plays(&self.moves, &mut wrap, self.start.ply(), Notation::San)?;
-        wrap.token(self.outcome)
+        wrap.token(self.outcome.map(Outcome::result).unwrap_or("*"))?;
+        if let Some(outro) = &self.outro {
+            wrap.token(outro)?;
+        }
+        Ok(())
     }
 }
 
@@ -111,14 +344,14 @@ impl str::FromStr for Pgn {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Variation {
     pub intro: Option<Comment>,
     pub moves: Vec<Move>,
     pub outro: Option<Comment>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Move {
     pub san: san::San,
     pub comment: Option<Comment>,
@@ -126,44 +359,53 @@ pub struct Move {
     pub variations: Vec<Variation>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Comment(Text);
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Comment {
+    pub commands: Commands,
+    pub text: Option<Text>,
+}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Valuation(pub game::Valuation);
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Score {
+    Centipawns(i32),
+    Mate(i32),
+}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Eval {
+    pub depth: Option<u16>,
+    pub score: Score,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Annotation {
     Nag(Nag),
-    Valuation(Valuation),
+    Valuation(Eval),
     Command(Command),
 }
 
-impl fmt::Display for Valuation {
+impl fmt::Display for Eval {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0.score {
-            game::Score::Centipawns(centipawns) => {
+        match self.score {
+            Score::Centipawns(centipawns) => {
                 write!(f, "{:.2}", f64::from(centipawns) / 100.0)?;
             }
-            game::Score::Mate(mate) => write!(f, "#{mate}")?,
+            Score::Mate(mate) => write!(f, "#{mate}")?,
         }
-        if let Some(depth) = self.0.depth {
+        if let Some(depth) = self.depth {
             write!(f, ",{depth}")?;
         }
         Ok(())
     }
 }
 
-impl Valuation {
+impl Eval {
     fn command(self) -> Command {
-        Command {
-            command: Text::new("eval").expect("command name is non-empty"),
-            parameters: vec![self.to_string()],
-        }
+        Command::Evaluation(self)
     }
 }
 
-impl str::FromStr for Valuation {
+impl str::FromStr for Eval {
     type Err = &'static str;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -176,7 +418,7 @@ impl str::FromStr for Valuation {
         };
         let score = score.trim();
         let score = if let Some(mate) = score.strip_prefix('#') {
-            game::Score::Mate(mate.parse().map_err(|_| "invalid mate score")?)
+            Score::Mate(mate.parse().map_err(|_| "invalid mate score")?)
         } else {
             let pawns: f64 = score.parse().map_err(|_| "invalid centipawn score")?;
             let centipawns = (pawns * 100.0).round();
@@ -186,9 +428,27 @@ impl str::FromStr for Valuation {
             {
                 return Err("centipawn score out of range");
             }
-            game::Score::Centipawns(centipawns as i32)
+            Score::Centipawns(centipawns as i32)
         };
-        Ok(Self(game::Valuation { score, depth }))
+        Ok(Self { score, depth })
+    }
+}
+
+impl From<position::Score> for Score {
+    fn from(score: position::Score) -> Self {
+        use position::Score::*;
+
+        match score {
+            Centipawns(value) => Score::Centipawns(value),
+            Mate(value) => Score::Mate(value.get()),
+        }
+    }
+}
+
+impl From<&position::Analysis> for Option<Eval> {
+    fn from(analysis: &position::Analysis) -> Self {
+        let position::Analysis::Evaluation(evaluation) = analysis else { return None };
+        Some(Eval { depth: Some(evaluation.depth), score: evaluation.score().into() })
     }
 }
 
@@ -213,7 +473,7 @@ impl Pgn {
     }
 
     pub fn mode(&self) -> Mode {
-        for tag in &self.tags {
+        for tag in self.tags.iter() {
             let Some(variant) = tag.variant() else { continue };
             if Mode::from_tag(variant) == Some(Freestyle) {
                 return Freestyle;
@@ -221,27 +481,6 @@ impl Pgn {
         }
 
         if self.start.castles.chess_compatible() { Chess } else { Freestyle }
-    }
-}
-
-impl fmt::Display for Tag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Tag::Event(value) => write_tag(f, "Event", value),
-            Tag::Site(value) => write_tag(f, "Site", value),
-            Tag::Date(value) => write_tag(f, "Date", value),
-            Tag::Round(value) => write_tag(f, "Round", value),
-            Tag::White(value) => write_tag(f, "White", value),
-            Tag::Black(value) => write_tag(f, "Black", value),
-            Tag::Outcome(outcome) => write_tag(f, "Result", &outcome.to_string()),
-            Tag::Fen(position) => write_tag(f, "FEN", &position.fen()),
-            Tag::SetUp(setup) => write_tag(f, "SetUp", if *setup { "1" } else { "0" }),
-            Tag::Variant(variant) => write_tag(f, "Variant", variant),
-            Tag::Chess960Id(id) => write_tag(f, "Chess960Id", &id.to_string()),
-            Tag::Orientation(player) => write_tag(f, "Orientation", player.name()),
-            Tag::Valuation(valuation) => write_tag(f, "Valuation", &valuation.to_string()),
-            Tag::Other(tag) => write_tag(f, tag.key.as_ref(), &tag.value),
-        }
     }
 }
 
@@ -253,14 +492,6 @@ impl Mode {
             _ => None,
         }
     }
-}
-
-fn write_tag(f: &mut fmt::Formatter<'_>, key: &str, value: &str) -> fmt::Result {
-    fn escape_tag_value(value: &str) -> String {
-        value.replace('\\', "\\\\").replace('"', "\\\"")
-    }
-
-    write!(f, "[{} \"{}\"]", key, escape_tag_value(value))
 }
 
 fn start_position(tags: &[Tag]) -> Parts {
@@ -283,37 +514,11 @@ impl fmt::Display for Annotation {
     }
 }
 
-impl fmt::Display for Command {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[%{}", self.command)?;
-        for (index, parameter) in self.parameters.iter().enumerate() {
-            if index == 0 {
-                write!(f, " ")?;
-            } else {
-                write!(f, ",")?;
-            }
-            write!(f, "{parameter}")?;
-        }
-        write!(f, "]")
-    }
-}
-
 impl fmt::Display for Nag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Nag::Numeric(nag) => write!(f, "${nag}"),
             Nag::Symbol(nag) => write!(f, "{nag}"),
-        }
-    }
-}
-
-impl fmt::Display for Outcome {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Outcome::White => write!(f, "1-0"),
-            Outcome::Black => write!(f, "0-1"),
-            Outcome::Draw => write!(f, "1/2-1/2"),
-            Outcome::Unknown => write!(f, "*"),
         }
     }
 }
@@ -353,8 +558,10 @@ impl Move {
                 Annotation::Command(command) => commands.push(command.clone()),
             }
         }
-        if !commands.is_empty() || self.comment.is_some() {
-            wrap.token(MoveComment { commands, text: self.comment.clone() })?;
+        let mut comment = self.comment.clone().unwrap_or_default();
+        comment.commands.extend(commands);
+        if !comment.is_empty() {
+            wrap.token(comment)?;
         }
         write_variations(&self.variations, wrap, ply, notation)?;
         Ok(())
@@ -390,30 +597,26 @@ enum Notation {
 #[derive(Debug)]
 struct MoveNumber(usize);
 
-struct MoveComment {
-    commands: Vec<Command>,
-    text: Option<Comment>,
-}
-
 impl Comment {
-    fn merge(&mut self, comment: &Comment) {
-        self.0.merge(&comment.0);
+    fn from_text(text: Text) -> Self {
+        Self { commands: Commands::default(), text: Some(text) }
     }
-}
 
-impl From<Comment> for Text {
-    fn from(comment: Comment) -> Self {
-        comment.0
+    fn merge(&mut self, comment: &Comment) {
+        self.commands.extend(comment.commands.iter().cloned());
+        match (&mut self.text, &comment.text) {
+            (Some(into), Some(comment)) => into.merge(comment),
+            (None, Some(comment)) => self.text = Some(comment.clone()),
+            _ => {}
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.commands.is_empty() && self.text.is_none()
     }
 }
 
 impl fmt::Display for Comment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{{{}}}", self.0)
-    }
-}
-
-impl fmt::Display for MoveComment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{{")?;
         for (index, command) in self.commands.iter().enumerate() {
@@ -426,7 +629,7 @@ impl fmt::Display for MoveComment {
             if !self.commands.is_empty() {
                 write!(f, " ")?;
             }
-            write!(f, "{}", text.0)?;
+            write!(f, "{text}")?;
         }
         write!(f, "}}")
     }
@@ -508,7 +711,7 @@ mod tests {
         Position,
         board::{Player, Role::*, Scharnagl},
         formats::san,
-        game::Score,
+        position::Check,
         square::{File::*, Square::*},
     };
 
@@ -519,7 +722,16 @@ mod tests {
     }
 
     fn comment(comment: &str) -> Comment {
-        Comment(text(comment))
+        Comment::from_text(text(comment))
+    }
+
+    #[test]
+    fn parse_intro_placeholder() {
+        let pgn: Pgn = "1. -- {Introduction} *".parse().unwrap();
+        assert!(pgn.moves.is_empty());
+        assert_eq!(pgn.intro, Some(comment("Introduction")));
+        let game = crate::Game::from_pgn(pgn.clone()).unwrap();
+        assert_eq!(game.start().comment(), Some(&text("Introduction")));
     }
 
     #[test]
@@ -540,8 +752,14 @@ mod tests {
         assert_eq!(pgn.tags.len(), 7);
         assert_eq!(pgn.tags[0], Tag::Event("Casual Game".to_string()));
         assert_eq!(pgn.moves.len(), 6);
-        assert_eq!(pgn.outcome, Outcome::White);
+        assert_eq!(pgn.outcome, Some(Outcome::White(None)));
         assert_eq!(pgn.moves[5].comment, Some(comment("Italian Game")));
+    }
+
+    #[test]
+    fn parse_tag_section() {
+        let tags = Tags::from_pgn("[Event \"First glance\"]\n\nnot movetext").unwrap();
+        assert_eq!(tags.as_slice(), [Tag::Event("First glance".to_string())]);
     }
 
     #[test]
@@ -549,7 +767,7 @@ mod tests {
         let pgn = pgn.parse("1. e4 e5").unwrap();
 
         assert_eq!(pgn.moves.len(), 2);
-        assert_eq!(pgn.outcome, Outcome::Unknown);
+        assert_eq!(pgn.outcome, None);
     }
 
     #[test]
@@ -578,7 +796,7 @@ mod tests {
         assert_eq!(e5.annotations, vec![Annotation::Nag(Nag::Numeric(1))]);
         assert_eq!(e5.variations.len(), 1);
         assert_eq!(e5.variations[0].moves[0].comment, Some(comment("Sicilian")));
-        assert_eq!(pgn.outcome, Outcome::Unknown);
+        assert_eq!(pgn.outcome, None);
     }
 
     #[test]
@@ -612,12 +830,25 @@ mod tests {
     }
 
     #[test]
+    fn title_roundtrip() {
+        let pgn: Pgn = "[Title \"Sveshnikov \\\"study\\\"\"]\n\n*".parse().unwrap();
+        let mut game = crate::Game::from_pgn(pgn).unwrap();
+        assert_eq!(game.title(), Some(&text("Sveshnikov \"study\"")));
+        assert!(game.tags().is_empty());
+
+        game.set_title(Some(text("New title")));
+        let exported = Pgn::from(game);
+        assert!(exported.tags.contains(&Tag::Title("New title".to_string())));
+        assert_eq!(crate::Game::from_pgn(exported).unwrap().title(), Some(&text("New title")));
+    }
+
+    #[test]
     fn convert_orientation_and_commands() {
         let pgn = pgn
             .parse(
                 r#"[Orientation "BLACK"]
 
-1. e4 {[%foo bar][%cgexp true][%eval 0.205,18]} (1. d4) 1... e5 {[%eval #-3,22]} *
+1. e4 {[%foo bar][%exp true][%eval 0.205,18]} (1. d4) 1... e5 {[%eval #-3,22]} *
 "#,
             )
             .unwrap();
@@ -626,25 +857,66 @@ mod tests {
         assert_eq!(game.orientation(), Player::Black);
         let e4 = game.start().main().unwrap();
         assert!(e4.expanded());
-        assert_eq!(
-            e4.valuation(),
-            Some(game::Valuation { score: Score::Centipawns(21), depth: Some(18) })
-        );
-        assert_eq!(e4.commands().len(), 1);
-        assert_eq!(e4.commands()[0].command.as_ref(), "foo");
+        assert_eq!(e4.analysis(), None);
+        assert_eq!(e4.position().commands().len(), 2);
+        assert_eq!(e4.position().commands()[0].command.as_ref(), "foo");
         let e5 = e4.position().main().unwrap();
-        assert_eq!(
-            e5.valuation(),
-            Some(game::Valuation { score: Score::Mate(-3), depth: Some(22) })
-        );
+        assert_eq!(e5.analysis(), None);
 
         let pgn = Pgn::from(game).to_string();
         assert!(pgn.contains("[Orientation \"black\"]"), "{pgn}");
         let eval = pgn.find("[%eval 0.21,18]").unwrap();
-        let expanded = pgn.find("[%cgexp true]").unwrap();
+        let expanded = pgn.find("[%exp true]").unwrap();
         let command = pgn.find("[%foo bar]").unwrap();
-        assert!(eval < expanded && expanded < command, "{pgn}");
+        assert!(expanded < command && command < eval, "{pgn}");
         assert!(pgn.contains("[%eval #-3,22]"), "{pgn}");
+    }
+
+    #[test]
+    fn eval_policies() {
+        let pgn: Pgn = r#"[Valuation "0.10,8"]
+
+1. e4 {[%eval 0.30,12][%foo bar]} (1. d4 {[%eval -0.20,10]}) *"#
+            .parse()
+            .unwrap();
+        let game = crate::Game::from_pgn(pgn.clone()).unwrap();
+        let included = Pgn::from(game.clone());
+        let dropped =
+            crate::Game::from_pgn_with(pgn.clone(), &Import { eval: import::Eval::Drop }).unwrap();
+        let omitted = Pgn::from(dropped);
+        let text = omitted.to_string();
+
+        assert!(included.to_string().contains("[Valuation \"0.10,8\"]"));
+        assert!(included.to_string().contains("[%eval 0.30,12]"));
+        assert!(!text.contains("[Valuation "), "{text}");
+        assert!(!text.contains("%eval"), "{text}");
+        assert!(text.contains("[%foo bar]"), "{text}");
+        assert!(text.contains("d4"), "{text}");
+        assert_eq!(Pgn::from(game), included);
+
+        let pgn: Pgn = "1. e4 {[%eval #0]} *".parse().unwrap();
+        let imported = crate::Game::from_pgn(pgn.clone()).unwrap();
+        assert!(imported.start().main().unwrap().analysis().is_none());
+        assert_eq!(imported.start().main().unwrap().position().commands().len(), 1);
+        assert!(Pgn::from(imported).to_string().contains("[%eval #0]"));
+
+        let dropped =
+            crate::Game::from_pgn_with(pgn, &Import { eval: import::Eval::Drop }).unwrap();
+        assert!(dropped.start().main().unwrap().analysis().is_none());
+        assert!(dropped.start().main().unwrap().position().commands().is_empty());
+
+        let malformed: Pgn = "1. e4 {[%eval unknown][%foo bar]} *".parse().unwrap();
+        let dropped =
+            crate::Game::from_pgn_with(malformed, &Import { eval: import::Eval::Drop }).unwrap();
+        let play = dropped.start().main().unwrap();
+        let position = play.position();
+        let commands = position.commands();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].command.as_ref(), "foo");
+
+        let analysis = position::Analysis::stalemate();
+        let evaluation: Option<Eval> = (&analysis).into();
+        assert_eq!(evaluation, None);
     }
 
     #[test]
@@ -687,7 +959,7 @@ mod tests {
         "#;
         let pgn = pgn.parse(text).unwrap();
 
-        assert_eq!(pgn.tags, vec![Tag::Variant("Fischer Random".to_string())]);
+        assert_eq!(pgn.tags, vec![Tag::Variant("Fischer Random".to_string())].into());
         assert_eq!(pgn.mode(), Freestyle);
         assert!(pgn.to_string().contains("[Variant \"Fischer Random\"]"));
     }
@@ -821,7 +1093,7 @@ mod tests {
         let mut game = crate::Game::chess(Position::start()).unwrap();
         game.update_roster(|roster| roster.event = Some(text("x")));
 
-        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().id();
+        let e4 = game.start_mut().push(crate::Move::normal(Pawn, E2, E4)).unwrap().slot();
         game.start_mut().push(crate::Move::normal(Pawn, D2, D4)).unwrap();
 
         let mut e4 = game.play_mut(e4).unwrap();
@@ -836,7 +1108,6 @@ mod tests {
             pgn.to_string(),
             r#"[Event "x"]
 [Result "*"]
-[Orientation "white"]
 
 1. e4! (1. d4) 1... e5 (1... c5 {Sicilian}) *"#
         );
@@ -866,7 +1137,7 @@ mod tests {
         let mut game = crate::Game::chess(position).unwrap();
 
         for play in position.legal_plays() {
-            let id = game.start_mut().push(play).unwrap().id();
+            let id = game.start_mut().push(play).unwrap().slot();
             let replies = game.play(id).unwrap().position().legal().to_vec();
             let mut position = game.play_mut(id).unwrap().into_position();
             for reply in replies {
@@ -903,24 +1174,44 @@ mod tests {
     }
 
     #[test]
+    fn merge_mainline_affixes_into_position_comments() {
+        let mut game = crate::Game::from_pgn("{Root} 1. e4 {After} *".parse().unwrap()).unwrap();
+        let slot = game.start().main().unwrap().slot();
+        let mut play = game.play_mut(slot).unwrap();
+        play.set_intro(Some(text("Intro")));
+        play.set_outro(Some(text("Outro")));
+
+        let pgn = Pgn::from(game);
+        let output = pgn.to_string();
+        assert!(output.contains("{Root\n\nIntro} 1. e4 {After\n\nOutro}"), "{output}");
+
+        let game = crate::Game::from_pgn(pgn).unwrap();
+        let play = game.start().main().unwrap();
+        assert_eq!(game.start().comment(), Some(&text("Root\n\nIntro")));
+        assert_eq!(play.comment(), Some(&text("After\n\nOutro")));
+        assert_eq!(play.affixes(), &crate::game::Affixes::default());
+    }
+
+    #[test]
     fn extract_commands_from_move_comments() {
         let pgn =
             pgn.parse(r#"[Event "x"] 1. e4 {[%cal Ge2e4] [%clk 0:14:49] Good move.} *"#).unwrap();
         let e4 = &pgn.moves[0];
+        let commands = &e4.comment.as_ref().unwrap().commands;
         assert_eq!(
-            e4.annotations,
-            vec![
-                Annotation::Command(Command {
-                    command: text("cal"),
-                    parameters: vec!["Ge2e4".to_string()],
-                }),
-                Annotation::Command(Command {
-                    command: text("clk"),
-                    parameters: vec!["0:14:49".to_string()],
-                }),
-            ]
+            commands.colored_arrows().copied().collect::<Vec<_>>(),
+            vec![game::Arrow { color: Some(game::Color::Green), from: E2, to: E4 }]
         );
-        assert_eq!(e4.comment, Some(comment("Good move.")));
+        assert_eq!(
+            commands[1],
+            Command::Clock(command::Clock(command::Time {
+                hours: 0,
+                minutes: 14,
+                seconds: 49,
+                centiseconds: 0,
+            }))
+        );
+        assert_eq!(e4.comment.as_ref().unwrap().text, Some(text("Good move.")));
         assert_eq!(
             pgn.to_string(),
             r#"[Event "x"]
@@ -930,14 +1221,26 @@ mod tests {
     }
 
     #[test]
+    fn clock_centiseconds() {
+        let text = r#"1. e4 {[%clk 0:05:01.7] [%egt 0:05:01.07]} 1... e5 {[%emt 0:00:00.3] [%mct 09:05:00.03]} *"#;
+        let pgn: Pgn = text.parse().unwrap();
+        let output = pgn.to_string();
+        assert!(output.contains("[%clk 0:05:01.7]"));
+        assert!(output.contains("[%egt 0:05:01.07]"));
+        assert!(output.contains("[%emt 0:00:00.3]"));
+        assert!(output.contains("[%mct 09:05:00.03]"));
+        assert_eq!(output.parse::<Pgn>().unwrap(), pgn);
+    }
+
+    #[test]
     fn extract_multi_parameter_commands() {
         let pgn = pgn
             .parse(r#"[Event "x"] 1. e4 {[%tqu "En","find the move","","","e2e4","",10]} *"#)
             .unwrap();
         let e4 = &pgn.moves[0];
         assert_eq!(
-            e4.annotations,
-            vec![Annotation::Command(Command {
+            e4.comment.as_ref().unwrap().commands,
+            Commands(vec![Command::Other(command::Other {
                 command: text("tqu"),
                 parameters: vec![
                     r#""En""#.to_string(),
@@ -948,7 +1251,7 @@ mod tests {
                     r#""""#.to_string(),
                     "10".to_string(),
                 ],
-            })]
+            })])
         );
         assert_eq!(
             pgn.to_string(),
@@ -962,8 +1265,11 @@ mod tests {
     fn extract_commands_with_trailing_whitespace() {
         let pgn = pgn.parse(r#"[Event "x"] 1. e4 {[%foo ]} *"#).unwrap();
         assert_eq!(
-            pgn.moves[0].annotations,
-            vec![Annotation::Command(Command { command: text("foo"), parameters: vec![] })]
+            pgn.moves[0].comment.as_ref().unwrap().commands,
+            Commands(vec![Command::Other(command::Other {
+                command: text("foo"),
+                parameters: vec![],
+            })])
         );
         assert_eq!(
             pgn.to_string(),
@@ -994,7 +1300,7 @@ mod tests {
                     to: D8,
                     promotion: Some(Queen),
                 },
-                check: Some(san::Check::Checkmate),
+                check: Some(Check::Checkmate),
             }
         );
     }

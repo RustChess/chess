@@ -152,9 +152,29 @@ impl Command {
 
         let mut bundle = database::Bundle::from_files(&self.input, &index)
             .with_context(|| format!("reading input {}", self.input.display()))?;
+        let annotations = self.input.with_extension("cba");
+        if annotations.try_exists()? {
+            bundle = bundle.with_annotations(annotations)?;
+        }
+        let annotators = self.input.with_extension("cbc");
+        if annotators.try_exists()? {
+            bundle = bundle.with_annotators(annotators)?;
+        }
         let players = self.input.with_extension("cbp");
         if players.try_exists()? {
             bundle = bundle.with_players(players)?;
+        }
+        let secondary = self.input.with_extension("cbj");
+        if secondary.try_exists()? {
+            bundle = bundle.with_secondary(secondary)?;
+        }
+        let sources = self.input.with_extension("cbs");
+        if sources.try_exists()? {
+            bundle = bundle.with_sources(sources)?;
+        }
+        let teams = self.input.with_extension("cbe");
+        if teams.try_exists()? {
+            bundle = bundle.with_teams(teams)?;
         }
         let tournaments = self.input.with_extension("cbt");
         if tournaments.try_exists()? {

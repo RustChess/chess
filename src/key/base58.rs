@@ -1,6 +1,6 @@
 use std::{fmt, str};
 
-use super::Id;
+use super::Key;
 use crate::finite::Empty;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -15,21 +15,21 @@ pub struct Base58 {
     string: String,
 }
 
-impl Empty for Id {
-    const EMPTY: Self = Id(0);
+impl Empty for Key {
+    const EMPTY: Self = Key(0);
 
     fn is_empty(&self) -> bool {
         *self == Self::EMPTY
     }
 }
 
-impl fmt::Display for Id {
+impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Base58::encode(&self.0.to_be_bytes()).fmt(f)
     }
 }
 
-impl str::FromStr for Id {
+impl str::FromStr for Key {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -40,7 +40,7 @@ impl str::FromStr for Id {
 }
 
 #[cfg(feature = "serde")]
-impl serde::Serialize for Id {
+impl serde::Serialize for Key {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -54,38 +54,38 @@ impl serde::Serialize for Id {
 }
 
 #[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Id {
+impl<'de> serde::Deserialize<'de> for Key {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         use serde::de::Visitor;
 
-        struct IdVisitor;
+        struct KeyVisitor;
 
-        impl<'de> Visitor<'de> for IdVisitor {
-            type Value = Id;
+        impl<'de> Visitor<'de> for KeyVisitor {
+            type Value = Key;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("a base58 string or 16 bytes")
             }
 
-            fn visit_str<E>(self, value: &str) -> Result<Id, E>
+            fn visit_str<E>(self, value: &str) -> Result<Key, E>
             where
                 E: serde::de::Error,
             {
                 value.parse().map_err(E::custom)
             }
 
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<Id, E>
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Key, E>
             where
                 E: serde::de::Error,
             {
-                let bytes: [u8; 16] = value.try_into().map_err(|_| E::custom("invalid id"))?;
-                Ok(Id(u128::from_be_bytes(bytes)))
+                let bytes: [u8; 16] = value.try_into().map_err(|_| E::custom("invalid key"))?;
+                Ok(Key(u128::from_be_bytes(bytes)))
             }
 
-            fn visit_seq<A>(self, mut seq: A) -> Result<Id, A::Error>
+            fn visit_seq<A>(self, mut seq: A) -> Result<Key, A::Error>
             where
                 A: serde::de::SeqAccess<'de>,
             {
@@ -98,14 +98,14 @@ impl<'de> serde::Deserialize<'de> for Id {
                 if seq.next_element::<u8>()?.is_some() {
                     return Err(serde::de::Error::invalid_length(17, &self));
                 }
-                Ok(Id(u128::from_be_bytes(bytes)))
+                Ok(Key(u128::from_be_bytes(bytes)))
             }
         }
 
         if deserializer.is_human_readable() {
-            deserializer.deserialize_str(IdVisitor)
+            deserializer.deserialize_str(KeyVisitor)
         } else {
-            deserializer.deserialize_bytes(IdVisitor)
+            deserializer.deserialize_bytes(KeyVisitor)
         }
     }
 }
@@ -230,22 +230,23 @@ impl From<Base58> for String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Base58, Id};
+    use super::{Base58, Key};
 
     #[test]
-    fn id_display_roundtrip() {
-        for id in [Id(0), Id(1), Id(u128::MAX), Id(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210)] {
-            assert_eq!(id.to_string().parse::<Id>().unwrap(), id);
+    fn key_display_roundtrip() {
+        for key in [Key(0), Key(1), Key(u128::MAX), Key(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210)]
+        {
+            assert_eq!(key.to_string().parse::<Key>().unwrap(), key);
         }
     }
 
     #[cfg(feature = "serde")]
     #[test]
-    fn json_serialize_id_as_base58_string() {
-        let id = Id(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210);
-        let json = serde_json::to_string(&id).unwrap();
+    fn json_serialize_key_as_base58_string() {
+        let key = Key(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210);
+        let json = serde_json::to_string(&key).unwrap();
         assert!(json.starts_with('"'));
-        assert_eq!(serde_json::from_str::<Id>(&json).unwrap(), id);
+        assert_eq!(serde_json::from_str::<Key>(&json).unwrap(), key);
     }
 
     #[test]

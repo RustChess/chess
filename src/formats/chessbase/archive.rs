@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 
-use crate::formats::{Bits, ByteInput as Input, prelude::*};
+use crate::formats::{Bits, bytes_prelude::*};
 
 use super::{cstr, huffman::Tree};
 
@@ -33,6 +33,7 @@ crate::finite_set!(
         Annotators as annotators,
         Sources as sources,
         Teams as teams,
+        Secondary as secondary,
     }
 );
 
@@ -407,6 +408,7 @@ impl Kind {
             "cbc" => Annotators,
             "cbs" => Sources,
             "cbe" => Teams,
+            "cbj" => Secondary,
             _ => return None,
         })
     }

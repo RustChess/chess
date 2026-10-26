@@ -32,7 +32,7 @@ common-lint:
 
 common-test:
     cargo test {{ cargo_spec }} --doc
-    cargo nextest run {{ cargo_spec }}
+    cargo nextest run {{ cargo_spec }} --no-tests=pass
 
 common-uninstall:
     {{ if binary != "" { "cargo uninstall " + binary } else { ":" } }}

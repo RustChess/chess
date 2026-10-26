@@ -4,7 +4,7 @@ use crate::{
     square::*,
 };
 
-use super::{Basis, Id, fold};
+use super::{Basis, Key, fold};
 
 type BoardTable<T> = SquareTable<PlayerTable<RoleTable<T>>>;
 type CastleTable<T> = PlayerTable<FileTable<T>>;
@@ -18,7 +18,7 @@ pub const fn compute_table() -> Basis {
     }
 }
 
-const fn board_table() -> BoardTable<Id> {
+const fn board_table() -> BoardTable<Key> {
     let mut squares = SquareTable::empty();
 
     finite_for!(square in Square {
@@ -36,7 +36,7 @@ const fn board_table() -> BoardTable<Id> {
     squares
 }
 
-const fn castle_table() -> CastleTable<Id> {
+const fn castle_table() -> CastleTable<Key> {
     let mut players = PlayerTable::empty();
     finite_for!(player in Player {
         let mut files = FileTable::empty();
@@ -49,7 +49,7 @@ const fn castle_table() -> CastleTable<Id> {
     players
 }
 
-const fn turn_table() -> PlayerTable<Id> {
+const fn turn_table() -> PlayerTable<Key> {
     let mut players = PlayerTable::empty();
     finite_for!(player in Player {
         let entry = entry_2("turn", player.name());
@@ -58,7 +58,7 @@ const fn turn_table() -> PlayerTable<Id> {
     players
 }
 
-const fn en_passant_table() -> EnPassantTable<Id> {
+const fn en_passant_table() -> EnPassantTable<Key> {
     let mut squares = EnPassantTable::empty();
     finite_for!(en_passant in EnPassant {
         let entry = entry_2("en-passant", en_passant.name());
@@ -67,14 +67,14 @@ const fn en_passant_table() -> EnPassantTable<Id> {
     squares
 }
 
-const fn entry_2(a: &str, b: &str) -> Id {
-    Id(fold(
+const fn entry_2(a: &str, b: &str) -> Key {
+    Key(fold(
         sha2_const::Sha256::new().update(a.as_bytes()).update(b":").update(b.as_bytes()).finalize(),
     ))
 }
 
-const fn entry_3(a: &str, b: &str, c: &str) -> Id {
-    Id(fold(
+const fn entry_3(a: &str, b: &str, c: &str) -> Key {
+    Key(fold(
         sha2_const::Sha256::new()
             .update(a.as_bytes())
             .update(b":")
@@ -85,8 +85,8 @@ const fn entry_3(a: &str, b: &str, c: &str) -> Id {
     ))
 }
 
-const fn entry_4(a: &str, b: &str, c: &str, d: &str) -> Id {
-    Id(fold(
+const fn entry_4(a: &str, b: &str, c: &str, d: &str) -> Key {
+    Key(fold(
         sha2_const::Sha256::new()
             .update(a.as_bytes())
             .update(b":")

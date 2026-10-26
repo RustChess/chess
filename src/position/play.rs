@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{fmt, str};
 
 use crate::{Player, Role, Square, square::File};
 
@@ -12,7 +12,9 @@ use Player::*;
 
 // Since `move` is a keyword, can use `play: Move` as a synonym.
 // At least this is the most useful suggestion by Google AI Overview ;)
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
 /// Move that a player can make.
 pub struct Move {
     pub kind: Kind,
@@ -148,7 +150,7 @@ impl Move {
 
     #[inline]
     pub const fn en_passant(from: Square, to: Square) -> Move {
-        Move { role: Pawn, from, to, capture: None, kind: Kind::Special(Special::EnPassant) }
+        Move { role: Pawn, from, to, capture: Some(Pawn), kind: Kind::Special(Special::EnPassant) }
     }
 
     #[inline]
@@ -305,34 +307,20 @@ impl Move {
             None => 0,
         }
     }
+}
 
-    fn long_algebraic(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use algebraic::*;
-        use fmt::Write as _;
-
-        let Move { role, from, to, capture, kind } = *self;
-
-        if let Some(side) = self.castle_side() {
-            f.write_str(if side == Side::King { SHORT_CASTLE } else { LONG_CASTLE })
-        } else {
-            if role != Pawn {
-                f.write_char(role.upper())?;
-            }
-            let does = if capture.is_some() { CAPTURE } else { MOVE };
-            write!(f, "{}{}{}", from, does, to)?;
-
-            if let Some(promoted) = kind.promotes() {
-                write!(f, "={}", promoted.upper())?;
-            }
-            Ok(())
-        }
+/// Uses the reversible move representation.
+impl fmt::Display for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        repr::display(self, f)
     }
 }
 
-/// Uses long algebraic notation.
-impl fmt::Display for Move {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.long_algebraic(f)
+impl str::FromStr for Move {
+    type Err = repr::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        repr::from_str(s)
     }
 }
 
@@ -401,6 +389,109 @@ pub mod algebraic {
     pub const CAPTURE: char = 'x';
 }
 
+/// A reversible adaptation of long algebraic notation, independent of a board position.
+///
+/// Castling uses the king's move and the rook's original file because `O-O` and
+/// `O-O-O` cannot recover both without the position.
+pub mod repr {
+    use crate::{formats::str_prelude::*, square::Rank};
+
+    use super::*;
+
+    pub fn display(play: &Move, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if play.role != Pawn {
+            write!(f, "{}", play.role.upper())?;
+        }
+        write!(f, "{}", play.from)?;
+        match play.capture {
+            Some(Pawn) => write!(f, "x{}", play.to)?,
+            Some(role) => write!(f, "x{}{}", role.upper(), play.to)?,
+            None => write!(f, "-{}", play.to)?,
+        }
+        match play.kind {
+            Kind::Normal => Ok(()),
+            Kind::Special(Special::EnPassant) => write!(f, ".ep"),
+            Kind::Special(Special::Castle(file)) => write!(f, "/{file}"),
+            Kind::Special(Special::Promote(role)) => write!(f, "={}", role.upper()),
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Move, Error> {
+        let mut input = s.trim();
+        let play = play(&mut input).map_err(|_| Error)?;
+        input.is_empty().then_some(play).ok_or(Error)
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("invalid move representation")]
+    pub struct Error;
+
+    pub fn play(input: &mut Input<'_>) -> ModalResult<Move> {
+        let play = seq! {Move {
+            role: role,
+            from: square,
+            capture: capture,
+            to: square,
+            kind: kind,
+        }}
+        .parse_next(input)?;
+
+        // Consistency checks that are not strictly needed - our Move
+        // type has no validity protection.
+        // chess::Move enters a chess::Game via the validity check in
+        // PositionMut::insert_at_untracked, which is the validity boundary.
+        let invalid_castle = play.is_castle() && (play.capture.is_some() || play.role != King);
+        let invalid_en_passant =
+            play.is_en_passant() && (play.role != Pawn || play.capture != Some(Pawn));
+        if invalid_castle || invalid_en_passant {
+            return Err(backtrack());
+        }
+
+        Ok(play)
+    }
+
+    fn capture(input: &mut Input<'_>) -> ModalResult<Option<Role>> {
+        alt(('-'.value(None), preceded('x', role).map(Some))).parse_next(input)
+    }
+
+    fn role(input: &mut Input<'_>) -> ModalResult<Role> {
+        opt(explicit_role).map(|role| role.unwrap_or(Pawn)).parse_next(input)
+    }
+
+    fn explicit_role(input: &mut Input<'_>) -> ModalResult<Role> {
+        one_of(|c| "NBRQK".contains(c)).map(Role::panicky_from_char).parse_next(input)
+    }
+
+    fn kind(input: &mut Input<'_>) -> ModalResult<Kind> {
+        opt(special).map(|special| special.map_or(Kind::Normal, Kind::Special)).parse_next(input)
+    }
+
+    fn special(input: &mut Input<'_>) -> ModalResult<Special> {
+        alt((
+            preceded('/', file).map(Special::castle),
+            ".ep".value(Special::en_passant()),
+            preceded('=', promotion).map(Special::promote),
+        ))
+        .parse_next(input)
+    }
+
+    fn promotion(input: &mut Input<'_>) -> ModalResult<Role> {
+        one_of(|c| "NBRQ".contains(c)).map(Role::panicky_from_char).parse_next(input)
+    }
+
+    fn square(input: &mut Input<'_>) -> ModalResult<Square> {
+        (file, rank).map(|(file, rank)| Square::new(file, rank)).parse_next(input)
+    }
+
+    fn file(input: &mut Input<'_>) -> ModalResult<File> {
+        one_of(|c| "abcdefgh".contains(c)).map(File::panicky_from_char).parse_next(input)
+    }
+
+    fn rank(input: &mut Input<'_>) -> ModalResult<Rank> {
+        one_of(|c| "12345678".contains(c)).map(Rank::panicky_from_char).parse_next(input)
+    }
+}
+
 #[test]
 fn display_play() {
     use Square::*;
@@ -408,26 +499,42 @@ fn display_play() {
     let mut play = Move::promote(A2, H7, Queen);
 
     assert_eq!(play.to_string(), "a2-h7=Q");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
     assert_eq!(play.uci_chess().to_string(), "a2h7q");
 
     play.role = King;
     assert_eq!(play.to_string(), "Ka2-h7=Q");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
     assert_eq!(play.uci_chess().to_string(), "a2h7q");
 
     play = play.capturing(Bishop);
-    assert_eq!(play.to_string(), "Ka2xh7=Q");
+    assert_eq!(play.to_string(), "Ka2xBh7=Q");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
     assert_eq!(play.uci_chess().to_string(), "a2h7q");
 
     let play = Move::chess_castle(White, Side::King);
-    assert_eq!(play.to_string(), algebraic::SHORT_CASTLE);
+    assert_eq!(play.to_string(), "Ke1-g1/h");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
     assert_eq!(play.uci_chess().to_string(), "e1g1");
 
     let play = Move::chess_castle(Black, Side::Queen);
-    assert_eq!(play.to_string(), algebraic::LONG_CASTLE);
+    assert_eq!(play.to_string(), "Ke8-c8/a");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
     assert_eq!(play.uci_chess().to_string(), "e8c8");
 
     let play = Move::castle(White, G1, F);
-    assert_eq!(play.to_string(), algebraic::LONG_CASTLE);
+    assert_eq!(play.to_string(), "Kg1-c1/f");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
     assert_eq!(play.uci_chess().to_string(), "g1c1");
     assert_eq!(play.uci_960().to_string(), "g1f1");
+
+    let play = Move::en_passant(E5, D6);
+    assert_eq!(play.capture, Some(Pawn));
+    assert!(play.is_capture());
+    assert_eq!(play.to_string(), "e5xd6.ep");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
+
+    let play = Move::capture(Pawn, E5, D6, Some(Pawn));
+    assert_eq!(play.to_string(), "e5xd6");
+    assert_eq!(play.to_string().parse::<Move>().unwrap(), play);
 }

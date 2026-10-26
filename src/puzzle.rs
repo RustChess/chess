@@ -6,6 +6,7 @@ use crate::{
     Game, Move, Position,
     formats::{san::San, uci},
     game,
+    position::Terminal,
 };
 
 // pub const SAMPLE: &str = include_str!("../../tmp/lichess_mate_in_2.csv");
@@ -50,7 +51,7 @@ pub struct MateIn2 {
 }
 
 fn is_checkmate(position: Position) -> bool {
-    position.is_check() && position.legal_plays().is_empty()
+    position.terminal() == Some(Terminal::Checkmate)
 }
 
 fn san(position: Position, play: Move) -> game::options::Result<San> {
@@ -100,8 +101,8 @@ impl MateIn2 {
 
             // already checkmate? problem was a mate-in-1
             // stalemate => bad move, suppress
-            if defenses.is_empty() {
-                if defend.is_check() {
+            if let Some(terminal) = Terminal::new(defend.is_check(), defenses.is_empty()) {
+                if terminal == Terminal::Checkmate {
                     mate_in_1.insert(play1, defend);
                 }
                 continue;

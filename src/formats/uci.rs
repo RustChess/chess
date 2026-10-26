@@ -4,13 +4,15 @@ use core::{borrow::BorrowMut, fmt, str::FromStr};
 
 use crate::{
     Role, game,
-    game::{Mode, Score},
+    game::Mode,
     square::{File, Rank, Square},
 };
 
-use super::{San, StrInput as Input, prelude::*};
+use super::{San, str_prelude::*};
 
-#[derive(Clone, Copy, Debug, DeserializeFromStr, Eq, PartialEq, SerializeDisplay)]
+#[derive(
+    Clone, Copy, Debug, DeserializeFromStr, Eq, Ord, PartialEq, PartialOrd, SerializeDisplay,
+)]
 pub struct Move {
     pub from: Square,
     pub to: Square,
@@ -82,29 +84,74 @@ impl<G: BorrowMut<crate::Game>> game::Cursor<G> {
 }
 
 impl game::PositionRef<'_> {
+    /// UCI moves from the game's start position to this position.
+    pub fn uci_line(self) -> Vec<Move> {
+        self.uci_line_as(self.game().mode())
+    }
+
+    /// UCI Chess960 moves from the game's start position to this position.
+    pub fn uci960_line(self) -> Vec<Move> {
+        self.uci_line_as(Mode::Freestyle)
+    }
+
+    fn uci_line_as(self, mode: Mode) -> Vec<Move> {
+        let mut position = self;
+        let mut moves = Vec::new();
+
+        while let Ok(play) = position.play() {
+            moves.push((*play).uci(mode));
+            position = play.previous();
+        }
+
+        moves.reverse();
+        moves
+    }
+
     pub fn resolve_uci(self, plays: &[Move]) -> Vec<crate::Move> {
+        self.resolve_uci_as(plays, self.game().mode())
+    }
+
+    pub fn resolve_uci960(self, plays: &[Move]) -> Vec<crate::Move> {
+        self.resolve_uci_as(plays, Mode::Freestyle)
+    }
+
+    fn resolve_uci_as(self, plays: &[Move], mode: Mode) -> Vec<crate::Move> {
         let mut cursor = game::Cursor::new(self.into_game());
         let mut resolved = Vec::with_capacity(plays.len());
 
         for uci in plays {
-            let Ok(play) = cursor.push_uci(*uci) else {
+            let Some(play) = uci.resolve(mode, cursor.position().legal()) else {
                 break;
             };
-            resolved.push(play.play());
+            let Ok(_) = cursor.option_mut_or_push(play) else {
+                break;
+            };
+            resolved.push(play);
         }
 
         resolved
     }
 
     pub fn resolve_uci_san(self, plays: &[Move]) -> Vec<San> {
+        self.resolve_uci_san_as(plays, self.game().mode())
+    }
+
+    pub fn resolve_uci960_san(self, plays: &[Move]) -> Vec<San> {
+        self.resolve_uci_san_as(plays, Mode::Freestyle)
+    }
+
+    fn resolve_uci_san_as(self, plays: &[Move], mode: Mode) -> Vec<San> {
         let mut cursor = game::Cursor::new(self.into_game());
         let mut resolved = Vec::with_capacity(plays.len());
 
         for uci in plays {
-            let Ok(play) = cursor.push_uci(*uci) else {
+            let Some(play) = uci.resolve(mode, cursor.position().legal()) else {
                 break;
             };
-            resolved.push(play.san());
+            let Ok(_) = cursor.option_mut_or_push(play) else {
+                break;
+            };
+            resolved.push(cursor.play().expect("cursor advanced to UCI move").san());
         }
 
         resolved
@@ -147,13 +194,19 @@ pub struct Pv {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Info {
-    pub depth: Option<u32>,
-    pub seldepth: Option<u32>,
+    pub depth: Option<u16>,
+    pub seldepth: Option<u16>,
     pub multipv: Option<usize>,
     pub nodes: Option<u32>,
     pub score: Option<Score>,
     pub bound: Option<Bound>,
     pub pv: Option<Pv>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Score {
+    Centipawns(i32),
+    Mate(i32),
 }
 
 impl FromStr for Info {
@@ -311,6 +364,36 @@ mod tests {
 
         assert_eq!(parse_play("e2e4", &legal).unwrap().to, E4);
         assert!(parse_play("e2e5", &legal).is_none());
+    }
+
+    #[test]
+    fn uci_line() {
+        let mut cursor = game::Cursor::new(crate::Game::new(Position::start()));
+        let e4 = "e2e4".parse().unwrap();
+        let e5 = "e7e5".parse().unwrap();
+        cursor.push_uci(e4).unwrap();
+        cursor.push_uci(e5).unwrap();
+
+        assert_eq!(cursor.position().uci_line(), vec![e4, e5]);
+        assert!(cursor.game().start().uci_line().is_empty());
+    }
+
+    #[test]
+    fn uci960_castling() {
+        let position = Position::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        let mut cursor = game::Cursor::new(crate::Game::new(position));
+        let castle = cursor
+            .position()
+            .legal()
+            .iter()
+            .copied()
+            .find(|play| play.is_castle_side(crate::Side::King))
+            .unwrap();
+        cursor.option_mut_or_push(castle).unwrap();
+
+        assert_eq!(cursor.position().uci_line(), vec!["e1g1".parse().unwrap()]);
+        assert_eq!(cursor.position().uci960_line(), vec!["e1h1".parse().unwrap()]);
+        assert!(cursor.game().start().resolve_uci960(&["e1h1".parse().unwrap()])[0].is_castle());
     }
 
     #[test]

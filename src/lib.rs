@@ -12,7 +12,7 @@ pub mod board;
 pub mod finite;
 pub mod formats;
 pub mod game;
-pub mod id;
+pub mod key;
 pub mod position;
 pub mod puzzle;
 pub mod square;
@@ -23,10 +23,10 @@ mod perft;
 #[doc(inline)]
 pub use board::{Board, Piece, Player, Role, Scharnagl};
 #[doc(inline)]
-pub use game::{Game, PositionId};
+pub use game::{Game, PositionSlot};
 #[doc(inline)]
-pub use id::Id;
+pub use key::Key;
 #[doc(inline)]
-pub use position::{Move, Position, Side};
+pub use position::{Analysis, Move, Position, Side};
 #[doc(inline)]
 pub use square::Square;
